@@ -33,3 +33,4 @@ jobs:
           file: ./workflow/docker/pulldown.docker
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/fold:latest
+
