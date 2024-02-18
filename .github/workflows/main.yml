@@ -26,7 +26,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./workflow/docker/pulldown.docker
+          file: ./workflow/docker/pulldown.dockerfile
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/fold:latest
 
