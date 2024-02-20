@@ -14,7 +14,7 @@
 
 # Extended by Valentin Maurer <valentin.maurer@embl-hamburg.de>
 
-ARG CUDA=11.1.1
+ARG CUDA=11.8
 FROM nvidia/cuda:${CUDA}-cudnn8-runtime-ubuntu18.04
 ARG CUDA
 
@@ -71,7 +71,7 @@ RUN pip3 install --upgrade pip --no-cache-dir \
       pytest \
       jax==0.4.23 \
       jaxlib==0.4.23 \
-      -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_cuda_releases.html
+      jaxlib==0.4.23+cuda11.cudnn86 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 RUN chmod u+s /sbin/ldconfig.real
 
