@@ -56,4 +56,4 @@ class FoldingBackendManager:
         self._backend = self._BACKEND_REGISTRY[backend_name](**backend_kwargs)
 
 
-backend = FoldingBackend()
+backend = FoldingBackendManager()

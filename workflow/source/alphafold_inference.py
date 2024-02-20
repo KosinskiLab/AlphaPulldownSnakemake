@@ -7,20 +7,17 @@
 """
 import argparse
 from os import makedirs
+from os.path import exists, join
 
-from alphapulldown.run_multimer_jobs import (
-    create_multimer_objects,
-    create_custom_info,
-    predict_multimers,
-)
-from alphapulldown.utils import create_model_runners_and_random_seed
+from alphapulldown.run_multimer_jobs import create_custom_info
+from alphapulldown.utils import create_model_runners_and_random_seed, create_interactors
 from alphapulldown.objects import MultimericObject
 
 from folding_backend import backend
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run alphafold inference.")
+    parser = argparse.ArgumentParser(description="Run protein folding.")
     parser.add_argument(
         "-i",
         "--input",
@@ -64,6 +61,7 @@ def parse_args():
         "--features_directory",
         dest="features_directory",
         type=str,
+        nargs="+",
         required=True,
         help="Path to computed monomer features.",
     ),
@@ -82,16 +80,23 @@ def parse_args():
         help="Run predictions for each model with logarithmically distributed MSA depth.",
     ),
     parser.add_argument(
+        "--multimeric_template",
+        dest="multimeric_template",
+        action="store_true",
+        default=None,
+        help="Whether to use multimeric templates.",
+    ),
+    parser.add_argument(
         "--model_names",
         dest="model_names",
-        type="str",
+        type=str,
         default=None,
         help="Names of models to use, e.g. model_2_multimer_v3 (default: all models).",
     ),
     parser.add_argument(
         "--msa_depth",
         dest="msa_depth",
-        type="int",
+        type=int,
         default=None,
         help="Number of sequences to use from the MSA (by default is taken from AF model config).",
     ),
@@ -99,14 +104,14 @@ def parse_args():
 
     makedirs(args.output_directory, exist_ok=True)
 
-    formatted_folds = []
+    formatted_folds, missing_features = [], []
     protein_folds = [x.split(":") for x in args.input.split(";")]
     for protein_fold in protein_folds:
         name, number, region = None, 1, "all"
 
         match len(protein_fold):
             case 1:
-                name = protein_fold
+                name = protein_fold[0]
             case 2:
                 number = protein_fold[1]
                 if ("-") in protein_fold[1]:
@@ -114,10 +119,21 @@ def parse_args():
             case 3:
                 name, number, region = protein_fold
 
-        if ("-") not in region and region is not None:
+        if ("-") not in region and region != "all":
             raise ValueError(f"Region {region} is malformatted epxected start-stop.")
 
+        for monomer_dir in args.features_directory:
+            if exists(join(monomer_dir, f"{name}.pkl")):
+                continue
+            missing_features.append(name)
+
         formatted_folds.extend([{name: region} for _ in range(number)])
+
+    missing_features = set(missing_features)
+    if len(missing_features):
+        raise FileNotFoundError(
+            f"{missing_features} not found in {args.features_directory}"
+        )
 
     args.parsed_input = formatted_folds
 
@@ -166,7 +182,6 @@ def predict_multimer(
         Default is 42.
     fold_backend : str, optional
         Backend used for folding, defaults to alphafold.
-
     """
 
     flags_dict = {
@@ -174,7 +189,7 @@ def predict_multimer(
         "random_seed": random_seed,
         "num_cycle": num_recycles,
         "data_dir": data_directory,
-        "num_predictions_per_model": num_predictions_per_model,
+        "num_multimer_predictions_per_model": num_predictions_per_model,
     }
 
     if multimer.multimeric_mode:
@@ -208,11 +223,25 @@ def main():
     args = parse_args()
 
     data = create_custom_info(args.parsed_input)
-    multimers = create_multimer_objects(
-        data, args.features_directory, pair_msa=not args.no_pair_msa
-    )
+    interactors = create_interactors(data, args.features_directory, 0)
+    multimer = interactors[0]
+    if len(interactors) > 1:
+        multimer = MultimericObject(
+            interactors=interactors,
+            pair_msa=not args.no_pair_msa,
+            multimeric_mode=args.multimeric_mode,
+        )
 
-    predict_multimers(multimers)
+    predict_multimer(
+        multimer=multimer,
+        num_recycles=args.num_cycle,
+        data_directory=args.data_directory,
+        num_predictions_per_model=args.num_predictions_per_model,
+        output_directory=args.output_directory,
+        gradient_msa_depth=args.gradient_msa_depth,
+        model_names=args.model_names,
+        msa_depth=args.msa_depth,
+    )
 
 
 if __name__ == "__main__":
