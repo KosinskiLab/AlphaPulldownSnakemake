@@ -11,4 +11,4 @@ number_of_recycles : 24
 alphafold_inference_threads : 8
 alphafold_inference : >
   gres=gpu:1 partition=gpu-el8
-  qos=high constraint=gpu=A40|gpu=A100
+  qos=high constraint=gpu=3090

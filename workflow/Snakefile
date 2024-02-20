@@ -88,7 +88,7 @@ rule alphafold_inference:
         ),
         requested_fold = lambda  wildcards : wildcards.fold
     resources:
-        mem_mb = lambda wildcards, attempt: 128000 * attempt * memscaling_feature,
+        mem_mb = lambda wildcards, attempt: 128000 * attempt * memscaling_inference,
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
         slurm = config.get("alphafold_inference", ""),
@@ -100,8 +100,8 @@ rule alphafold_inference:
        "docker://dquz/fold:latest",
     shell:"""
         python3 workflow/source/alphafold_inference.py \
-            --input {params.requested_fold} \
-            --output_directory={params.output_directory} \
+            --input "{params.requested_fold}" \
+            --output_directory="{params.output_directory}" \
             --num_cycle={params.n_recycles} \
             --num_predictions_per_model={params.predictions_per_model} \
             --data_dir={params.data_directory} \

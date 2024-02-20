@@ -70,9 +70,9 @@ RUN pip3 install --upgrade pip --no-cache-dir \
     && pip3 install --upgrade --no-cache-dir \
       alphapulldown==1.0.4 \
       pytest \
-      jax==0.4.23 \
-      jaxlib==0.4.23+cuda11.cudnn86 \
-      -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+      jax[cuda11_pip] \
+      jaxlib==0.4.23 \
+      -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_cuda_releases.html
 
 RUN chmod u+s /sbin/ldconfig.real
 

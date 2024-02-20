@@ -4,6 +4,7 @@ snakemake \
   --use-singularity \
   --singularity-args "-B /scratch:/scratch \
     -B /g/kosinski:/g/kosinski \
+    --nv \
     -B /home/vmaurer/src:/home/vmaurer/src" \
   --jobs 200 \
   --restart-times 5 \

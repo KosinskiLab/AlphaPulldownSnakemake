@@ -13,7 +13,7 @@ from alphapulldown.run_multimer_jobs import create_custom_info
 from alphapulldown.utils import create_model_runners_and_random_seed, create_interactors
 from alphapulldown.objects import MultimericObject
 
-from folding_backend import backend
+from folding_backend_manager import backend
 
 
 def parse_args():
@@ -104,7 +104,7 @@ def parse_args():
 
     makedirs(args.output_directory, exist_ok=True)
 
-    formatted_folds, missing_features = [], []
+    formatted_folds, missing_features, unique_features = [], [], []
     protein_folds = [x.split(":") for x in args.input.split(";")]
     for protein_fold in protein_folds:
         name, number, region = None, 1, "all"
@@ -122,6 +122,7 @@ def parse_args():
         if ("-") not in region and region != "all":
             raise ValueError(f"Region {region} is malformatted epxected start-stop.")
 
+        unique_features.append(name)
         for monomer_dir in args.features_directory:
             if exists(join(monomer_dir, f"{name}.pkl")):
                 continue
@@ -192,11 +193,15 @@ def predict_multimer(
         "num_multimer_predictions_per_model": num_predictions_per_model,
     }
 
-    if multimer.multimeric_mode:
+    if isinstance(multimer, MultimericObject):
         flags_dict["model_preset"] = "multimer"
         flags_dict["gradient_msa_depth"] = gradient_msa_depth
-        flags_dict["model_names"] = model_names
+        flags_dict["model_names_custom"] = model_names
         flags_dict["msa_depth"] = msa_depth
+
+
+    if not isinstance(multimer, MultimericObject):
+        multimer.input_seqs = [multimer.sequence]
 
     model_runners, random_seed = create_model_runners_and_random_seed(**flags_dict)
 
@@ -207,7 +212,6 @@ def predict_multimer(
         output_dir=output_directory,
         feature_dict=multimer.feature_dict,
         random_seed=random_seed,
-        benchmark=False,
         fasta_name=multimer.description,
         seqs=multimer.input_seqs,
     )
@@ -229,7 +233,7 @@ def main():
         multimer = MultimericObject(
             interactors=interactors,
             pair_msa=not args.no_pair_msa,
-            multimeric_mode=args.multimeric_mode,
+            multimeric_mode=args.multimeric_template,
         )
 
     predict_multimer(

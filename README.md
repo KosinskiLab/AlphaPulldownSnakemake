@@ -33,7 +33,7 @@ Adjust `config/config.yaml` for your particular use case.
 This file contains your sample sheet where each line corresponds to a folding job. For this pipeline we use the following format specification:
 
 ```
-protein:N:start-stop;[\?protein:N:start-stop]*
+protein:N:start-stop[;protein:N:start-stop]*
 ```
 
 where protein is a path or uniprot ID, N is the number of monomers for this particular protein and start and stop are the residues that should be predicted. However, only protein is required, N, start and stop can be omitted. Hence the following folding jobs for the protein example containing residues 1-50 are equivalent:
