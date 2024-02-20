@@ -70,7 +70,7 @@ RUN pip3 install --upgrade pip --no-cache-dir \
     && pip3 install --upgrade --no-cache-dir \
       alphapulldown==1.0.4 \
       pytest \
-      jax[cuda11_pip] \
+      "jax[cuda11_pip]" \
       jaxlib==0.4.23 \
       -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_cuda_releases.html
 
