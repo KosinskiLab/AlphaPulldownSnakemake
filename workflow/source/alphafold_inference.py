@@ -198,9 +198,7 @@ def predict_multimer(
         flags_dict["gradient_msa_depth"] = gradient_msa_depth
         flags_dict["model_names_custom"] = model_names
         flags_dict["msa_depth"] = msa_depth
-
-
-    if not isinstance(multimer, MultimericObject):
+    else:
         multimer.input_seqs = [multimer.sequence]
 
     model_runners, random_seed = create_model_runners_and_random_seed(**flags_dict)

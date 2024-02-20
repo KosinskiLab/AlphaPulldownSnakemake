@@ -50,8 +50,7 @@ RUN wget -q -P /tmp \
 
 ENV PATH="/opt/conda/bin:$PATH"
 ENV LD_LIBRARY_PATH="/opt/conda/lib:$LD_LIBRARY_PATH"
-RUN conda install -qy conda==23.5.2 \
-    && conda install -y -c conda-forge -c bioconda \
+RUN conda install -y -c conda-forge -c bioconda \
       openmm==8.0 \
       cudatoolkit==${CUDA_VERSION} \
       pdbfixer==1.9 \
@@ -70,7 +69,7 @@ RUN pip3 install --upgrade pip --no-cache-dir \
     && pip3 install --upgrade --no-cache-dir \
       alphapulldown==1.0.4 \
       pytest \
-      "jax[cuda11_pip]" \
+      jax==0.4.23 \
       jaxlib==0.4.23 \
       -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_cuda_releases.html
 
