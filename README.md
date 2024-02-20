@@ -1,20 +1,18 @@
 # Alphaabriss
 
-A snakemake pipeline for homo / heteromeric structure prediction.
+A snakemake pipeline for automated structure prediction using various backends.
 
-## 🛠 Installation
+## Installation
 
-1. **🐍 Snakemake**: An integral workflow management system.
+1. **Snakemake**: An integral workflow management system.
 
    ```bash
    pip install snakemake
    ```
 
-2. **📦 Singularity**: Containerization made simple.
+2. **Singularity**: We make use of singularity containers in this pipeline. If you have not installed singularity, check the [official Singularity guide](https://sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps).
 
-   We make use of singularity containers in this pipeline. If you have not installed singularity, check the [official Singularity guide](https://sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps).
-
-3. **🔧 Cluster Setup**
+3. **Cluster Setup**
 
    In order to allow snakemake to interface with a compute cluster, we are going to use the [Snakemake-Profile for SLURM](https://github.com/Snakemake-Profiles/slurm). If you are not working on a SLURM cluster you can find profiles for different architectures [here](https://github.com/Snakemake-Profiles/slurm). The following will create a profile that can be used with snakemake and prompt you for some additional information.
 
@@ -27,15 +25,15 @@ A snakemake pipeline for homo / heteromeric structure prediction.
    cookiecutter --output-dir "$profile_dir" "$template"
    ```
 
-## ⚙️ Configuration
+## Configuration
 
 Adjust `config/config.yaml` for your particular use case.
 
-# input_file
+### input_file
 This file contains your sample sheet where each line corresponds to a folding job. For this pipeline we use the following format specification:
 
 ```
-protein:N:start-stop;[?protein:N:start-stop]*
+protein:N:start-stop;[\?protein:N:start-stop]*
 ```
 
 where protein is a path or uniprot ID, N is the number of monomers for this particular protein and start and stop are the residues that should be predicted. However, only protein is required, N, start and stop can be omitted. Hence the following folding jobs for the protein example containing residues 1-50 are equivalent:
@@ -63,7 +61,7 @@ example3;example4
 
 which will fold example1-example3, example1-example4 and example3 with example4.
 
-## 🚀 Execution
+## Execution
 
 ```bash
 snakemake \
