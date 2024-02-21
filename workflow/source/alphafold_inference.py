@@ -100,12 +100,19 @@ def parse_args():
         default=None,
         help="Number of sequences to use from the MSA (by default is taken from AF model config).",
     ),
+    parser.add_argument(
+        "--protein_delimiter",
+        dest="protein_delimiter",
+        type=str,
+        default=";",
+        help="Delimiter for proteins of a singel fold.",
+    ),
     args = parser.parse_args()
 
     makedirs(args.output_directory, exist_ok=True)
 
     formatted_folds, missing_features, unique_features = [], [], []
-    protein_folds = [x.split(":") for x in args.input.split(";")]
+    protein_folds = [x.split(":") for x in args.input.split(args.protein_delimiter)]
     for protein_fold in protein_folds:
         name, number, region = None, 1, "all"
 

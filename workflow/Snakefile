@@ -7,7 +7,13 @@ configfile: "config/config.yaml"
 config["input_file"] = abspath(config["input_file"])
 config["output_directory"] = abspath(config["output_directory"])
 
-dataset = InputParser.from_file(filepath = config["input_file"], file_format = "alphaabriss")
+protein_delimiter = config.get("protein_delimiter", ";")
+
+dataset = InputParser.from_file(
+    filepath = config["input_file"],
+    file_format = "alphaabriss",
+    protein_delimiter = protein_delimiter
+)
 
 
 rule all:
@@ -84,9 +90,10 @@ rule alphafold_inference:
         n_recycles = config["number_of_recycles"],
         feature_directory = join(config["output_directory"], "features"),
         output_directory = lambda wildcards: join(
-            config["output_directory"], "predictions", "{fold}"
+            config["output_directory"], "predictions", wildcards.fold
         ),
-        requested_fold = lambda  wildcards : wildcards.fold
+        requested_fold = lambda  wildcards : wildcards.fold,
+        protein_delimiter = protein_delimiter,
     resources:
         mem_mb = lambda wildcards, attempt: 128000 * attempt * memscaling_inference,
         walltime = lambda wildcards, attempt: 1440 * attempt,
@@ -105,6 +112,7 @@ rule alphafold_inference:
             --num_cycle={params.n_recycles} \
             --num_predictions_per_model={params.predictions_per_model} \
             --data_dir={params.data_directory} \
-            --features_directory={params.feature_directory}
+            --features_directory={params.feature_directory} \
+            --protein_delimiter {params.protein_delimiter}
         echo "Completed" > {output}
         """

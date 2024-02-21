@@ -1,13 +1,13 @@
 name: ci
 
-# on:
-#   release:
-#     types: [created]
-
 on:
-  push:
-    branches:
-      - main
+  release:
+    types: [created]
+
+# on:
+#   push:
+#     branches:
+#       - main
 
 
 jobs:

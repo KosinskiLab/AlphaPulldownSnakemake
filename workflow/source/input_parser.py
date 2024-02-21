@@ -15,12 +15,13 @@ class InputParser:
     @staticmethod
     def _parse_alphaabriss_format(
         fold_specifications: List[str],
+        protein_delimiter : str = ";"
     ) -> Tuple[Tuple, Dict[str, Set]]:
         unique_sequences, sequences_by_fold = set(), {}
 
         for fold_specification in fold_specifications:
             sequences = set()
-            for fold in fold_specification.split(";"):
+            for fold in fold_specification.split(protein_delimiter):
                 sequences.add(fold.split(":")[0])
 
             unique_sequences.update(sequences)
@@ -29,14 +30,14 @@ class InputParser:
         return tuple(unique_sequences), sequences_by_fold
 
     @classmethod
-    def from_file(cls, filepath: str, file_format: str = "alphaabriss"):
+    def from_file(cls, filepath: str, file_format: str = "alphaabriss", protein_delimiter : str = ";"):
         with open(filepath, mode="r") as infile:
             data = tuple(set([line.strip() for line in infile.readlines()]))
 
         match file_format:
             case "alphaabriss":
                 unique_sequences, sequences_by_fold = cls._parse_alphaabriss_format(
-                    data
+                    fold_specifications = data, protein_delimiter=protein_delimiter
                 )
 
             case _:
