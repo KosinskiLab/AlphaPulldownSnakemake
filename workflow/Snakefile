@@ -29,6 +29,9 @@ rule all:
             ),
             fold = dataset.fold_specifications
         ),
+        join(
+            config["output_directory"], "reports", "report.html"
+        ),
 
 rule symlink_local_files:
     input:
@@ -135,4 +138,38 @@ rule alphafold_inference:
             --features_directory={params.feature_directory} \
             --protein_delimiter {params.protein_delimiter}
         echo "Completed" > {output}
+        """
+
+rule generate_report:
+    input:
+        [join(
+            config["output_directory"],
+            "predictions", fold, "completed_fold.txt"
+        ) for fold in dataset.fold_specifications
+        ],
+    output:
+        join(
+            config["output_directory"], "reports", "report.html"
+        ),
+    resources:
+        mem_mb = lambda wildcards, attempt: 32000 * attempt,
+        walltime = lambda wildcards, attempt: 1440 * attempt,
+        attempt = lambda wildcards, attempt: attempt,
+        slurm = config.get("alphafold_inference", ""),
+    params:
+        prediction_dir = join(config["output_directory"], "predictions"),
+        report_dir = join(config["output_directory"], "reports"),
+        report_cutoff = config["report_cutoff"],
+    conda:
+        "envs/alphapulldown.yaml",
+    container:
+       "docker://dquz/fold:latest",
+    shell:"""
+        cd {params.prediction_dir}
+        create_notebook.py \
+            --cutoff={params.report_cutoff} \
+            --output_dir={params.prediction_dir}
+        jupyter nbconvert --to html --execute output.ipynb
+        mv output.ipynb {params.report_dir}
+        mv output.html {output}
         """

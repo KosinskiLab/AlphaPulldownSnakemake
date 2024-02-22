@@ -1,4 +1,5 @@
 # Byte-compiled / optimized / DLL files
+
 __pycache__/
 *.py[cod]
 
@@ -64,3 +65,6 @@ Images
 .gitconfig
 .pickle
 .snakemake
+
+*html
+*ipynb
