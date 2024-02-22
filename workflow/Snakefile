@@ -155,7 +155,6 @@ rule generate_report:
         mem_mb = lambda wildcards, attempt: 32000 * attempt,
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
-        slurm = config.get("alphafold_inference", ""),
     params:
         prediction_dir = join(config["output_directory"], "predictions"),
         report_dir = join(config["output_directory"], "reports"),
