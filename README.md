@@ -9,10 +9,7 @@ A snakemake pipeline for automated structure prediction using various backends.
    ```bash
    pip install snakemake
    ```
-
-2. **Singularity**: We make use of singularity containers in this pipeline. If you have not installed singularity, check the [official Singularity guide](https://sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps).
-
-3. **Cluster Setup**
+2. **Cluster Setup**
 
    In order to allow snakemake to interface with a compute cluster, we are going to use the [Snakemake-Profile for SLURM](https://github.com/Snakemake-Profiles/slurm). If you are not working on a SLURM cluster you can find profiles for different architectures [here](https://github.com/Snakemake-Profiles/slurm). The following will create a profile that can be used with snakemake and prompt you for some additional information.
 
@@ -25,6 +22,9 @@ A snakemake pipeline for automated structure prediction using various backends.
    cookiecutter --output-dir "$profile_dir" "$template"
    ```
 
+3. **Singularity**: We make use of singularity containers in this pipeline. If you have not installed singularity, check the [official Singularity guide](https://sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps). If you are working on the EMBL cluster singularity is already installed and you can skip this step.
+
+
 ## Configuration
 
 Adjust `config/config.yaml` for your particular use case.
@@ -33,33 +33,24 @@ Adjust `config/config.yaml` for your particular use case.
 This file contains your sample sheet where each line corresponds to a folding job. For this pipeline we use the following format specification:
 
 ```
-protein:N:start-stop[;protein:N:start-stop]*
+protein:N:start-stop[_protein:N:start-stop]*
 ```
 
-where protein is a path or uniprot ID, N is the number of monomers for this particular protein and start and stop are the residues that should be predicted. However, only protein is required, N, start and stop can be omitted. Hence the following folding jobs for the protein example containing residues 1-50 are equivalent:
+where protein is a path to a file with '.fasta' extension or uniprot ID, N is the number of monomers for this particular protein and start and stop are the residues that should be predicted. However, only protein is required, N, start and stop can be omitted. Hence the following folding jobs for the protein example containing residues 1-50 are equivalent:
 
 ```
 example:2
-example;example
+example_example
 example:2:1-50
-example:1-50;example:1-50
-example:1:1-50;example:1:1-50
+example:1-50_example:1-50
+example:1:1-50_example:1:1-50
 ```
 
 This format similarly extends for the folding of heteromers:
 
 ```
-example1;example2
+example1_example2
 ```
-
-To perform one-vs-all folding we can use the special asterisk like so:
-
-```
-example1;*
-example3;example4
-```
-
-which will fold example1-example3, example1-example4 and example3 with example4.
 
 ## Execution
 
@@ -67,14 +58,15 @@ which will fold example1-example3, example1-example4 and example3 with example4.
 snakemake \
   --use-singularity \
   --singularity-args "-B /scratch:/scratch \
-    -B /g/kosinski:/g/kosinski" \
+    -B /g/kosinski:/g/kosinski \
+    --nv " \
   --jobs 200 \
   --restart-times 5 \
-  --profile name_of_your_profile \
+  --profile slurm_noSidecar \
   --rerun-incomplete \
   --rerun-triggers mtime \
-  --latency-wait 30 \
-  -n
+  --latency-wait 30
+
 ```
 
 Here's a breakdown of what each argument does:
@@ -82,7 +74,7 @@ Here's a breakdown of what each argument does:
 - `--use-singularity`: Enables the use of Singularity containers. This allows for reproducibility and isolation of the pipeline environment.
 
 - `--singularity-args`: Specifies arguments passed directly to Singularity. In the provided example:
-  - `-B /scratch:/scratch` and `-B /g/kosinski:/g/kosinski`: These are bind mount points. They make directories from your host system accessible within the Singularity container.
+  - `-B /scratch:/scratch` and `-B /g/kosinski:/g/kosinski`: These are bind mount points. They make directories from your host system accessible within the Singularity container. `--nv` ensures the container can make use of the hosts GPUs.
 
 - `--profile name_of_your_profile`: Specifies the Snakemake profile to use (e.g., the SLURM profile you set up for cluster execution).
 

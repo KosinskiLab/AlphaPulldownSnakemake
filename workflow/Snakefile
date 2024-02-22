@@ -1,6 +1,6 @@
 import sys
 from sys import exit
-from os.path import abspath, join
+from os.path import abspath, join, splitext, basename
 from source.input_parser import InputParser
 
 configfile: "config/config.yaml"
@@ -16,10 +16,12 @@ dataset = InputParser.from_file(
 )
 
 
+ruleorder: symlink_local_files > download_uniprot
+
 rule all:
     input:
-        expand(join(config["output_directory"], "features", "{uniprot_id}.pkl"),
-            uniprot_id = dataset.unique_sequences
+        expand(join(config["output_directory"], "features", "{fasta_basename}.pkl"),
+            fasta_basename = dataset.unique_sequences
         ),
         expand(join(
             config["output_directory"], "predictions",
@@ -27,6 +29,23 @@ rule all:
             ),
             fold = dataset.fold_specifications
         ),
+
+rule symlink_local_files:
+    input:
+        dataset.sequences_by_origin["local"],
+    output:
+        [
+            join(config["output_directory"], "data", f"{splitext(basename(x))[0]}.fasta")
+            for x in dataset.sequences_by_origin["local"]
+
+        ],
+    resources:
+        avg_mem = lambda wildcards, attempt: 600 * attempt,
+        mem_mb = lambda wildcards, attempt: 800 * attempt,
+        walltime = lambda wildcards, attempt: 10 * attempt,
+        attempt = lambda wildcards, attempt: attempt,
+    run:
+        dataset.symlink_local_files(output_directory = join(config["output_directory"], "data"))
 
 rule download_uniprot:
     output:
@@ -43,11 +62,12 @@ rule download_uniprot:
         tail -n +2 ${{temp_file}} >> {output}
         """
 
+
 rule create_features:
     input:
-        rules.download_uniprot.output,
+        join(config["output_directory"], "data", "{fasta_basename}.fasta"),
     output:
-        join(config["output_directory"], "features", "{uniprot_id}.pkl"),
+        join(config["output_directory"], "features", "{fasta_basename}.pkl"),
     params:
         data_directory = config["alphafold_data_directory"],
         output_directory = join(config["output_directory"], "features"),
@@ -107,8 +127,8 @@ rule alphafold_inference:
        "docker://dquz/fold:latest",
     shell:"""
         python3 workflow/source/alphafold_inference.py \
-            --input "{params.requested_fold}" \
-            --output_directory="{params.output_directory}" \
+            --input {params.requested_fold} \
+            --output_directory={params.output_directory} \
             --num_cycle={params.n_recycles} \
             --num_predictions_per_model={params.predictions_per_model} \
             --data_dir={params.data_directory} \
