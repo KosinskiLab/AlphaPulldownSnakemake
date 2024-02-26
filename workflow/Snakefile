@@ -20,15 +20,6 @@ ruleorder: symlink_local_files > download_uniprot
 
 rule all:
     input:
-        expand(join(config["output_directory"], "features", "{fasta_basename}.pkl"),
-            fasta_basename = dataset.unique_sequences
-        ),
-        expand(join(
-            config["output_directory"], "predictions",
-            "{fold}", "completed_fold.txt"
-            ),
-            fold = dataset.fold_specifications
-        ),
         join(
             config["output_directory"], "reports", "report.html"
         ),

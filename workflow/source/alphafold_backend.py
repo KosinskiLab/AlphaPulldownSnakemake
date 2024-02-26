@@ -120,7 +120,7 @@ class AlphaFold(FoldingBackend):
             plddt_b_factors = np.repeat(
                 plddt[:, None], residue_constants.atom_type_num, axis=-1
             )
-            print(model_runner.multimer_mode)
+
             unrelaxed_protein = protein.from_prediction(
                 features=processed_feature_dict,
                 result=prediction_result,
