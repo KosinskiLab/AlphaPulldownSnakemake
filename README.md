@@ -65,7 +65,8 @@ snakemake \
   --profile slurm_noSidecar \
   --rerun-incomplete \
   --rerun-triggers mtime \
-  --latency-wait 30
+  --latency-wait 30 \
+  -n
 
 ```
 
@@ -89,3 +90,7 @@ Here's a breakdown of what each argument does:
 - `--latency-wait 30`: Waits for 30 seconds after a step finishes to check for the existence of expected output files. This can be useful in file-systems with high latencies.
 
 - `-n`: Dry-run flag. This makes Snakemake display the commands it would run without actually executing them. It's useful for testing. To run the pipeline for real, simply remove this flag.
+
+Executing the command above will perform submit the following jobs to the  cluster:
+
+![Snakemake rulegraph](static/dag.png)
