@@ -25,12 +25,18 @@ A snakemake pipeline for automated structure prediction using various backends.
 3. **Singularity**: We make use of singularity containers in this pipeline. If you have not installed singularity, check the [official Singularity guide](https://sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps). If you are working on the EMBL cluster singularity is already installed and you can skip this step.
 
 
+4. **Download the pipeline**:
+   ```bash
+   git clone git@github.com:maurerv/alphaabriss.git
+   cd alphaabriss
+   ```
+
 ## Configuration
 
 Adjust `config/config.yaml` for your particular use case.
 
 ### input_file
-This file contains your sample sheet where each line corresponds to a folding job. For this pipeline we use the following format specification:
+This variable holds the path to your sample sheet, where each line corresponds to a folding job. For this pipeline we use the following format specification:
 
 ```
 protein:N:start-stop[_protein:N:start-stop]*
@@ -52,7 +58,22 @@ This format similarly extends for the folding of heteromers:
 example1_example2
 ```
 
+### alphafold_data_directory
+This is the path to your alphafold database.
+
+### output_directory
+Snakemake will write the pipeline output to this directory. If it does not exist, it will be created.
+
+### save_msa, use_precomputed_msa, predictions_per_model, number_of_recycles, report_cutoff
+Command line arguments that were previously pasesed to AlphaPulldown's run_multimer_jobs.py and create_notebook.py (report_cutoff).
+
+### alphafold_inference_threads, alphafold_inference
+Slurm specific parameters that do not need to be modified by non-expert users.
+
+
 ## Execution
+
+After following the Installation and Configuration steps, you are now ready to run the snakemake pipeline. To do so, navigate into the cloned pipeline directory (/Users/vmaurer/src/alphaabriss in my case) and from within your shell run:
 
 ```bash
 snakemake \
