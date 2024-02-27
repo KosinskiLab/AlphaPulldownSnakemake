@@ -4,6 +4,12 @@ A snakemake pipeline for automated structure prediction using various backends.
 
 ## Installation
 
+Before installation, make sure your python version is at least 3.10.
+
+```bash
+python3 --version
+```
+
 1. **Snakemake**: An integral workflow management system.
 
    ```bash
