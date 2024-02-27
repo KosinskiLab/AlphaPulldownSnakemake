@@ -72,8 +72,8 @@ rule create_features:
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
     threads: 8, # everything is harcoded in AF anyways ...
-    conda:
-        "envs/alphapulldown.yaml",
+    # conda:
+    #     "envs/alphapulldown.yaml",
     container:
        "docker://dquz/fold:latest",
     shell:"""
@@ -115,8 +115,8 @@ rule alphafold_inference:
         slurm = config.get("alphafold_inference", ""),
     threads:
         config["alphafold_inference_threads"],
-    conda:
-        "envs/alphapulldown.yaml",
+    # conda:
+    #     "envs/alphapulldown.yaml",
     container:
        "docker://dquz/fold:latest",
     shell:"""
@@ -150,8 +150,8 @@ rule generate_report:
         prediction_dir = join(config["output_directory"], "predictions"),
         report_dir = join(config["output_directory"], "reports"),
         report_cutoff = config["report_cutoff"],
-    conda:
-        "envs/alphapulldown.yaml",
+    # conda:
+    #     "envs/alphapulldown.yaml",
     container:
        "docker://dquz/fold:latest",
     shell:"""
