@@ -120,12 +120,13 @@ def parse_args():
             case 1:
                 name = protein_fold[0]
             case 2:
-                number = protein_fold[1]
+                name, number = protein_fold[0], protein_fold[1]
                 if ("-") in protein_fold[1]:
                     region = protein_fold[1]
             case 3:
                 name, number, region = protein_fold
 
+        number = int(number)
         if ("-") not in region and region != "all":
             raise ValueError(f"Region {region} is malformatted epxected start-stop.")
 
