@@ -1,11 +1,13 @@
 import sys
 from sys import exit
+from os import makedirs
 from os.path import abspath, join, splitext, basename
 from source.input_parser import InputParser
 
 configfile: "config/config.yaml"
 config["input_file"] = abspath(config["input_file"])
 config["output_directory"] = abspath(config["output_directory"])
+makedirs(config["output_directory"], exist_ok = True)
 
 protein_delimiter = config.get("protein_delimiter", ";")
 
