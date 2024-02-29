@@ -23,6 +23,9 @@ ruleorder: symlink_local_files > download_uniprot
 rule all:
     input:
         join(
+            config["output_directory"], "reports", "statistics.csv"
+        ),
+        join(
             config["output_directory"], "reports", "report.html"
         ),
 
@@ -74,8 +77,6 @@ rule create_features:
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
     threads: 8, # everything is harcoded in AF anyways ...
-    # conda:
-    #     "envs/alphapulldown.yaml",
     container:
        "docker://dquz/fold:latest",
     shell:"""
@@ -106,7 +107,7 @@ rule alphafold_inference:
         n_recycles = (
             lambda wildcards: config["number_of_recycles"]
             if len(wildcards.fold.split(protein_delimiter)) > 1
-            else 3
+            else min(3, config["number_of_recycles"])
         ),
         feature_directory = join(config["output_directory"], "features"),
         output_directory = lambda wildcards: join(
@@ -121,8 +122,6 @@ rule alphafold_inference:
         slurm = config.get("alphafold_inference", ""),
     threads:
         config["alphafold_inference_threads"],
-    # conda:
-    #     "envs/alphapulldown.yaml",
     container:
        "docker://dquz/fold:latest",
     shell:"""
@@ -140,6 +139,36 @@ rule alphafold_inference:
             --features_directory={params.feature_directory} \
             --protein_delimiter {params.protein_delimiter}
         echo "Completed" > {output}
+        """
+
+rule compute_stats:
+    input:
+        [join(
+            config["output_directory"],
+            "predictions", fold, "completed_fold.txt"
+        ) for fold in dataset.fold_specifications
+        ],
+    output:
+        join(
+            config["output_directory"], "reports", "statistics.csv"
+        ),
+    resources:
+        mem_mb = lambda wildcards, attempt: 32000 * attempt,
+        walltime = lambda wildcards, attempt: 1440 * attempt,
+        attempt = lambda wildcards, attempt: attempt,
+    params:
+        prediction_dir = join(config["output_directory"], "predictions"),
+        report_dir = join(config["output_directory"], "reports"),
+        report_cutoff = config["report_cutoff"],
+    container:
+       "docker://dquz/fold_analysis:latest",
+    shell:"""
+        cd {params.prediction_dir}
+
+        run_get_good_pae.sh \
+            --output_dir={params.prediction_dir} \
+            --cutoff={params.report_cutoff}
+        mv predictions_with_good_interpae.csv {output}
         """
 
 rule generate_report:
@@ -161,8 +190,6 @@ rule generate_report:
         prediction_dir = join(config["output_directory"], "predictions"),
         report_dir = join(config["output_directory"], "reports"),
         report_cutoff = config["report_cutoff"],
-    # conda:
-    #     "envs/alphapulldown.yaml",
     container:
        "docker://dquz/fold:latest",
     shell:"""

@@ -12,30 +12,51 @@ python3 --version
 
 1. **Snakemake**: An integral workflow management system.
 
-   ```bash
-   pip install snakemake
-   ```
+    ```bash
+    pip install snakemake
+    ```
+
 2. **Cluster Setup**
 
-   In order to allow snakemake to interface with a compute cluster, we are going to use the [Snakemake-Profile for SLURM](https://github.com/Snakemake-Profiles/slurm). If you are not working on a SLURM cluster you can find profiles for different architectures [here](https://github.com/Snakemake-Profiles/slurm). The following will create a profile that can be used with snakemake and prompt you for some additional information.
+    In order to allow snakemake to interface with a compute cluster, we are going to use the [Snakemake-Profile for SLURM](https://github.com/Snakemake-Profiles/slurm). If you are not working on a SLURM cluster you can find profiles for different architectures [here](https://github.com/Snakemake-Profiles/slurm). The following will create a profile that can be used with snakemake and prompt you for some additional information.
 
-   ```bash
-   pip install cookiecutter
-   git clone https://github.com/Snakemake-Profiles/slurm.git
-   profile_dir="${HOME}/.config/snakemake"
-   mkdir -p "$profile_dir"
-   template="gh:Snakemake-Profiles/slurm"
-   cookiecutter --output-dir "$profile_dir" "$template"
-   ```
+    ```bash
+    pip install cookiecutter
+    git clone https://github.com/Snakemake-Profiles/slurm.git
+    profile_dir="${HOME}/.config/snakemake"
+    mkdir -p "$profile_dir"
+    template="gh:Snakemake-Profiles/slurm"
+    cookiecutter --output-dir "$profile_dir" "$template"
+    ```
+
+    During the setup process, you will be prompted to answer several configuration questions. Below are the questions and the recommended responses:
+
+    - `profile_name [slurm]:` **slurm_noSidecar**
+    - `Select use_singularity:` **1 (False)**
+    - `Select use_conda:` **1 (False)**
+    - `jobs [500]:` *(Press Enter to accept default)*
+    - `restart_times [0]:` *(Press Enter to accept default)*
+    - `max_status_checks_per_second [10]:` *(Press Enter to accept default)*
+    - `max_jobs_per_second [10]:` *(Press Enter to accept default)*
+    - `latency_wait [5]:` **30**
+    - `Select print_shell_commands:` **1 (False)**
+    - `sbatch_defaults []:` **"qos=low nodes=1"**
+    - `Select cluster_sidecar:` **2 (no)**
+    - `cluster_name []:` *(Press Enter to leave blank)*
+    - `cluster_jobname [%r_%w]:` *(Press Enter to accept default)*
+    - `cluster_logpath [logs/slurm/%r/%j]:` *(Press Enter to accept default)*
+    - `cluster_config []:` *(Press Enter to leave blank)*
+
+    After responding to these prompts, your Slurm profile named *slurm_noSidecar* for Snakemake will be configured as specified.
 
 3. **Singularity**: We make use of singularity containers in this pipeline. If you have not installed singularity, check the [official Singularity guide](https://sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps). If you are working on the EMBL cluster singularity is already installed and you can skip this step.
 
 
 4. **Download the pipeline**:
-   ```bash
-   git clone git@github.com:maurerv/alphaabriss.git
-   cd alphaabriss
-   ```
+    ```bash
+    git clone git@github.com:maurerv/alphaabriss.git
+    cd alphaabriss
+    ```
 
 ## Configuration
 
@@ -118,6 +139,6 @@ Here's a breakdown of what each argument does:
 
 - `-n`: Dry-run flag. This makes Snakemake display the commands it would run without actually executing them. It's useful for testing. To run the pipeline for real, simply remove this flag.
 
-Executing the command above will perform submit the following jobs to the  cluster:
+Executing the command above will perform submit the following jobs to the cluster:
 
 ![Snakemake rulegraph](static/dag.png)
