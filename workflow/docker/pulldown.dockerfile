@@ -30,6 +30,7 @@ RUN apt-get update \
         kalign \
         tzdata \
         wget \
+        bc
     && rm -rf /var/lib/apt/lists/* \
     && apt-get autoremove -y \
     && apt-get clean
