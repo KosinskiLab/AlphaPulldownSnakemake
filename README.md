@@ -101,6 +101,15 @@ input_files :
   - config/sample_sheet2.csv
 ```
 
+This format can be extended to as many files as you would like, but keep in mind the number of folds will increase dramatically.
+
+```
+input_files :
+  - config/sample_sheet1.csv
+  - config/sample_sheet2.csv
+  - ...
+```
+
 ### alphafold_data_directory
 This is the path to your alphafold database.
 
