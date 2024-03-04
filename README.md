@@ -62,7 +62,7 @@ python3 --version
 
 Adjust `config/config.yaml` for your particular use case.
 
-### input_file
+### input_files
 This variable holds the path to your sample sheet, where each line corresponds to a folding job. For this pipeline we use the following format specification:
 
 ```
@@ -83,6 +83,22 @@ This format similarly extends for the folding of heteromers:
 
 ```
 example1_example2
+```
+
+Assuming you have two sample sheets config/sample_sheet1.csv and config/sample_sheet2.csv. The following would be equivalent to computing all versus all in sample_sheet1.csv:
+
+```
+input_files :
+  - config/sample_sheet1.csv
+  - config/sample_sheet1.csv
+```
+
+while the snippet below would be equivalent to computing the pulldown between sample_sheet1.csv and sample_sheet2.csv
+
+```
+input_files :
+  - config/sample_sheet1.csv
+  - config/sample_sheet2.csv
 ```
 
 ### alphafold_data_directory

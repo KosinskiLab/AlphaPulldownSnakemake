@@ -3,19 +3,30 @@ from sys import exit
 from os import makedirs
 from os.path import abspath, join, splitext, basename
 from source.input_parser import InputParser
+from scripts.create_combinations import process_files
 
 configfile: "config/config.yaml"
-config["input_file"] = abspath(config["input_file"])
 config["output_directory"] = abspath(config["output_directory"])
 makedirs(config["output_directory"], exist_ok = True)
 
 protein_delimiter = config.get("protein_delimiter", ";")
 
-dataset = InputParser.from_file(
-    filepath = config["input_file"],
-    file_format = "alphaabriss",
-    protein_delimiter = protein_delimiter
-)
+with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_input:
+    input_files = config["input_files"]
+    if isinstance(input_files, str):
+        input_files = [input_files]
+
+    process_files(
+        input_files = input_files,
+        output_path = tmp_input.name,
+        delimiter = protein_delimiter
+    )
+
+    dataset = InputParser.from_file(
+        filepath = tmp_input.name,
+        file_format = "alphaabriss",
+        protein_delimiter = protein_delimiter
+    )
 
 
 ruleorder: symlink_local_files > download_uniprot
@@ -168,6 +179,7 @@ rule compute_stats:
         run_get_good_pae.sh \
             --output_dir={params.prediction_dir} \
             --cutoff={params.report_cutoff}
+        mv pi_score_outputs {params.report_dir}
         mv predictions_with_good_interpae.csv {output}
         """
 
