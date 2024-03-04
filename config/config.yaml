@@ -1,7 +1,6 @@
 input_files :
   - config/sample_sheet.csv
 output_directory : /scratch/vmaurer/fold_temp
-output_directory : /Users/vmaurer/Downloads/temp
 alphafold_data_directory : /scratch/AlphaFold_DBs/2.3.2
 
 protein_delimiter : "_"

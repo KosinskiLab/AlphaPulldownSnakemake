@@ -1,4 +1,12 @@
+""" Snakemake pipeline for automated structure prediction using various backends.
+
+    Copyright (c) 2024 European Molecular Biology Laboratory
+
+    Author: Valentin Maurer <valentin.maurer@embl-hamburg.de>
+"""
+
 import sys
+import tempfile
 from sys import exit
 from os import makedirs
 from os.path import abspath, join, splitext, basename

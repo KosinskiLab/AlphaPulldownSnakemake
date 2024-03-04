@@ -1,7 +1,7 @@
 #!python3
 """ CLI inferface for running alphafold inference
 
-    Copyright (c) 2023 European Molecular Biology Laboratory
+    Copyright (c) 2024 European Molecular Biology Laboratory
 
     Author: Valentin Maurer <valentin.maurer@embl-hamburg.de>
 """
@@ -217,7 +217,7 @@ def predict_multimer(
 
     backend.change_backend(backend_name=fold_backend)
 
-    backend._backend.predict(
+    backend.predict(
         model_runners=model_runners,
         output_dir=output_directory,
         feature_dict=multimer.feature_dict,
@@ -225,7 +225,7 @@ def predict_multimer(
         fasta_name=multimer.description,
         seqs=multimer.input_seqs,
     )
-    backend._backend.postprocess(
+    backend.postprocess(
         multimer=multimer,
         output_path=output_directory,
         zip_pickles=False,

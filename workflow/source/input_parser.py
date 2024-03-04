@@ -1,3 +1,10 @@
+""" Implements parsing logic for Snakemake pipeline.
+
+    Copyright (c) 2024 European Molecular Biology Laboratory
+
+    Author: Valentin Maurer <valentin.maurer@embl-hamburg.de>
+"""
+
 from os import makedirs, symlink
 from os.path import exists, splitext, basename, join
 from typing import Tuple, List, Set, Dict

@@ -1,3 +1,10 @@
+""" Computes cartesian product of lines in multiple files.
+
+    Copyright (c) 2024 European Molecular Biology Laboratory
+
+    Author: Valentin Maurer <valentin.maurer@embl-hamburg.de>
+"""
+
 import argparse
 import itertools
 

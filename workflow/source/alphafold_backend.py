@@ -1,3 +1,10 @@
+""" Implements structure prediction backend using AlphaFold.
+
+    Copyright (c) 2024 European Molecular Biology Laboratory
+
+    Author: Valentin Maurer <valentin.maurer@embl-hamburg.de>
+"""
+
 import time
 import json
 import pickle
@@ -6,17 +13,18 @@ import numpy as np
 from os.path import join, exists
 from typing import List, Dict
 
-import run_alphafold
 import jax.numpy as jnp
-from run_alphafold import ModelsToRelax
-from alphafold.relax import relax
-from alphafold.common import protein, residue_constants
 from alphapulldown.predict_structure import get_existing_model_info
 from alphapulldown.objects import MultimericObject
 from alphapulldown.utils import (
     create_and_save_pae_plots,
     post_prediction_process,
 )
+# Avoid module not found error by importing after AP
+import run_alphafold
+from run_alphafold import ModelsToRelax
+from alphafold.relax import relax
+from alphafold.common import protein, residue_constants
 
 from folding_backend import FoldingBackend
 
@@ -32,21 +40,67 @@ def _jnp_to_np(output):
 
 
 class AlphaFold(FoldingBackend):
-
+    """
+    A backend to perform structure prediction using AlphaFold.
+    """
     @staticmethod
     def predict(
-        model_runners,
-        output_dir,
-        feature_dict,
-        random_seed,
+        model_runners : Dict,
+        output_dir : Dict,
+        feature_dict : Dict,
+        random_seed : int,
         fasta_name: str,
         models_to_relax: object = ModelsToRelax,
-        allow_resume=True,
+        allow_resume: bool = True,
         seqs: List = [],
         use_gpu_relax: bool = True,
         multimeric_mode: bool = False,
+        **kwargs):
+        """
+        Predicts the structure of proteins using a specified set of models and features.
+
+        Parameters
+        ----------
+        model_runners : dict
+            A dictionary of model names to their respective runners obtained from
+            :py:meth:`alphapulldown.utils.create_model_runners_and_random_seed.
+        output_dir : str
+            The directory where prediction results, including PDB files and metrics,
+            will be saved.
+        feature_dict : dict
+            A dictionary containing the features required by the models for prediction.
+        random_seed : int
+            A seed for random number generation to ensure reproducibility obtained
+             from :py:meth:`alphapulldown.utils.create_model_runners_and_random_seed.
+        fasta_name : str
+            The name of the fasta file, used for naming the output files.
+        models_to_relax : object, optional
+            An enum indicating which models' predictions to relax. Defaults to
+            ModelsToRelax which should be an enum type.
+        allow_resume : bool, optional
+            If True, attempts to resume prediction from partially completed runs.
+            Default is True.
+        seqs : List, optional
+            A list of sequences for which predictions are being made.
+            Default is an empty list.
+        use_gpu_relax : bool, optional
+            If True, uses GPU acceleration for the relaxation step. Default is True.
+        multimeric_mode : bool, optional
+            If True, enables multimeric prediction mode. Default is False.
         **kwargs
-    ):
+            Additional keyword arguments passed to model prediction and processing.
+
+        Raises
+        ------
+        ValueError
+            If multimeric mode is enabled but no valid templates are found in
+            the feature dictionary.
+
+        Notes
+        -----
+        This function is a cleaned up version of alphapulldown.predict_structure.predict
+        """
+
         timings = {}
         unrelaxed_pdbs = {}
         relaxed_pdbs = {}
@@ -213,6 +267,27 @@ class AlphaFold(FoldingBackend):
         remove_pickles: bool = False,
         **kwargs: Dict,
     ) -> None:
+        """
+        Performs post-processing operations on predicted protein structures and
+        writes results and plots to output_path.
+
+        Parameters
+        ----------
+        multimer : MultimericObject
+            The multimeric object containing the predicted structures and
+            associated data.
+        output_path : str
+            The directory where post-processed files and plots will be saved.
+        zip_pickles : bool, optional
+            If True, zips the pickle files containing prediction results.
+            Default is False.
+        remove_pickles : bool, optional
+            If True, removes the pickle files after post-processing is complete.
+            Default is False.
+        **kwargs : dict
+            Additional keyword arguments for future extensions or custom
+            post-processing steps.
+        """
         create_and_save_pae_plots(multimer, output_path)
         post_prediction_process(
             output_path,
