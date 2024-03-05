@@ -107,7 +107,7 @@ This format can be extended to as many files as you would like, but keep in mind
 input_files :
   - config/sample_sheet1.csv
   - config/sample_sheet2.csv
-  - ...
+  - ...lll
 ```
 
 ### alphafold_data_directory
@@ -122,6 +122,8 @@ Command line arguments that were previously pasesed to AlphaPulldown's run_multi
 ### alphafold_inference_threads, alphafold_inference
 Slurm specific parameters that do not need to be modified by non-expert users.
 
+### only_generate_features
+If set to True, stops after generating features and does not perform structure prediction and reporting.
 
 ## Execution
 

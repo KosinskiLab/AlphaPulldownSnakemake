@@ -39,6 +39,7 @@ with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_input:
 
 ruleorder: symlink_local_files > download_uniprot
 
+
 required_folds = [
     join(
         config["output_directory"],
@@ -46,17 +47,27 @@ required_folds = [
     )
     for fold in dataset.fold_specifications
 ]
+required_reports = [
+    join(
+        config["output_directory"], "reports", "statistics.csv"
+    ),
+    join(
+        config["output_directory"], "reports", "report.html"
+    )
+]
+total_required_files = [*required_folds, *required_reports]
+
+if config.get("only_generate_features", False):
+    total_required_files = [
+        join(config["output_directory"], "features", f"{fasta_basename}.pkl")
+        for fasta_basename in dataset.unique_sequences
+    ]
 
 
 rule all:
     input:
-        required_folds,
-        join(
-            config["output_directory"], "reports", "statistics.csv"
-        ),
-        join(
-            config["output_directory"], "reports", "report.html"
-        ),
+        total_required_files,
+
 
 rule symlink_local_files:
     input:
@@ -159,7 +170,7 @@ rule alphafold_inference:
         #export XLA_PYTHON_CLIENT_MEM_FRACTION=$(echo "scale=3; $MAXRAM / $GPUMEM" | bc)
         #export TF_FORCE_UNIFIED_MEMORY='1'
 
-        python3 workflow/source/alphafold_inference.py \
+        python3 workflow/source/run_structure_prediction.py \
             --input {params.requested_fold} \
             --output_directory={params.output_directory} \
             --num_cycle={params.n_recycles} \
@@ -194,6 +205,7 @@ rule compute_stats:
         run_get_good_pae.sh \
             --output_dir={params.prediction_dir} \
             --cutoff={params.report_cutoff}
+        mv r4s.res {params.report_dir}
         mv pi_score_outputs {params.report_dir}
         mv predictions_with_good_interpae.csv {output}
         """
