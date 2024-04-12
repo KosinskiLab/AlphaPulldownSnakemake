@@ -68,10 +68,10 @@ RUN wget -q -P /app/alphafold/alphafold/common/ \
 
 RUN pip3 install --upgrade pip --no-cache-dir \
     && pip3 install --upgrade --no-cache-dir \
-      alphapulldown==1.0.4 \
+      alphapulldown==2.0.0b1 \
       pytest \
-      jax==0.3.25 \
-      jaxlib==0.3.25+cuda11.cudnn805 \
+      jax==0.4.23 \
+      jaxlib==0.4.23+cuda11.cudnn86 \
       -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 RUN chmod u+s /sbin/ldconfig.real
