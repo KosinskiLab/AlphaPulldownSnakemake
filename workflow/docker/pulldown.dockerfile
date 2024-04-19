@@ -14,9 +14,8 @@
 
 # Extended by Valentin Maurer <valentin.maurer@embl-hamburg.de>
 
-ARG CUDA=11.1.1
-FROM nvidia/cuda:${CUDA}-cudnn8-runtime-ubuntu18.04
-ARG CUDA
+ARG CUDA=11.6.1
+FROM nvidia/cuda:11.6.1-cudnn8-runtime-ubuntu20.04
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
