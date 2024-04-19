@@ -16,6 +16,7 @@
 
 ARG CUDA=11.6.1
 FROM nvidia/cuda:11.6.1-cudnn8-runtime-ubuntu20.04
+ARG CUDA
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
