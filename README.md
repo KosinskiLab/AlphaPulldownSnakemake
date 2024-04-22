@@ -53,7 +53,10 @@ python3 --version
 4. **Download The Pipeline**:
     This will download the 1.0.0 version of the snakemake pipeline and create the repository AlphaPulldownSnakemake, or any other name you choose.
     ```bash
-    snakedeploy deploy-workflow https://github.com/KosinskiLab/AlphaPulldownSnakemake AlphaPulldownSnakemake --tag 1.0.0
+    snakedeploy deploy-workflow \
+      https://github.com/KosinskiLab/AlphaPulldownSnakemake \
+      AlphaPulldownSnakemake \
+      --tag 1.0.0
     cd AlphaPulldownSnakemake
     ```
 
@@ -106,7 +109,7 @@ This format can be extended to as many files as you would like, but keep in mind
 input_files :
   - config/sample_sheet1.csv
   - config/sample_sheet2.csv
-  - ...lll
+  - ...
 ```
 
 ### alphafold_data_directory
