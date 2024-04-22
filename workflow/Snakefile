@@ -15,7 +15,7 @@ from os import makedirs
 from contextlib import nullcontext
 from os.path import abspath, join, splitext, basename
 
-from source.input_parser import InputParser
+from scripts.input_parser import InputParser
 
 
 def read_file(filepath : str):
