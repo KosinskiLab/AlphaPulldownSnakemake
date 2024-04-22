@@ -53,7 +53,7 @@ python3 --version
 4. **Download The Pipeline**:
     This will download the 1.0.0 version of the snakemake pipeline and create the repository AlphaPulldownSnakemake, or any other name you choose.
     ```bash
-    snakedeploy deploy-workflow https://github.com/maurerv/AlphaPulldownSnakemake AlphaPulldownSnakemake --tag 1.0.0
+    snakedeploy deploy-workflow https://github.com/KosinskiLab/AlphaPulldownSnakemake AlphaPulldownSnakemake --tag 1.0.0
     cd AlphaPulldownSnakemake
     ```
 
@@ -126,7 +126,7 @@ If set to True, stops after generating features and does not perform structure p
 
 ## Execution
 
-After following the Installation and Configuration steps, you are now ready to run the snakemake pipeline. To do so, navigate into the cloned pipeline directory (/Users/vmaurer/src/alphaabriss in my case) and from within your shell run:
+After following the Installation and Configuration steps, you are now ready to run the snakemake pipeline. To do so, navigate into the cloned pipeline directory and run:
 
 ```bash
 snakemake \
