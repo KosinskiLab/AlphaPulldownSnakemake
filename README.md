@@ -8,13 +8,13 @@ Before installation, make sure your python version is at least 3.10.
 python3 --version
 ```
 
-1. **Snakemake**: An integral workflow management system.
+1. **Install Dependencies**
 
     ```bash
     pip install snakemake snakedeploy
     ```
 
-2. **Cluster Setup**
+2. **Snakemake Cluster Setup**
 
     In order to allow snakemake to interface with a compute cluster, we are going to use the [Snakemake-Profile for SLURM](https://github.com/Snakemake-Profiles/slurm). If you are not working on a SLURM cluster you can find profiles for different architectures [here](https://github.com/Snakemake-Profiles/slurm). The following will create a profile that can be used with snakemake and prompt you for some additional information.
 
@@ -47,12 +47,14 @@ python3 --version
 
     After responding to these prompts, your Slurm profile named *slurm_noSidecar* for Snakemake will be configured as specified.
 
-3. **Singularity**: We make use of singularity containers in this pipeline. If you have not installed singularity, check the [official Singularity guide](https://sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps). If you are working on the EMBL cluster singularity is already installed and you can skip this step.
+3. **Singularity (Probably Installed Already)**: This pipeline makes use of containers for reproducibility. If you are working on the EMBL cluster singularity is already installed and you can skip this step. Otherwise, please install Singularity using the [official Singularity guide](https://sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps).
 
 
-4. **Download the pipeline**:
+4. **Download The Pipeline**:
+    This will download the 1.0.0 version of the snakemake pipeline and create the repository AlphaPulldownSnakemake, or any other name you choose.
     ```bash
-    snakedeploy deploy-workflow https://github.com/KosinskiLab/AlphaPulldown/tree/snakemake_docker/snakemake . --branch snakemake_docker
+    snakedeploy deploy-workflow https://github.com/maurerv/AlphaPulldownSnakemake AlphaPulldownSnakemake --tag 1.0.0
+    cd AlphaPulldownSnakemake
     ```
 
 ## Configuration
