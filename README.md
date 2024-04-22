@@ -1,5 +1,3 @@
-# Alphaabriss
-
 A snakemake pipeline for automated structure prediction using various backends.
 
 ## Installation
@@ -13,7 +11,7 @@ python3 --version
 1. **Snakemake**: An integral workflow management system.
 
     ```bash
-    pip install snakemake
+    pip install snakemake snakedeploy
     ```
 
 2. **Cluster Setup**
@@ -54,8 +52,7 @@ python3 --version
 
 4. **Download the pipeline**:
     ```bash
-    git clone git@github.com:maurerv/alphaabriss.git
-    cd alphaabriss
+    snakedeploy deploy-workflow https://github.com/KosinskiLab/AlphaPulldown/tree/snakemake_docker/snakemake . --branch snakemake_docker
     ```
 
 ## Configuration

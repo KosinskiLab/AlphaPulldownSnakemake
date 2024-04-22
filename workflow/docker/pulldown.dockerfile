@@ -15,7 +15,7 @@
 # Extended by Valentin Maurer <valentin.maurer@embl-hamburg.de>
 
 ARG CUDA=11.8.0
-FROM nvidia/cuda:${CUDA}-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:${CUDA}-cudnn8-runtime-ubuntu20.04
 ARG CUDA
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
