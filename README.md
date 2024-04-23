@@ -51,7 +51,7 @@ python3 --version
 
 
 4. **Download The Pipeline**:
-    This will download the 1.0.0 version of the snakemake pipeline and create the repository AlphaPulldownSnakemake, or any other name you choose.
+    This will download the version specified by '--tag' of the snakemake pipeline and create the repository AlphaPulldownSnakemake, or any other name you choose.
     ```bash
     snakedeploy deploy-workflow \
       https://github.com/KosinskiLab/AlphaPulldownSnakemake \
