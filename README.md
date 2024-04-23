@@ -38,7 +38,7 @@ python3 --version
     - `max_jobs_per_second [10]:` *(Press Enter to accept default)*
     - `latency_wait [5]:` **30**
     - `Select print_shell_commands:` **1 (False)**
-    - `sbatch_defaults []:` **"qos=low nodes=1"**
+    - `sbatch_defaults []:` **qos=low nodes=1**
     - `Select cluster_sidecar:` **2 (no)**
     - `cluster_name []:` *(Press Enter to leave blank)*
     - `cluster_jobname [%r_%w]:` *(Press Enter to accept default)*
@@ -56,7 +56,7 @@ python3 --version
     snakedeploy deploy-workflow \
       https://github.com/KosinskiLab/AlphaPulldownSnakemake \
       AlphaPulldownSnakemake \
-      --tag 1.0.0
+      --tag 1.1.0
     cd AlphaPulldownSnakemake
     ```
 
