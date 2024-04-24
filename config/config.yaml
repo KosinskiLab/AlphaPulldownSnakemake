@@ -21,3 +21,6 @@ alphafold_inference : >
   qos=high constraint=gpu=3090
 
 only_generate_features: False
+
+feature_create_ram_bytes : 64000
+structure_inference_ram_bytes: 32000

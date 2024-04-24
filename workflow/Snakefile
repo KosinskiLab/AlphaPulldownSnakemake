@@ -214,7 +214,7 @@ rule download_uniprot:
         tail -n +2 ${{temp_file}} >> {output}
         """
 
-
+base_feature_ram = config.get("feature_create_ram_bytes", 64000)
 rule create_features:
     input:
         join(config["output_directory"], "data", "{fasta_basename}.fasta"),
@@ -226,7 +226,7 @@ rule create_features:
         save_msa = config.get("save_msa", False),
         use_precomputed_msa = config.get("use_precomputed_msa", True),
     resources:
-        mem_mb = lambda wildcards, attempt: 64000 * attempt,
+        mem_mb = lambda wildcards, attempt: base_feature_ram * (1.1 ** attempt),
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
     threads: 8, # everything is harcoded in AF anyways ...
@@ -243,7 +243,7 @@ rule create_features:
             --skip_existing=False
         """
 
-memscaling_inference = config["alphafold_inference_threads"] / 8
+base_inference_ram = config.et("structure_inference_ram_bytes", 32000)
 rule structure_inference:
     input:
         lambda wildcards : [join(
@@ -269,7 +269,7 @@ rule structure_inference:
         requested_fold = lambda  wildcards : wildcards.fold,
         protein_delimiter = protein_delimiter,
     resources:
-        mem_mb = lambda wildcards, attempt: 128000 * attempt * memscaling_inference,
+        mem_mb = lambda wildcards, attempt: base_inference_ram * (1.1 ** attempt),
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
         slurm = config.get("alphafold_inference", ""),
