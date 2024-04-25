@@ -319,7 +319,6 @@ rule compute_stats:
             --output_dir={params.prediction_dir} \
             --cutoff={params.report_cutoff}
         mv -f r4s.res {params.report_dir}
-        mv -f pi_score_outputs {params.report_dir}
         mv -f predictions_with_good_interpae.csv {output}
         """
 
