@@ -24,3 +24,5 @@ only_generate_features: False
 
 feature_create_ram_bytes : 64000
 structure_inference_ram_bytes: 32000
+
+cluster_jobs: False
