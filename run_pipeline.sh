@@ -11,4 +11,5 @@ snakemake \
   --profile slurm_noSidecar \
   --rerun-incomplete \
   --rerun-triggers mtime \
-  --latency-wait 30
+  --latency-wait 30 \
+  --keep-going
