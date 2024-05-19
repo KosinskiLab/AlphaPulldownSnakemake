@@ -6,7 +6,7 @@ include: "group_jobs.smk"
 configfile: "config/config.yaml"
 config["output_directory"] = abspath(config["output_directory"])
 makedirs(config["output_directory"], exist_ok = True)
-
+base_inference_ram = config.get("structure_inference_ram_bytes", 32000)
 
 rule all:
     input: 
@@ -43,9 +43,9 @@ checkpoint structure_inference_with_padding:
         for FILE in "$DIRECTORY"/job_cluster_*_*.txt; do
             FILENAME=$(basename "$FILE")
             if [[ $FILENAME =~ job_cluster_([0-9]+)_([0-9]+)_([0-9]+).txt ]]; then
-                CLUSTER_INDEX=${BASH_REMATCH[1]}
-                NUM_DESIRED_RES=${BASH_REMATCH[2]}
-                NUM_DESIRED_MSA=${BASH_REMATCH[3]}
+                CLUSTER_INDEX=${{BASH_REMATCH[1]}}
+                NUM_DESIRED_RES=${{BASH_REMATCH[2]}}
+                NUM_DESIRED_MSA=${{BASH_REMATCH[3]}}
                 run_multimer_jobs.py \
                     --mode custom \
                     --output_path={params.output_directory} \
