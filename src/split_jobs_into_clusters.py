@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 def create_multimer_objects(args):
-    data = create_custom_info(args.parsed_input)
+    data = create_custom_info(args.all_folds)
     interactors = create_interactors(data, args.features_directory, 0)
     multimer = MultimericObject(interactors[0])
     return multimer
@@ -88,13 +88,13 @@ def cluster_jobs(all_folds, args):
 def main():
     parser = argparse.ArgumentParser(description="Run protein folding.")
     parser.add_argument(
-        "--protein_lists",
-        dest="protein_lists",
+        "--all_folds",
+        dest="all_folds",
         type=str,
         nargs="+",
         default=None,
         required=False,
-        help="protein list files"
+        help="All the jobs to fold"
     )
     parser.add_argument(
         "--protein_delimiter",
@@ -102,14 +102,6 @@ def main():
         type=str,
         default="+",
         required=False,
-        help="protein list files"
-    )
-    parser.add_argument(
-        "--mode",
-        dest="mode",
-        type=str,
-        default="pulldown",
-        required=True,
         help="protein list files"
     )
     parser.add_argument(
@@ -129,17 +121,10 @@ def main():
         help="output directory"
     )
     args = parser.parse_args()
-    protein_lists = args.protein_lists
-    if args.mode == "all_vs_all":
-        protein_lists = [args.protein_lists[0], args.protein_lists[0]]
     # buffer = io.StringIO()
     import time
     start = time.time()
-    all_combinations = process_files(input_files=protein_lists)
-
-    all_folds = ["+".join(combo) for combo in all_combinations]
-    all_folds = [x.strip().replace(",", ":") for x in all_folds]
-    all_folds = [x.strip().replace(";", "+") for x in all_folds]
+    all_folds = args.all_folds
     end = time.time()
     diff1 = end - start 
     cluster_jobs(all_folds, args)
