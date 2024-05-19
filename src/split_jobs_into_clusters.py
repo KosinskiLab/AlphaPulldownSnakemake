@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 def create_multimer_objects(args):
-    data = create_custom_info(args.all_folds)
+    data = create_custom_info(args.parsed_input)
     interactors = create_interactors(data, args.features_directory, 0)
     multimer = MultimericObject(interactors[0])
     return multimer
