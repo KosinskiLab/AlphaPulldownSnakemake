@@ -68,7 +68,7 @@ rule structure_inference_with_padding:
             --num_cycle={params.n_recycles} \
             --num_predictions_per_model={params.predictions_per_model} \
             --data_dir={params.data_directory} --monomer_objects_dir={params.feature_directory} \
-            --protein_list={input} \
+            --protein_lists={input} \
             --desired_num_res={params.num_desird_res} \
             --desired_num_msa={params.num_desired_msa}
 
