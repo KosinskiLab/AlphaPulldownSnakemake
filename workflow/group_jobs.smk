@@ -1,6 +1,15 @@
+""" Snakemake pipeline for automated structure prediction using various backends.
+
+    Copyright (c) 2024 European Molecular Biology Laboratory
+
+    Author: Dingquan Yu <dingquan.yu@embl-hamburg.de>
+"""
+## Tried to import InputParser but failed. No module called "workflow"
+# from workflow.Snakefile import InputParser
 from os.path import join, abspath
 configfile: "config/config.yaml"
 config["output_directory"] = abspath(config["output_directory"])
+
 rule group_jobs:
     input: 
         join(config["output_directory"], "features"),
