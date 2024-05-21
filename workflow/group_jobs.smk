@@ -1,4 +1,5 @@
-""" Snakemake pipeline for automated structure prediction using various backends.
+""" Snakemake pipeline for group jobs into different clusters based on number of MSAs
+    and number of residues to pad.
 
     Copyright (c) 2024 European Molecular Biology Laboratory
 
@@ -9,6 +10,10 @@
 from os.path import join, abspath
 configfile: "config/config.yaml"
 config["output_directory"] = abspath(config["output_directory"])
+
+rule all:
+    input:
+        join(config["output_directory"], "job_groups","job_clusters.txt")
 
 rule group_jobs:
     input: 
