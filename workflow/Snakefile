@@ -176,6 +176,9 @@ if config.get("only_generate_features", False):
         for fasta_basename in dataset.unique_sequences
     ]
 
+# modify total_required_files if clustering and padding are used
+if config.get("cluster_jobs", False):
+    pass 
 
 rule all:
     input:
