@@ -1,4 +1,5 @@
-""" Snakemake pipeline for automated structure prediction using various backends.
+""" Snakemake pipeline for group jobs into different clusters based on number of MSAs
+    and number of residues to pad.
 
     Copyright (c) 2024 European Molecular Biology Laboratory
 

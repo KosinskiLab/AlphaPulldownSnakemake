@@ -1,3 +1,9 @@
+""" Snakemake pipeline for automated structure prediction using various backends.
+
+    Copyright (c) 2024 European Molecular Biology Laboratory
+
+    Author: Dingquan Yu <dingquan.yu@embl-hamburg.de>
+"""
 from os.path import abspath
 from os import makedirs
 include: "group_jobs.smk"
@@ -52,7 +58,7 @@ checkpoint structure_inference_with_padding:
                     --num_cycle={params.n_recycles} \
                     --num_predictions_per_model={params.predictions_per_model} \
                     --data_dir={params.data_directory} --monomer_objects_dir={params.feature_directory} \
-                    --protein_list=$FILENAME \
+                    --protein_lists=$FILENAME \
                     --desired_num_res=$NUM_DESIRED_RES \
                     --desired_num_msa=$NUM_DESIRED_MSA
 
