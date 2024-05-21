@@ -63,7 +63,7 @@ def write_individual_job_cluster(all_jobs : pd.DataFrame,
         is_member = labels == label
         max_seq_length, max_msa_depth = max(X[is_member, 0]), max(X[is_member, 1])
         members = all_jobs[is_member]['name'].tolist()
-        file_name = f"{output_dir}/job_cluster{i+1}_{int(max_seq_length)}_{int(max_msa_depth)}.txt"
+        file_name = f"{output_dir}/job_cluster_{i+1}_{int(max_seq_length)}_{int(max_msa_depth)}.txt"
         with open(file_name, "w") as outfile:
             for m in members:
                 print(m, file=outfile)
