@@ -280,7 +280,7 @@ rule structure_inference:
         run_structure_prediction.py \
             --input {params.requested_fold} \
             --output_directory={params.output_directory} \
-            --protein_delimiter {params.protein_delimiter}
+            --protein_delimiter={params.protein_delimiter} \
             --data_directory={params.data_directory} \
             --features_directory={params.feature_directory} \
             {params.cli_parameters}
