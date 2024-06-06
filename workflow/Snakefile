@@ -2,7 +2,7 @@
 
     Copyright (c) 2024 European Molecular Biology Laboratory
 
-    Author: Valentin Maurer <valentin.maurer@embl-hamburg.de>
+    Authors: Valentin Maurer, Dingquan Yu <name.surname@embl-hamburg.de>
 """
 
 import sys
@@ -102,6 +102,25 @@ class InputParser:
             sequences_by_fold=sequences_by_fold,
         )
 
+    def update_clustering(self, data : Dict[str, List]) -> None:
+        folds_by_cluster = {}
+        for fold, cluster in zip(data["name"], data["cluster"]):
+            if cluster not in folds_by_cluster:
+                folds_by_cluster[cluster] = []
+            folds_by_cluster[cluster].append(fold)
+
+        sequences_by_fold, new_folds = {}, []
+        for cluster, folds in folds_by_cluster.items():
+            new_fold = " ".join([str(x) for x in folds])
+            total_sequences = []
+            for fold in folds:
+                total_sequences.extend(dataset.sequences_by_fold[fold])
+            sequences_by_fold[new_fold] = list(set(total_sequences))
+            new_folds.append(new_fold)
+
+        self.sequences_by_fold.update(sequences_by_fold)
+        self.fold_specifications = new_folds
+
 
 def read_file(filepath : str):
     with open(filepath, mode = "r", encoding = "utf-8") as file:
@@ -168,7 +187,7 @@ required_reports = [
         config["output_directory"], "reports", "report.html"
     )
 ]
-total_required_files = [*required_folds, *required_reports]
+total_required_files = [*required_reports]
 
 if config.get("only_generate_features", False):
     total_required_files = [
@@ -176,14 +195,16 @@ if config.get("only_generate_features", False):
         for fasta_basename in dataset.unique_sequences
     ]
 
-# modify total_required_files if clustering and padding are used
+
 if config.get("cluster_jobs", False):
-    pass 
+    total_required_files.append(
+        join(config["output_directory"], "resources", "sequence_clusters.txt")
+    )
+
 
 rule all:
     input:
         total_required_files,
-
 
 rule symlink_local_files:
     input:
@@ -226,13 +247,14 @@ rule create_features:
     params:
         data_directory = config["alphafold_data_directory"],
         output_directory = join(config["output_directory"], "features"),
-        save_msa = config.get("save_msa", False),
-        use_precomputed_msa = config.get("use_precomputed_msa", True),
+        cli_parameters = " ".join(
+            [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
+        )
     resources:
         mem_mb = lambda wildcards, attempt: base_feature_ram * (1.1 ** attempt),
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
-    threads: 8, # everything is harcoded in AF anyways ...
+    threads: 8, # everything is harcoded anyways ...
     container:
        "docker://kosinskilab/fold:latest",
     shell:"""
@@ -240,39 +262,93 @@ rule create_features:
             --fasta_paths={input} \
             --data_dir={params.data_directory} \
             --output_dir={params.output_directory} \
-            --save_msa_files={params.save_msa} \
-            --use_precomputed_msas={params.use_precomputed_msa} \
-            --max_template_date=2050-01-01 \
-            --skip_existing=False
+            {params.cli_parameters}
         """
 
-base_inference_ram = config.get("structure_inference_ram_bytes", 32000)
+checkpoint cluster_sequence_length:
+    input:
+        [join(config["output_directory"], "features", f"{feature}.pkl")
+        for feature in dataset.unique_sequences
+        ],
+    output:
+        join(config["output_directory"], "resources", "sequence_clusters.txt"),
+    resources:
+        avg_mem = lambda wildcards, attempt: 600 * attempt,
+        mem_mb = lambda wildcards, attempt: 800 * attempt,
+        walltime = lambda wildcards, attempt: 10 * attempt,
+        attempt = lambda wildcards, attempt: attempt,
+    params:
+        folds = dataset.fold_specifications,
+        protein_delimiter = protein_delimiter,
+        feature_directory = join(config["output_directory"], "features"),
+        cluster_bin_size = config.get("clustering_bin_size", 150),
+    container:
+       "docker://kosinskilab/fold:latest",
+    shell:"""
+        python3 workflow/scripts/cluster_sequence_length.py \
+            --folds {params.folds} \
+            --output_file {output} \
+            --protein_delimiter {params.protein_delimiter} \
+            --bin_size {params.cluster_bin_size} \
+            --features_directory {params.feature_directory}
+        """
+
+def lookup_features(wildcards):
+    if config.get("cluster_jobs", False):
+        cluster_data = {}
+        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
+            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
+
+        headers = data.pop(0)
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
+        dataset.update_clustering(data = ret)
+
+    features = [join(
+        config["output_directory"], "features", f"{feature}.pkl")
+        for feature in dataset.sequences_by_fold[wildcards.fold]
+    ]
+    return features
+
+def format_clustering(wildcards):
+    parameter_string = ""
+    if config.get("cluster_jobs", False):
+        cluster_data = {}
+        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
+            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
+
+        headers = data.pop(0)
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
+
+        fold = wildcards.fold.split(" ")[0]
+        for name, length, depth in zip(ret["name"], ret["max_seq_length"], ret["max_msa_depth"]):
+            if name == fold:
+                parameter_string += f"--desired_num_res={length} "
+                parameter_string += f"--desired_num_msa={depth} "
+    return parameter_string
+
+
 rule structure_inference:
     input:
-        lambda wildcards : [join(
-            config["output_directory"], "features", f"{feature}.pkl")
-            for feature in dataset.sequences_by_fold[wildcards.fold]],
+        features = lookup_features,
+        cluster = join(config["output_directory"], "resources", "sequence_clusters.txt")
+            if config.get("cluster_jobs", False) else "/dev/null",
     output:
-        join(
-            config["output_directory"],
-            "predictions", "{fold}", "completed_fold.txt"
-        ),
+        join(config["output_directory"],"predictions", "{fold}", "completed_fold.txt"),
     params:
         data_directory = config["alphafold_data_directory"],
-        predictions_per_model = config["predictions_per_model"],
-        n_recycles = (
-            lambda wildcards: config["number_of_recycles"]
-            if len(wildcards.fold.split(protein_delimiter)) > 1
-            else min(3, config["number_of_recycles"])
-        ),
         feature_directory = join(config["output_directory"], "features"),
         output_directory = lambda wildcards: join(
             config["output_directory"], "predictions", wildcards.fold
         ),
         requested_fold = lambda  wildcards : wildcards.fold,
         protein_delimiter = protein_delimiter,
+        cli_parameters = " ".join(
+            [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
+        ),
+        clustering_format = format_clustering,
     resources:
-        mem_mb = lambda wildcards, attempt: base_inference_ram * (1.1 ** attempt),
+        mem_mb = lambda wildcards, attempt:
+            config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
         slurm = config.get("alphafold_inference", ""),
@@ -289,18 +365,39 @@ rule structure_inference:
         run_structure_prediction.py \
             --input {params.requested_fold} \
             --output_directory={params.output_directory} \
-            --num_cycle={params.n_recycles} \
-            --num_predictions_per_model={params.predictions_per_model} \
+            --protein_delimiter={params.protein_delimiter} \
             --data_directory={params.data_directory} \
             --features_directory={params.feature_directory} \
-            --protein_delimiter {params.protein_delimiter}
-        echo "Completed" > {output}
+            {params.clustering_format} \
+            {params.cli_parameters}
+
+        echo "Completed" > "{output}"
         """
+
+
+def update_clustering(wildcards):
+    if config.get("cluster_jobs", False):
+        cluster_data = {}
+        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
+            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
+
+        headers = data.pop(0)
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
+        dataset.update_clustering(data = ret)
+
+    required_folds = [
+        join(
+            config["output_directory"],
+            "predictions", fold, "completed_fold.txt"
+        )
+        for fold in dataset.fold_specifications
+    ]
+    return required_folds
 
 
 rule compute_stats:
     input:
-        required_folds,
+        update_clustering,
     output:
         join(
             config["output_directory"], "reports", "statistics.csv"
@@ -325,9 +422,10 @@ rule compute_stats:
         mv -f predictions_with_good_interpae.csv {output}
         """
 
+
 rule generate_report:
     input:
-        required_folds,
+        update_clustering,
     output:
         join(
             config["output_directory"], "reports", "report.html"
