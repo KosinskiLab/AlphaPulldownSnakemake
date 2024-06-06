@@ -337,10 +337,11 @@ rule structure_inference:
     params:
         data_directory = config["alphafold_data_directory"],
         feature_directory = join(config["output_directory"], "features"),
-        output_directory = lambda wildcards: join(
-            config["output_directory"], "predictions", wildcards.fold
-        ),
-        requested_fold = lambda  wildcards : wildcards.fold,
+        output_directory = lambda wildcards: [
+            join(config["output_directory"], "predictions", individual_fold)
+            for individual_fold in wildcards.fold.split(" ")
+            ],
+        requested_fold = lambda  wildcards : wildcards.fold.replace(" ", ","),
         protein_delimiter = protein_delimiter,
         cli_parameters = " ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
