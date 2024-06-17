@@ -1,6 +1,6 @@
 input_files :
   - config/sample_sheet.csv
-protein_delimiter : "+"
+protein_delimiter : "_"
 
 output_directory : /scratch/vmaurer/fold_temp
 alphafold_data_directory : /scratch/AlphaFold_DBs/2.3.2
@@ -27,6 +27,7 @@ generate_report_arguments:
   --cutoff: 100.0
 
 
+
 feature_create_ram_bytes : 64000
 structure_inference_ram_bytes: 32000
 
@@ -36,5 +37,3 @@ alphafold_inference : >
   qos=high constraint=gpu=3090
 
 card_order : [gpu=3090, gpu=A40, gpu=H100, gpu=A100]
-
-
