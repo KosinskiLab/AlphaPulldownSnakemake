@@ -5,8 +5,9 @@ protein_delimiter : "+"
 output_directory : /scratch/vmaurer/fold_temp
 alphafold_data_directory : /scratch/AlphaFold_DBs/2.3.2
 
-report_cutoff : 5.0
 only_generate_features: False
+cluster_jobs: False
+clustering_bin_size: 150
 
 
 create_feature_arguments:
@@ -19,6 +20,12 @@ structure_inference_arguments:
   --num_predictions_per_model : 5
   --num_cycle: 24
 
+compute_stats_arguments:
+  --cutoff: 100.0
+
+generate_report_arguments:
+  --cutoff: 100.0
+
 
 feature_create_ram_bytes : 64000
 structure_inference_ram_bytes: 32000
@@ -30,5 +37,4 @@ alphafold_inference : >
 
 card_order : [gpu=3090, gpu=A40, gpu=H100, gpu=A100]
 
-cluster_jobs: False
-clustering_bin_size: 150
+
