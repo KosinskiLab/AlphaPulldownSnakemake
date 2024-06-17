@@ -2,128 +2,15 @@
 
     Copyright (c) 2024 European Molecular Biology Laboratory
 
-    Author: Valentin Maurer <valentin.maurer@embl-hamburg.de>
+    Authors: Valentin Maurer, Dingquan Yu <name.surname@embl-hamburg.de>
 """
-
-import sys
 import tempfile
-import itertools
 
 from sys import exit
 from os import makedirs
-from os import makedirs, symlink
-from contextlib import nullcontext
-from typing import List, Union, TextIO, Tuple, Set, Dict
-from os.path import abspath, join, splitext, basename, exists
+from os.path import abspath, join, splitext, basename
 
-
-class InputParser:
-    def __init__(
-        self,
-        fold_specifications: Tuple[str],
-        sequences_by_origin: Dict[str, List[str]],
-        sequences_by_fold: Dict[str, Set],
-    ):
-        self.fold_specifications = fold_specifications
-        self.sequences_by_origin = sequences_by_origin
-        self.sequences_by_fold = sequences_by_fold
-
-        unique_sequences = set()
-        for value in self.sequences_by_origin.values():
-            unique_sequences.update(
-                set([splitext(basename(x))[0] for x in value])
-            )
-        self.unique_sequences = unique_sequences
-
-    @staticmethod
-    def _strip_path_and_extension(filepath : str) -> str:
-        return splitext(basename(filepath))[0]
-
-    @staticmethod
-    def _parse_alphaabriss_format(
-        fold_specifications: List[str],
-        protein_delimiter : str = "_"
-    ) -> Tuple[Dict[str, List[str]], Dict[str, Set]]:
-        unique_sequences, sequences_by_fold = set(), {}
-
-        for fold_specification in fold_specifications:
-            sequences = set()
-            clean_fold_specification = []
-            for fold in fold_specification.split(protein_delimiter):
-                fold = fold.split(":")
-                sequences.add(fold[0])
-
-                protein_name = splitext(basename(fold[0]))[0]
-                clean_fold_specification.append(":".join([protein_name, *fold[1:]]))
-
-            clean_fold_specification = protein_delimiter.join([str(x) for x in clean_fold_specification])
-
-            unique_sequences.update(sequences)
-            sequences_by_fold[clean_fold_specification] = {splitext(basename(x))[0] for x in sequences}
-
-        sequences_by_origin = {
-            "uniprot" : [],
-            "local" : []
-        }
-        for sequence in unique_sequences:
-            if not exists(sequence):
-                sequences_by_origin["uniprot"].append(sequence)
-                continue
-            sequences_by_origin["local"].append(sequence)
-
-        return sequences_by_origin, sequences_by_fold
-
-    def symlink_local_files(self, output_directory : str) -> None:
-        makedirs(output_directory, exist_ok = True)
-        for file in self.sequences_by_origin["local"]:
-            symlink(file, join(output_directory, basename(file)))
-        return None
-
-    @classmethod
-    def from_file(cls, filepath: str, file_format: str = "alphaabriss", protein_delimiter : str = "_"):
-        with open(filepath, mode="r") as infile:
-            data = [line.strip() for line in infile.readlines() if len(line.strip())]
-            data = tuple(set(data))
-
-        match file_format:
-            case "alphaabriss":
-                ret = cls._parse_alphaabriss_format(
-                    fold_specifications = data, protein_delimiter=protein_delimiter
-                )
-                sequences_by_origin, sequences_by_fold = ret
-
-            case _:
-                raise ValueError(f"Format {file_format} is not supported.")
-
-        fold_specifications = list(sequences_by_fold.keys())
-        return cls(
-            fold_specifications=fold_specifications,
-            sequences_by_origin=sequences_by_origin,
-            sequences_by_fold=sequences_by_fold,
-        )
-
-
-def read_file(filepath : str):
-    with open(filepath, mode = "r", encoding = "utf-8") as file:
-        lines = file.read().splitlines()
-    return list(line.lstrip().rstrip() for line in lines if line)
-
-def process_files(input_files : List[str],
-                  output_path : Union[str, TextIO] = None,
-                  delimiter : str = '+'):
-    """Process the input files to compute the Cartesian product and write to the output file."""
-    lists_of_lines = [read_file(filepath) for filepath in input_files]
-    cartesian_product = list(itertools.product(*lists_of_lines))
-    if output_path is None:
-        return itertools.product(*lists_of_lines)
-    else:
-        context_manager = nullcontext(output_path)
-        if isinstance(output_path, str):
-            context_manager = open(output_path, mode = "w", encoding = "utf-8")
-
-        with context_manager as output_file:
-            for combination in cartesian_product:
-                output_file.write(delimiter.join(combination) + '\n')
+include: "rules/common.smk"
 
 
 configfile: "config/config.yaml"
@@ -168,13 +55,19 @@ required_reports = [
         config["output_directory"], "reports", "report.html"
     )
 ]
-total_required_files = [*required_folds, *required_reports]
+total_required_files = [*required_reports]
 
 if config.get("only_generate_features", False):
     total_required_files = [
         join(config["output_directory"], "features", f"{fasta_basename}.pkl")
         for fasta_basename in dataset.unique_sequences
     ]
+
+
+if config.get("cluster_jobs", False):
+    total_required_files.append(
+        join(config["output_directory"], "resources", "sequence_clusters.txt")
+    )
 
 
 rule all:
@@ -232,6 +125,8 @@ rule create_features:
     threads: 8, # everything is harcoded anyways ...
     container:
        "docker://kosinskilab/fold:latest",
+    conda:
+        "envs/alphapulldown.yaml",
     shell:"""
         create_individual_features.py \
             --fasta_paths={input} \
@@ -240,30 +135,93 @@ rule create_features:
             {params.cli_parameters}
         """
 
-base_inference_ram = config.get("structure_inference_ram_bytes", 32000)
+checkpoint cluster_sequence_length:
+    input:
+        [join(config["output_directory"], "features", f"{feature}.pkl")
+        for feature in dataset.unique_sequences
+        ],
+    output:
+        join(config["output_directory"], "resources", "sequence_clusters.txt"),
+    resources:
+        avg_mem = lambda wildcards, attempt: 600 * attempt,
+        mem_mb = lambda wildcards, attempt: 800 * attempt,
+        walltime = lambda wildcards, attempt: 10 * attempt,
+        attempt = lambda wildcards, attempt: attempt,
+    params:
+        folds = dataset.fold_specifications,
+        protein_delimiter = protein_delimiter,
+        feature_directory = join(config["output_directory"], "features"),
+        cluster_bin_size = config.get("clustering_bin_size", 150),
+    container:
+       "docker://kosinskilab/fold:latest",
+    conda:
+        "envs/alphapulldown.yaml",
+    shell:"""
+        python3 workflow/scripts/cluster_sequence_length.py \
+            --folds {params.folds} \
+            --output_file {output} \
+            --protein_delimiter {params.protein_delimiter} \
+            --bin_size {params.cluster_bin_size} \
+            --features_directory {params.feature_directory}
+        """
+
+def lookup_features(wildcards):
+    if config.get("cluster_jobs", False):
+        cluster_data = {}
+        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
+            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
+
+        headers = data.pop(0)
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
+        dataset.update_clustering(data = ret)
+
+    features = [join(
+        config["output_directory"], "features", f"{feature}.pkl")
+        for feature in dataset.sequences_by_fold[wildcards.fold]
+    ]
+    return features
+
+def format_clustering(wildcards):
+    parameter_string = ""
+    if config.get("cluster_jobs", False):
+        cluster_data = {}
+        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
+            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
+
+        headers = data.pop(0)
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
+
+        fold = wildcards.fold.split(" ")[0]
+        for name, length, depth in zip(ret["name"], ret["max_seq_length"], ret["max_msa_depth"]):
+            if name == fold:
+                parameter_string += f"--desired_num_res={length} "
+                parameter_string += f"--desired_num_msa={depth} "
+    return parameter_string
+
+
 rule structure_inference:
     input:
-        lambda wildcards : [join(
-            config["output_directory"], "features", f"{feature}.pkl")
-            for feature in dataset.sequences_by_fold[wildcards.fold]],
+        features = lookup_features,
+        cluster = join(config["output_directory"], "resources", "sequence_clusters.txt")
+            if config.get("cluster_jobs", False) else "/dev/null",
     output:
-        join(
-            config["output_directory"],
-            "predictions", "{fold}", "completed_fold.txt"
-        ),
+        join(config["output_directory"],"predictions", "{fold}", "completed_fold.txt"),
     params:
         data_directory = config["alphafold_data_directory"],
         feature_directory = join(config["output_directory"], "features"),
-        output_directory = lambda wildcards: join(
-            config["output_directory"], "predictions", wildcards.fold
-        ),
-        requested_fold = lambda  wildcards : wildcards.fold,
+        output_directory = lambda wildcards: [
+            join(config["output_directory"], "predictions", individual_fold)
+            for individual_fold in wildcards.fold.split(" ")
+            ],
+        requested_fold = lambda  wildcards : wildcards.fold.replace(" ", ","),
         protein_delimiter = protein_delimiter,
         cli_parameters = " ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
-        )
+        ),
+        clustering_format = format_clustering,
     resources:
-        mem_mb = lambda wildcards, attempt: base_inference_ram * (1.1 ** attempt),
+        mem_mb = lambda wildcards, attempt:
+            config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
         slurm = config.get("alphafold_inference", ""),
@@ -271,6 +229,8 @@ rule structure_inference:
         config["alphafold_inference_threads"],
     container:
        "docker://kosinskilab/fold:latest",
+    conda:
+        "envs/alphapulldown.yaml",
     shell:"""
         #MAXRAM=$(bc <<< "$(ulimit -m) / 1024.0")
         #GPUMEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | tail -1)
@@ -283,42 +243,108 @@ rule structure_inference:
             --protein_delimiter={params.protein_delimiter} \
             --data_directory={params.data_directory} \
             --features_directory={params.feature_directory} \
+            {params.clustering_format} \
             {params.cli_parameters}
 
-        echo "Completed" > {output}
+        echo "Completed" > "{output}"
         """
+
+
+def update_clustering(wildcards):
+    if config.get("cluster_jobs", False):
+        cluster_data = {}
+        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
+            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
+
+        headers = data.pop(0)
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
+        dataset.update_clustering(data = ret)
+
+    required_folds = [
+        join(
+            config["output_directory"],
+            "predictions", fold, "completed_fold.txt"
+        )
+        for fold in dataset.fold_specifications
+    ]
+    return required_folds
 
 
 rule compute_stats:
     input:
-        required_folds,
+        rules.structure_inference.output,
+    output:
+        join(
+            config["output_directory"], "predictions", "{fold}", "statistics.csv"
+        ),
+    resources:
+        mem_mb = lambda wildcards, attempt: 8000 * attempt,
+        walltime = lambda wildcards, attempt: 1440 * attempt,
+        attempt = lambda wildcards, attempt: attempt,
+    params:
+        prediction_dir = lambda wildcards: join(
+            config["output_directory"], "predictions", wildcards.fold
+        ),
+        fold = lambda wildcards: wildcards.fold,
+        report_dir = join(config["output_directory"], "reports"),
+        cli_parameters = " ".join(
+            [f"{k}={v}" for k, v in config["compute_stats_arguments"].items()]
+        ),
+    container:
+       "docker://kosinskilab/fold_analysis:latest",
+    conda:
+        "envs/alphapulldown.yaml",
+    shell:"""
+        tmpdir=$(mktemp -d)
+
+        cd $tmpdir
+        ln -s {params.prediction_dir} $tmpdir/{params.fold}
+        get_good_inter_pae.py \
+            --output_dir=$tmpdir \
+            {params.cli_parameters}
+
+        touch predictions_with_good_interpae.csv
+        mv predictions_with_good_interpae.csv {output}
+        rm -rf $tmpdir
+        """
+
+def update_statistics(wildcards):
+    required_folds = [
+        join(
+            config["output_directory"],
+            "predictions", fold, "statistics.csv"
+        )
+        for fold in dataset.fold_specifications
+    ]
+    return required_folds
+
+rule merge_stats:
+    input:
+        update_statistics,
     output:
         join(
             config["output_directory"], "reports", "statistics.csv"
         ),
     resources:
-        mem_mb = lambda wildcards, attempt: 32000 * attempt,
+        mem_mb = lambda wildcards, attempt: 2000 * attempt,
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
     params:
         prediction_dir = join(config["output_directory"], "predictions"),
-        report_dir = join(config["output_directory"], "reports"),
-        report_cutoff = config["report_cutoff"],
     container:
        "docker://kosinskilab/fold_analysis:latest",
     shell:"""
-        cd {params.prediction_dir}
+        head -n 1 {input[0]} > {output}
 
-        run_get_good_pae.sh \
-            --output_dir={params.prediction_dir} \
-            --cutoff={params.report_cutoff}
-        mv -f r4s.res {params.report_dir}
-        mv -f predictions_with_good_interpae.csv {output}
+        for f in {input}; do
+            tail -n +2 "$f" >> {output}
+        done
         """
+
 
 rule generate_report:
     input:
-        required_folds,
+        update_clustering,
     output:
         join(
             config["output_directory"], "reports", "report.html"
@@ -330,14 +356,19 @@ rule generate_report:
     params:
         prediction_dir = join(config["output_directory"], "predictions"),
         report_dir = join(config["output_directory"], "reports"),
-        report_cutoff = config["report_cutoff"],
+        cli_parameters = " ".join(
+            [f"{k}={v}" for k, v in config["compute_stats_arguments"].items()]
+        ),
     container:
        "docker://kosinskilab/fold:latest",
+    conda:
+        "envs/alphapulldown.yaml",
     shell:"""
         cd {params.prediction_dir}
         create_notebook.py \
-            --cutoff={params.report_cutoff} \
-            --output_dir={params.prediction_dir}
+            --output_dir={params.prediction_dir} \
+            {params.cli_parameters}
+
         jupyter nbconvert --to html --execute output.ipynb
         mv output.ipynb {params.report_dir}
         mv output.html {output}
