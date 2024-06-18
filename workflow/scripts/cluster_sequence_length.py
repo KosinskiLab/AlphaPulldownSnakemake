@@ -35,14 +35,14 @@ def parse_args():
         dest="features_directory",
         type=str,
         nargs="+",
-        required=True,
+        required=False,
         help="Path to computed monomer features.",
     )
     parser.add_argument(
         "--bin_size",
         dest="bin_size",
         type=int,
-        required=True,
+        required=False,
         default=150,
         help="Bin size used for clustering sequences.",
     )
@@ -55,6 +55,19 @@ def parse_args():
         help="Path to comma separated output file.",
     )
     args = parser.parse_args()
+
+    try:
+        args.folds = snakemake.params.folds
+        args.output_file = snakemake.output[0]
+        args.protein_delimiter = snakemake.params.protein_delimiter
+        args.bin_size = snakemake.params.cluster_bin_size
+        args.features_directory = [snakemake.params.feature_directory, ]
+    except Exception:
+        pass
+
+    if args.folds is None:
+        raise ValueError("--folds needs to be specified.")
+
     return args
 
 

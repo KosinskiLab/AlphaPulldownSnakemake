@@ -156,14 +156,8 @@ checkpoint cluster_sequence_length:
        "docker://kosinskilab/fold:latest",
     conda:
         "envs/alphapulldown.yaml",
-    shell:"""
-        python3 workflow/scripts/cluster_sequence_length.py \
-            --folds {params.folds} \
-            --output_file {output} \
-            --protein_delimiter {params.protein_delimiter} \
-            --bin_size {params.cluster_bin_size} \
-            --features_directory {params.feature_directory}
-        """
+    script:
+        "scripts/cluster_sequence_length.py"
 
 def lookup_features(wildcards):
     if config.get("cluster_jobs", False):
