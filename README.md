@@ -56,7 +56,7 @@ python3 --version
     snakedeploy deploy-workflow \
       https://github.com/KosinskiLab/AlphaPulldownSnakemake \
       AlphaPulldownSnakemake \
-      --tag 1.1.0
+      --tag 1.3.0
     cd AlphaPulldownSnakemake
     ```
 
