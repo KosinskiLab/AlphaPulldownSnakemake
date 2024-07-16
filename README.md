@@ -11,7 +11,7 @@ python3 --version
 1. **Install Dependencies**
 
     ```bash
-    pip install snakemake snakedeploy
+    pip install snakemake==7.32.4 snakedeploy==0.10.0 pulp==2.7 click==8.1 cookiecutter==2.6
     ```
 
 2. **Snakemake Cluster Setup**
@@ -19,7 +19,6 @@ python3 --version
     In order to allow snakemake to interface with a compute cluster, we are going to use the [Snakemake-Profile for SLURM](https://github.com/Snakemake-Profiles/slurm). If you are not working on a SLURM cluster you can find profiles for different architectures [here](https://github.com/Snakemake-Profiles/slurm). The following will create a profile that can be used with snakemake and prompt you for some additional information.
 
     ```bash
-    pip install cookiecutter
     git clone https://github.com/Snakemake-Profiles/slurm.git
     profile_dir="${HOME}/.config/snakemake"
     mkdir -p "$profile_dir"
