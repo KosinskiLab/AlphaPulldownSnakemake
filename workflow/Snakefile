@@ -112,6 +112,7 @@ rule create_features:
         join(config["output_directory"], "data", "{fasta_basename}.fasta"),
     output:
         join(config["output_directory"], "features", "{fasta_basename}.pkl"),
+        join(config["output_directory"], "features", "{fasta_basename}.pkl.xz"),
     params:
         data_directory = config["alphafold_data_directory"],
         output_directory = join(config["output_directory"], "features"),
@@ -125,8 +126,6 @@ rule create_features:
     threads: 8, # everything is harcoded anyways ...
     container:
        "docker://kosinskilab/fold:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     shell:"""
         create_individual_features.py \
             --fasta_paths={input} \
@@ -154,8 +153,6 @@ checkpoint cluster_sequence_length:
         cluster_bin_size = config.get("clustering_bin_size", 150),
     container:
        "docker://kosinskilab/fold:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     script:
         "scripts/cluster_sequence_length.py"
 
@@ -223,8 +220,6 @@ rule structure_inference:
         config["alphafold_inference_threads"],
     container:
        "docker://kosinskilab/fold:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     shell:"""
         #MAXRAM=$(bc <<< "$(ulimit -m) / 1024.0")
         #GPUMEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | tail -1)
@@ -286,8 +281,6 @@ rule compute_stats:
         ),
     container:
        "docker://kosinskilab/fold_analysis:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     shell:"""
         tmpdir=$(mktemp -d)
 
@@ -355,8 +348,6 @@ rule generate_report:
         ),
     container:
        "docker://kosinskilab/fold:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     shell:"""
         cd {params.prediction_dir}
         create_notebook.py \
