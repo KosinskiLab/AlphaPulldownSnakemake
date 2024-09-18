@@ -17,6 +17,11 @@ configfile: "config/config.yaml"
 config["output_directory"] = abspath(config["output_directory"])
 makedirs(config["output_directory"], exist_ok = True)
 
+FEATURE_COMPRESSION = None
+if config["create_feature_arguments"].get("--compress_features", False):
+    FEATURE_COMPRESSION = "lzma"
+FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION)
+
 protein_delimiter = config.get("protein_delimiter", ";")
 
 with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_input:
@@ -59,8 +64,9 @@ total_required_files = [*required_reports]
 
 if config.get("only_generate_features", False):
     total_required_files = [
-        join(config["output_directory"], "features", f"{fasta_basename}.pkl")
-        for fasta_basename in dataset.unique_sequences
+        join(
+            config["output_directory"], "features", f"{fasta_basename}.{FEATURE_SUFFIX}"
+        ) for fasta_basename in dataset.unique_sequences
     ]
 
 
@@ -106,12 +112,13 @@ rule download_uniprot:
         tail -n +2 ${{temp_file}} >> {output}
         """
 
+feature_scaling = config.get("feature_create_ram_scaling", 1.1)
 base_feature_ram = config.get("feature_create_ram_bytes", 64000)
 rule create_features:
     input:
         join(config["output_directory"], "data", "{fasta_basename}.fasta"),
     output:
-        join(config["output_directory"], "features", "{fasta_basename}.pkl"),
+        join(config["output_directory"], "features", "{fasta_basename}" + FEATURE_SUFFIX),
     params:
         data_directory = config["alphafold_data_directory"],
         output_directory = join(config["output_directory"], "features"),
@@ -119,14 +126,12 @@ rule create_features:
             [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
         )
     resources:
-        mem_mb = lambda wildcards, attempt: base_feature_ram * (1.1 ** attempt),
+        mem_mb = lambda wildcards, attempt: base_feature_ram * (feature_scaling ** attempt),
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
     threads: 8, # everything is harcoded anyways ...
     container:
        "docker://kosinskilab/fold:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     shell:"""
         create_individual_features.py \
             --fasta_paths={input} \
@@ -137,7 +142,7 @@ rule create_features:
 
 checkpoint cluster_sequence_length:
     input:
-        [join(config["output_directory"], "features", f"{feature}.pkl")
+        [join(config["output_directory"], "features", f"{feature}.{FEATURE_SUFFIX}")
         for feature in dataset.unique_sequences
         ],
     output:
@@ -154,8 +159,6 @@ checkpoint cluster_sequence_length:
         cluster_bin_size = config.get("clustering_bin_size", 150),
     container:
        "docker://kosinskilab/fold:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     script:
         "scripts/cluster_sequence_length.py"
 
@@ -170,7 +173,7 @@ def lookup_features(wildcards):
         dataset.update_clustering(data = ret)
 
     features = [join(
-        config["output_directory"], "features", f"{feature}.pkl")
+        config["output_directory"], "features", f"{feature}.{FEATURE_SUFFIX}")
         for feature in dataset.sequences_by_fold[wildcards.fold]
     ]
     return features
@@ -223,8 +226,6 @@ rule structure_inference:
         config["alphafold_inference_threads"],
     container:
        "docker://kosinskilab/fold:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     shell:"""
         #MAXRAM=$(bc <<< "$(ulimit -m) / 1024.0")
         #GPUMEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | tail -1)
@@ -286,8 +287,6 @@ rule compute_stats:
         ),
     container:
        "docker://kosinskilab/fold_analysis:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     shell:"""
         tmpdir=$(mktemp -d)
 
@@ -355,8 +354,6 @@ rule generate_report:
         ),
     container:
        "docker://kosinskilab/fold:latest",
-    conda:
-        "envs/alphapulldown.yaml",
     shell:"""
         cd {params.prediction_dir}
         create_notebook.py \

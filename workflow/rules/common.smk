@@ -34,6 +34,16 @@ def process_files(input_files : List[str],
             for combination in cartesian_product:
                 output_file.write(delimiter.join(combination) + '\n')
 
+def feature_suffix(compression : str = "lzma") -> str:
+    _compression = {
+        "lzma" : "xz",
+    }
+    suffix = _compression.get(compression, None)
+    ret = "pkl"
+    if suffix is not None:
+        ret += f".{suffix}"
+    return ret
+
 
 class InputParser:
     def __init__(

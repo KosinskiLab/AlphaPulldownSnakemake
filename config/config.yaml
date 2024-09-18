@@ -29,6 +29,7 @@ generate_report_arguments:
 
 
 feature_create_ram_bytes : 64000
+feature_create_ram_scaling : 1.1
 structure_inference_ram_bytes: 32000
 
 alphafold_inference_threads : 8
