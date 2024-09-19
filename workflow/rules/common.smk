@@ -39,7 +39,7 @@ def feature_suffix(compression : str = "lzma") -> str:
         "lzma" : "xz",
     }
     suffix = _compression.get(compression, None)
-    ret = "pkl"
+    ret = ".pkl"
     if suffix is not None:
         ret += f".{suffix}"
     return ret
