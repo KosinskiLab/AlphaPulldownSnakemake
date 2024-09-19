@@ -118,7 +118,7 @@ rule create_features:
     input:
         join(config["output_directory"], "data", "{fasta_basename}.fasta"),
     output:
-        join(config["output_directory"], "features", "{fasta_basename}" + FEATURE_SUFFIX),
+        join(config["output_directory"], "features", "{fasta_basename}." + FEATURE_SUFFIX),
     params:
         data_directory = config["alphafold_data_directory"],
         output_directory = join(config["output_directory"], "features"),
