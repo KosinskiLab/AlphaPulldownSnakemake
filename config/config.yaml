@@ -14,7 +14,7 @@ create_feature_arguments:
   --save_msa_files: False
   --use_precomputed_msas: True
   --max_template_date: 2050-01-01
-  --skip_existing: False
+  --compress_features: True
 
 structure_inference_arguments:
   --num_predictions_per_model : 5
