@@ -131,7 +131,7 @@ rule create_features:
         attempt = lambda wildcards, attempt: attempt,
     threads: 8, # everything is harcoded anyways ...
     container:
-       "docker://kosinskilab/fold:latest",
+       config["prediction_container"],
     shell:"""
         create_individual_features.py \
             --fasta_paths={input} \
@@ -158,7 +158,7 @@ checkpoint cluster_sequence_length:
         feature_directory = join(config["output_directory"], "features"),
         cluster_bin_size = config.get("clustering_bin_size", 150),
     container:
-       "docker://kosinskilab/fold:latest",
+       config["prediction_container"],
     script:
         "scripts/cluster_sequence_length.py"
 
@@ -225,7 +225,7 @@ rule structure_inference:
     threads:
         config["alphafold_inference_threads"],
     container:
-       "docker://kosinskilab/fold:latest",
+       config["prediction_container"],
     shell:"""
         #MAXRAM=$(bc <<< "$(ulimit -m) / 1024.0")
         #GPUMEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | tail -1)
@@ -353,7 +353,7 @@ rule generate_report:
             [f"{k}={v}" for k, v in config["compute_stats_arguments"].items()]
         ),
     container:
-       "docker://kosinskilab/fold:latest",
+       config["prediction_container"],
     shell:"""
         cd {params.prediction_dir}
         create_notebook.py \
