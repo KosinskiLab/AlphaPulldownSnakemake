@@ -40,4 +40,4 @@ alphafold_inference : >
 card_order : [gpu=3090, gpu=A40, gpu=H100, gpu=A100]
 
 prediction_container : "docker://kosinskilab/fold:latest"
-analysis_container : config["analysis_container"]
+analysis_container : "docker://kosinskilab/fold_analysis:latest"
