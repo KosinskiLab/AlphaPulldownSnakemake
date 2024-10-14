@@ -7,7 +7,7 @@
 import tempfile
 
 from sys import exit
-from os import makedirs
+from os import makedirs, listdir, symlink, remove
 from os.path import abspath, join, splitext, basename
 
 include: "rules/common.smk"
@@ -30,19 +30,19 @@ with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_input:
         input_files = [input_files]
 
     process_files(
-        input_files = input_files,
-        output_path = tmp_input.name,
-        delimiter = protein_delimiter
+        input_files=input_files,
+        output_path=tmp_input.name,
+        delimiter=protein_delimiter
     )
 
     dataset = InputParser.from_file(
-        filepath = tmp_input.name,
-        file_format = "alphaabriss",
-        protein_delimiter = protein_delimiter
+        filepath=tmp_input.name,
+        file_format="alphaabriss",
+        protein_delimiter=protein_delimiter
     )
 
 
-ruleorder: symlink_local_files > download_uniprot
+ruleorder: symlink_local_files > download_uniprot > symlink_features > create_features
 
 
 required_folds = [
@@ -62,19 +62,30 @@ required_reports = [
 ]
 total_required_files = [*required_reports]
 
+required_features = [
+    join(
+        config["output_directory"], "features", f"{fasta_basename}.{FEATURE_SUFFIX}"
+    ) for fasta_basename in dataset.unique_sequences
+]
 if config.get("only_generate_features", False):
-    total_required_files = [
-        join(
-            config["output_directory"], "features", f"{fasta_basename}.{FEATURE_SUFFIX}"
-        ) for fasta_basename in dataset.unique_sequences
-    ]
-
+    total_required_files = required_features
 
 if config.get("cluster_jobs", False):
     total_required_files.append(
         join(config["output_directory"], "resources", "sequence_clusters.txt")
     )
 
+precomputed_features = []
+required_features = set(basename(x) for x in required_features)
+feature_directories = config.get("feature_directory", [])
+for feature_directory in feature_directories:
+    if not exists(feature_directory):
+        continue
+    available_features = listdir(feature_directory)
+    for available_feature in available_features:
+        if available_feature not in required_features:
+            continue
+        precomputed_features.append(join(feature_directory, available_feature))
 
 rule all:
     input:
@@ -114,6 +125,27 @@ rule download_uniprot:
 
 feature_scaling = config.get("feature_create_ram_scaling", 1.1)
 base_feature_ram = config.get("feature_create_ram_bytes", 64000)
+
+rule symlink_features:
+    input:
+        precomputed_features,
+    output:
+        expand(
+            join(config["output_directory"], "features", "{feature}"),
+            feature = [basename(x) for x in precomputed_features]
+        ),
+    resources:
+        avg_mem = lambda wildcards, attempt: 600 * attempt,
+        mem_mb = lambda wildcards, attempt: 800 * attempt,
+        walltime = lambda wildcards, attempt: 10 * attempt,
+        attempt = lambda wildcards, attempt: attempt,
+    run:
+       for in_file, out_file in zip(input, output):
+            if exists(out_file):
+                os.remove(out_file)
+            symlink(abspath(in_file), out_file)
+
+
 rule create_features:
     input:
         join(config["output_directory"], "data", "{fasta_basename}.fasta"),

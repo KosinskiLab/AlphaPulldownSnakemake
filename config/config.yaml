@@ -4,6 +4,9 @@ protein_delimiter : "_"
 
 output_directory : /scratch/vmaurer/fold_temp
 alphafold_data_directory : /scratch/AlphaFold_DBs/2.3.2
+feature_directory :
+  - "abc"
+  - "def"
 
 only_generate_features: False
 cluster_jobs: False
@@ -14,7 +17,7 @@ create_feature_arguments:
   --save_msa_files: False
   --use_precomputed_msas: True
   --max_template_date: 2050-01-01
-  --compress_features: True
+  --compress_features: False
 
 structure_inference_arguments:
   --num_predictions_per_model : 5
@@ -26,8 +29,6 @@ compute_stats_arguments:
 generate_report_arguments:
   --cutoff: 100.0
 
-
-
 feature_create_ram_bytes : 64000
 feature_create_ram_scaling : 1.1
 structure_inference_ram_bytes: 32000
@@ -36,8 +37,6 @@ alphafold_inference_threads : 8
 alphafold_inference : >
   gres=gpu:1 partition=gpu-el8
   qos=high constraint=gpu=3090
-
-card_order : [gpu=3090, gpu=A40, gpu=H100, gpu=A100]
 
 prediction_container : "docker://kosinskilab/fold:latest"
 analysis_container : "docker://kosinskilab/fold_analysis:latest"
