@@ -54,7 +54,7 @@ required_folds = [
 ]
 required_reports = [
     join(
-        config["output_directory"], "reports", "statistics.csv"
+        config["output_directory"], "reports", "analysis.csv"
     ),
     join(
         config["output_directory"], "reports", "report.html"
@@ -297,12 +297,12 @@ def update_clustering(wildcards):
     return required_folds
 
 
-rule compute_stats:
+rule analyze_structure:
     input:
         rules.structure_inference.output,
     output:
         join(
-            config["output_directory"], "predictions", "{fold}", "statistics.csv"
+            config["output_directory"], "predictions", "{fold}", "analysis.csv"
         ),
     resources:
         mem_mb = lambda wildcards, attempt: 8000 * attempt,
@@ -315,7 +315,7 @@ rule compute_stats:
         fold = lambda wildcards: wildcards.fold,
         report_dir = join(config["output_directory"], "reports"),
         cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["compute_stats_arguments"].items()]
+            [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
         ),
     container:
        config["analysis_container"],
@@ -337,18 +337,18 @@ def update_statistics(wildcards):
     required_folds = [
         join(
             config["output_directory"],
-            "predictions", fold, "statistics.csv"
+            "predictions", fold, "analysis.csv"
         )
         for fold in dataset.fold_specifications
     ]
     return required_folds
 
-rule merge_stats:
+rule merge_analyses:
     input:
         update_statistics,
     output:
         join(
-            config["output_directory"], "reports", "statistics.csv"
+            config["output_directory"], "reports", "analysis.csv"
         ),
     resources:
         mem_mb = lambda wildcards, attempt: 2000 * attempt,
@@ -382,7 +382,7 @@ rule generate_report:
         prediction_dir = join(config["output_directory"], "predictions"),
         report_dir = join(config["output_directory"], "reports"),
         cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["compute_stats_arguments"].items()]
+            [f"{k}={v}" for k, v in config["generate_report_arguments"].items()]
         ),
     container:
        config["prediction_container"],

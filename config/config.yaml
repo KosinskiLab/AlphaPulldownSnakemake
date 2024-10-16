@@ -23,7 +23,7 @@ structure_inference_arguments:
   --num_predictions_per_model : 5
   --num_cycle: 24
 
-compute_stats_arguments:
+analyze_structure_arguments:
   --cutoff: 100.0
 
 generate_report_arguments:
