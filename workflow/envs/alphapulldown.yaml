@@ -14,7 +14,8 @@ dependencies:
   - pytest
   - importlib_metadata
   - hhsuite
-  - jax==0.4.23
-  - jaxlib=*=*cuda*
+  - pip
   - pip:
+    - jax==0.4.23
+    - jaxlib=*=*cuda*
     - alphapulldown==1.0.4
