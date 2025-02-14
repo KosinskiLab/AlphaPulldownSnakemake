@@ -55,13 +55,85 @@ python3 --version
     snakedeploy deploy-workflow \
       https://github.com/KosinskiLab/AlphaPulldownSnakemake \
       AlphaPulldownSnakemake \
-      --tag 1.3.0
+      --tag 2.2.0
     cd AlphaPulldownSnakemake
     ```
 
 ## Configuration
 
-Adjust `config/config.yaml` for your particular use case.
+Adjust `config/config.yaml` for your particular use case:
+```yaml
+# List of input sample sheets
+input_files:
+  - config/sample_sheet.csv
+
+# Delimiter used in protein names
+protein_delimiter: "_"
+
+# Directory where all output files will be stored
+output_directory: /path/to/output/directory
+
+# Path to AlphaFold database containing required weights and files
+alphafold_data_directory: /scratch/AlphaFold_DBs/2.3.2
+
+# Directories containing precomputed features
+feature_directory:
+  - "/path/to/directory/with/features1"
+  - "/path/to/directory/with/features2"
+
+# If True, only generate features without running structure prediction
+only_generate_features: False
+
+# Whether to enable job clustering
+cluster_jobs: False
+
+# Bin size for clustering
+clustering_bin_size: 150
+
+# Arguments for feature generation
+create_feature_arguments:
+  --save_msa_files: False  # Save multiple sequence alignment (MSA) files
+  --use_precomputed_msas: True  # Use precomputed MSA files if available
+  --max_template_date: 2050-01-01  # Set maximum template date to include all templates
+  --compress_features: False  # Do not compress generated features
+
+# Arguments for structure inference
+structure_inference_arguments:
+  --num_predictions_per_model: 5  # Number of predictions per model
+  --num_cycle: 24  # Number of recycles during structure prediction
+
+# Arguments for structure analysis
+analyze_structure_arguments:
+  --cutoff: 100.0  # Cutoff for structure analysis
+
+# Arguments for report generation
+generate_report_arguments:
+  --cutoff: 100.0  # Cutoff for structure report generation
+
+# Memory allocation settings for feature creation and structure inference
+feature_create_ram_bytes: 64000
+feature_create_ram_scaling: 1.1
+structure_inference_ram_bytes: 32000
+
+# Number of threads for AlphaFold inference
+alphafold_inference_threads: 8
+
+# SLURM parameters for inference execution
+alphafold_inference: >
+  gres=gpu:1 partition=gpu-el8
+  qos=high constraint=gpu=3090
+
+# Specify the backend by changing the prediction container
+# (you can also use local singularity .sif files)
+# - "docker://kosinskilab/fold" for AlphaFold 2
+# - "docker://kosinskilab/alphafold3" for AlphaFold 3
+# - "docker://kosinskilab/alphalink" for AlphaLink
+# - "/path/to/my/container.sif"
+prediction_container: "docker://kosinskilab/fold:latest"
+
+# Container for structure analysis
+analysis_container: "docker://kosinskilab/fold_analysis:latest"
+```
 
 ### input_files
 This variable holds the path to your sample sheet, where each line corresponds to a folding job. For this pipeline we use the following format specification:
@@ -134,7 +206,7 @@ After following the Installation and Configuration steps, you are now ready to r
 snakemake \
   --use-singularity \
   --singularity-args "-B /scratch:/scratch \
-    -B /g/kosinski:/g/kosinski \
+    --bind /my/disk:/my/disk \
     --nv " \
   --jobs 200 \
   --restart-times 5 \
@@ -151,7 +223,7 @@ Here's a breakdown of what each argument does:
 - `--use-singularity`: Enables the use of Singularity containers. This allows for reproducibility and isolation of the pipeline environment.
 
 - `--singularity-args`: Specifies arguments passed directly to Singularity. In the provided example:
-  - `-B /scratch:/scratch` and `-B /g/kosinski:/g/kosinski`: These are bind mount points. They make directories from your host system accessible within the Singularity container. `--nv` ensures the container can make use of the hosts GPUs.
+  - `--bind /scratch:/scratch` and `--bind /my/disk:/my/disk`: These are bind mount points. They make directories from your host system accessible within the Singularity container. `--nv` ensures the container can make use of the hosts GPUs.
 
 - `--profile name_of_your_profile`: Specifies the Snakemake profile to use (e.g., the SLURM profile you set up for cluster execution).
 
