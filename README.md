@@ -214,6 +214,7 @@ snakemake \
   --rerun-incomplete \
   --rerun-triggers mtime \
   --latency-wait 30 \
+  --keep-going \
   -n
 
 ```
