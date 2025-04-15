@@ -1,4 +1,4 @@
-A snakemake pipeline for automated structure prediction using various backends.
+README.md A snakemake pipeline for automated structure prediction using various backends.
 
 ## Installation
 
@@ -190,7 +190,7 @@ This is the path to your alphafold database.
 Snakemake will write the pipeline output to this directory. If it does not exist, it will be created.
 
 ### save_msa, use_precomputed_msa, predictions_per_model, number_of_recycles, report_cutoff
-Command line arguments that were previously pasesed to AlphaPulldown's run_multimer_jobs.py and create_notebook.py (report_cutoff).
+Command line arguments that were previously passed to AlphaPulldown's run_multimer_jobs.py and create_notebook.py (report_cutoff).
 
 ### alphafold_inference_threads, alphafold_inference
 Slurm specific parameters that do not need to be modified by non-expert users.
@@ -240,6 +240,6 @@ Here's a breakdown of what each argument does:
 
 - `-n`: Dry-run flag. This makes Snakemake display the commands it would run without actually executing them. It's useful for testing. To run the pipeline for real, simply remove this flag.
 
-Executing the command above will perform submit the following jobs to the cluster:
+Executing the command above will submit the following jobs to the cluster:
 
 ![Snakemake rulegraph](static/dag.png)
