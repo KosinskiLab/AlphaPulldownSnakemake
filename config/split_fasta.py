@@ -11,11 +11,14 @@
 
 """
 import os
+import gzip
 import argparse
 from pathlib import Path
 from typing import Iterator
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
+
+UNWANTED_SYMBOLS = ["|", "=", "&", "*", "@", "#", "`", ":", ";", "$", "?"]
 
 @dataclass
 class FastaEntry:
@@ -23,10 +26,18 @@ class FastaEntry:
     description: str  # Full header line
     sequence: str  # Sequence content
 
+def is_gzipped(filepath: str) -> bool:
+    """Check if a file is gzipped by looking at its magic bytes."""
+    with open(filepath, 'rb') as f:
+        return f.read(2) == b'\x1f\x8b'
 
 def parse_fasta(fasta_file: str) -> Iterator[FastaEntry]:
     """Parse a FASTA file and yield entries one by one."""
-    with open(fasta_file, "r") as f:
+    opener, mode = open, "r"
+    if is_gzipped(fasta_file):
+        opener, mode = gzip.open, "rt"
+
+    with opener(fasta_file, mode) as f:
         current_id = None
         current_description = None
         current_sequence = []
@@ -53,6 +64,13 @@ def parse_fasta(fasta_file: str) -> Iterator[FastaEntry]:
                 else:
                     # Fallback if not in expected format
                     current_id = line[1:].split()[0]
+                    for symbol in UNWANTED_SYMBOLS:
+                        if symbol in current_id:
+                            current_id = current_id.replace(symbol, "_")
+                    print(
+                        f"'{line}' is not in UniProt format."
+                        f" Using '{current_id}' as sequence id."
+                    )
 
                 current_description = line[1:]
                 current_sequence = []
@@ -78,6 +96,7 @@ def write_fasta_entry(entry: FastaEntry, output_dir: str) -> str:
             f.write(f"{entry.sequence[i:i+60]}\n")
 
     return file_path
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
