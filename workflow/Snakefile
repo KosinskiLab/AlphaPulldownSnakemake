@@ -14,8 +14,14 @@ include: "rules/common.smk"
 
 
 configfile: "config/config.yaml"
-config["output_directory"] = abspath(config["output_directory"])
-makedirs(config["output_directory"], exist_ok = True)
+
+RUNS      = config["run"]
+NAMES     = [r["name"] for r in RUNS]
+INPUT_MAP = {r["name"]: r["input"] for r in RUNS}
+OUT_MAP   = {r["name"]: abspath(r["output"]) for r in RUNS}
+
+for d in OUT_MAP.values():
+    os.makedirs(d, exist_ok=True)
 
 FEATURE_COMPRESSION = None
 if config["create_feature_arguments"].get("--compress_features", False):
@@ -25,7 +31,7 @@ FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION)
 protein_delimiter = config.get("protein_delimiter", ";")
 
 with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_input:
-    input_files = config["input_files"]
+    input_files = INPUT_MAP[name]
     if isinstance(input_files, str):
         input_files = [input_files]
 
@@ -47,24 +53,24 @@ ruleorder: symlink_local_files > download_uniprot > symlink_features > create_fe
 
 required_folds = [
     join(
-        config["output_directory"],
+        OUT_MAP[name],
         "predictions", fold, "completed_fold.txt"
     )
     for fold in dataset.fold_specifications
 ]
 required_reports = [
     join(
-        config["output_directory"], "reports", "analysis.csv"
+        OUT_MAP[name], "reports", "analysis.csv"
     ),
     join(
-        config["output_directory"], "reports", "report.html"
+        OUT_MAP[name], "reports", "report.html"
     )
 ]
 total_required_files = [*required_reports]
 
 required_features = [
     join(
-        config["output_directory"], "features", f"{fasta_basename}.{FEATURE_SUFFIX}"
+        OUT_MAP[name], "features", f"{fasta_basename}.{FEATURE_SUFFIX}"
     ) for fasta_basename in dataset.unique_sequences
 ]
 if config.get("only_generate_features", False):
@@ -72,7 +78,7 @@ if config.get("only_generate_features", False):
 
 if config.get("cluster_jobs", False):
     total_required_files.append(
-        join(config["output_directory"], "resources", "sequence_clusters.txt")
+        join(OUT_MAP[name], "resources", "sequence_clusters.txt")
     )
 
 precomputed_features = []
@@ -96,7 +102,7 @@ rule symlink_local_files:
         dataset.sequences_by_origin["local"],
     output:
         [
-            join(config["output_directory"], "data", f"{splitext(basename(x))[0]}.fasta")
+            join(OUT_MAP[name], "data", f"{splitext(basename(x))[0]}.fasta")
             for x in dataset.sequences_by_origin["local"]
 
         ],
@@ -106,11 +112,11 @@ rule symlink_local_files:
         walltime = lambda wildcards, attempt: 10 * attempt,
         attempt = lambda wildcards, attempt: attempt,
     run:
-        dataset.symlink_local_files(output_directory = join(config["output_directory"], "data"))
+        dataset.symlink_local_files(output_directory = join(OUT_MAP[name], "data"))
 
 rule download_uniprot:
     output:
-        join(config["output_directory"], "data", "{uniprot_id}.fasta"),
+        join(OUT_MAP[name], "data", "{uniprot_id}.fasta"),
     resources:
         avg_mem = lambda wildcards, attempt: 600 * attempt,
         mem_mb = lambda wildcards, attempt: 800 * attempt,
@@ -131,7 +137,7 @@ rule symlink_features:
         precomputed_features,
     output:
         expand(
-            join(config["output_directory"], "features", "{feature}"),
+            join(OUT_MAP[name], "features", "{feature}"),
             feature = [basename(x) for x in precomputed_features]
         ),
     resources:
@@ -148,12 +154,12 @@ rule symlink_features:
 
 rule create_features:
     input:
-        join(config["output_directory"], "data", "{fasta_basename}.fasta"),
+        join(OUT_MAP[name], "data", "{fasta_basename}.fasta"),
     output:
-        join(config["output_directory"], "features", "{fasta_basename}." + FEATURE_SUFFIX),
+        join(OUT_MAP[name], "features", "{fasta_basename}." + FEATURE_SUFFIX),
     params:
         data_directory = config["alphafold_data_directory"],
-        output_directory = join(config["output_directory"], "features"),
+        output_directory = join(OUT_MAP[name], "features"),
         cli_parameters = " ".join(
             [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
         )
@@ -174,11 +180,11 @@ rule create_features:
 
 checkpoint cluster_sequence_length:
     input:
-        [join(config["output_directory"], "features", f"{feature}.{FEATURE_SUFFIX}")
+        [join(OUT_MAP[name], "features", f"{feature}.{FEATURE_SUFFIX}")
         for feature in dataset.unique_sequences
         ],
     output:
-        join(config["output_directory"], "resources", "sequence_clusters.txt"),
+        join(OUT_MAP[name], "resources", "sequence_clusters.txt"),
     resources:
         avg_mem = lambda wildcards, attempt: 600 * attempt,
         mem_mb = lambda wildcards, attempt: 800 * attempt,
@@ -187,7 +193,7 @@ checkpoint cluster_sequence_length:
     params:
         folds = dataset.fold_specifications,
         protein_delimiter = protein_delimiter,
-        feature_directory = join(config["output_directory"], "features"),
+        feature_directory = join(OUT_MAP[name], "features"),
         cluster_bin_size = config.get("clustering_bin_size", 150),
     container:
        config["prediction_container"],
@@ -205,7 +211,7 @@ def lookup_features(wildcards):
         dataset.update_clustering(data = ret)
 
     features = [join(
-        config["output_directory"], "features", f"{feature}.{FEATURE_SUFFIX}")
+        OUT_MAP[name], "features", f"{feature}.{FEATURE_SUFFIX}")
         for feature in dataset.sequences_by_fold[wildcards.fold]
     ]
     return features
@@ -231,15 +237,15 @@ def format_clustering(wildcards):
 rule structure_inference:
     input:
         features = lookup_features,
-        cluster = join(config["output_directory"], "resources", "sequence_clusters.txt")
+        cluster = join(OUT_MAP[name], "resources", "sequence_clusters.txt")
             if config.get("cluster_jobs", False) else "/dev/null",
     output:
-        join(config["output_directory"],"predictions", "{fold}", "completed_fold.txt"),
+        join(OUT_MAP[name],"predictions", "{fold}", "completed_fold.txt"),
     params:
         data_directory = config["alphafold_data_directory"],
-        feature_directory = join(config["output_directory"], "features"),
+        feature_directory = join(OUT_MAP[name], "features"),
         output_directory = lambda wildcards: [
-            join(config["output_directory"], "predictions", individual_fold)
+            join(OUT_MAP[name], "predictions", individual_fold)
             for individual_fold in wildcards.fold.split(" ")
             ],
         requested_fold = lambda  wildcards : wildcards.fold.replace(" ", ","),
@@ -289,7 +295,7 @@ def update_clustering(wildcards):
 
     required_folds = [
         join(
-            config["output_directory"],
+            OUT_MAP[name],
             "predictions", fold, "completed_fold.txt"
         )
         for fold in dataset.fold_specifications
@@ -302,7 +308,7 @@ rule analyze_structure:
         rules.structure_inference.output,
     output:
         join(
-            config["output_directory"], "predictions", "{fold}", "analysis.csv"
+            OUT_MAP[name], "predictions", "{fold}", "analysis.csv"
         ),
     resources:
         mem_mb = lambda wildcards, attempt: 8000 * attempt,
@@ -310,10 +316,10 @@ rule analyze_structure:
         attempt = lambda wildcards, attempt: attempt,
     params:
         prediction_dir = lambda wildcards: join(
-            config["output_directory"], "predictions", wildcards.fold
+            OUT_MAP[name], "predictions", wildcards.fold
         ),
         fold = lambda wildcards: wildcards.fold,
-        report_dir = join(config["output_directory"], "reports"),
+        report_dir = join(OUT_MAP[name], "reports"),
         cli_parameters = " ".join(
             [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
         ),
@@ -336,7 +342,7 @@ rule analyze_structure:
 def update_statistics(wildcards):
     required_folds = [
         join(
-            config["output_directory"],
+            OUT_MAP[name],
             "predictions", fold, "analysis.csv"
         )
         for fold in dataset.fold_specifications
@@ -348,14 +354,14 @@ rule merge_analyses:
         update_statistics,
     output:
         join(
-            config["output_directory"], "reports", "analysis.csv"
+            OUT_MAP[name], "reports", "analysis.csv"
         ),
     resources:
         mem_mb = lambda wildcards, attempt: 2000 * attempt,
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
     params:
-        prediction_dir = join(config["output_directory"], "predictions"),
+        prediction_dir = join(OUT_MAP[name], "predictions"),
     container:
        config["analysis_container"],
     shell:"""
@@ -372,15 +378,15 @@ rule generate_report:
         update_clustering,
     output:
         join(
-            config["output_directory"], "reports", "report.html"
+            OUT_MAP[name], "reports", "report.html"
         ),
     resources:
         mem_mb = lambda wildcards, attempt: 32000 * attempt,
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt = lambda wildcards, attempt: attempt,
     params:
-        prediction_dir = join(config["output_directory"], "predictions"),
-        report_dir = join(config["output_directory"], "reports"),
+        prediction_dir = join(OUT_MAP[name], "predictions"),
+        report_dir = join(OUT_MAP[name], "reports"),
         cli_parameters = " ".join(
             [f"{k}={v}" for k, v in config["generate_report_arguments"].items()]
         ),
