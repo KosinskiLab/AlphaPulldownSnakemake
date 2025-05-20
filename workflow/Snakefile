@@ -48,7 +48,9 @@ rule parse_input:
 rule all:
     input:
         expand(join(OUT_MAP["{name}"], "features", "{name}." + FEATURE_SUFFIX), name=NAMES),
-        expand(join(OUT_MAP["{name}"], "predictions", "{fold}", "completed_fold.txt"), name=NAMES, fold=lambda wc: load_dataset(wc).fold_specifications),
+        expand(join(OUT_MAP["{name}"], "predictions", "{fold}", "completed_fold.txt"), 
+               name=NAMES, 
+               fold=lambda wc: load_dataset(wc).fold_specifications),
         expand(join(OUT_MAP["{name}"], "reports", "report.html"), name=NAMES)
 
 rule symlink_local_files:
@@ -126,16 +128,27 @@ checkpoint cluster_sequence_length:
     script:
         "scripts/cluster_sequence_length.py"
 
-def lookup_features(wc):
+def lookup_features(wildcards):
+    # Fixed: Use wildcards instead of wc for consistency
+    name = wildcards.name
+    fold = wildcards.fold
+    
     if config.get("cluster_jobs", False):
-        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
+        checkpoint_output = checkpoints.cluster_sequence_length.get(name=name).output[0]
+        with open(checkpoint_output) as f:
             data = [x.strip().split(",") for x in f.read().splitlines() if x]
         headers = data.pop(0)
         ret = {h: list(col) for h, col in zip(headers, zip(*data))}
-        load_dataset(wc).update_clustering(data=ret)
+        dataset = load_dataset(wildcards)
+        dataset.update_clustering(data=ret)
+        sequences = dataset.sequences_by_fold[fold]
+    else:
+        dataset = load_dataset(wildcards)
+        sequences = dataset.sequences_by_fold[fold]
+        
     return [
-        join(OUT_MAP[wc.name], "features", f"{seq}.{FEATURE_SUFFIX}")
-        for seq in load_dataset(wc).sequences_by_fold[wc.fold]
+        join(OUT_MAP[name], "features", f"{seq}.{FEATURE_SUFFIX}")
+        for seq in sequences
     ]
 
 rule structure_inference:
