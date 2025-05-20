@@ -4,21 +4,17 @@
 
     Authors: Valentin Maurer, Dingquan Yu <name.surname@embl-hamburg.de>
 """
+import os
 import tempfile
-
-from sys import exit
-from os import makedirs, listdir, symlink, remove
-from os.path import abspath, join, splitext, basename
+from os.path import abspath, join, basename, splitext
 
 include: "rules/common.smk"
-
-
 configfile: "config/config.yaml"
 
-RUNS      = config["run"]
-NAMES     = [r["name"] for r in RUNS]
+RUNS = config["run"]
+NAMES = [r["name"] for r in RUNS]
 INPUT_MAP = {r["name"]: r["input"] for r in RUNS}
-OUT_MAP   = {r["name"]: abspath(r["output"]) for r in RUNS}
+OUT_MAP = {r["name"]: abspath(r["output"]) for r in RUNS}
 
 for d in OUT_MAP.values():
     os.makedirs(d, exist_ok=True)
@@ -27,378 +23,197 @@ FEATURE_COMPRESSION = None
 if config["create_feature_arguments"].get("--compress_features", False):
     FEATURE_COMPRESSION = "lzma"
 FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION)
+protein_delimiter = config.get("protein_delimiter", "_")
 
-protein_delimiter = config.get("protein_delimiter", ";")
-
-with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_input:
-    input_files = INPUT_MAP[name]
-    if isinstance(input_files, str):
-        input_files = [input_files]
-
-    process_files(
-        input_files=input_files,
-        output_path=tmp_input.name,
-        delimiter=protein_delimiter
-    )
-
-    dataset = InputParser.from_file(
-        filepath=tmp_input.name,
+def load_dataset(wc):
+    return InputParser.from_file(
+        filepath=f"tmp/{wc.name}.parsed",
         file_format="alphaabriss",
         protein_delimiter=protein_delimiter
     )
 
-
-ruleorder: symlink_local_files > download_uniprot > symlink_features > create_features
-
-
-required_folds = [
-    join(
-        OUT_MAP[name],
-        "predictions", fold, "completed_fold.txt"
-    )
-    for fold in dataset.fold_specifications
-]
-required_reports = [
-    join(
-        OUT_MAP[name], "reports", "analysis.csv"
-    ),
-    join(
-        OUT_MAP[name], "reports", "report.html"
-    )
-]
-total_required_files = [*required_reports]
-
-required_features = [
-    join(
-        OUT_MAP[name], "features", f"{fasta_basename}.{FEATURE_SUFFIX}"
-    ) for fasta_basename in dataset.unique_sequences
-]
-if config.get("only_generate_features", False):
-    total_required_files = required_features
-
-if config.get("cluster_jobs", False):
-    total_required_files.append(
-        join(OUT_MAP[name], "resources", "sequence_clusters.txt")
-    )
-
-precomputed_features = []
-required_features = set(basename(x) for x in required_features)
-feature_directories = config.get("feature_directory", [])
-for feature_directory in feature_directories:
-    if not exists(feature_directory):
-        continue
-    available_features = listdir(feature_directory)
-    for available_feature in available_features:
-        if available_feature not in required_features:
-            continue
-        precomputed_features.append(join(feature_directory, available_feature))
+rule parse_input:
+    output:
+        temp("tmp/{name}.parsed")
+    params:
+        csv=lambda wc: INPUT_MAP[wc.name],
+        od=lambda wc: join(OUT_MAP[wc.name], "data")
+    run:
+        os.makedirs(params.od, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w+", delete=False) as tmp:
+            process_files(input_files=[params.csv], output_path=tmp.name, delimiter=protein_delimiter)
+            import shutil
+            shutil.copy(tmp.name, output[0])
 
 rule all:
     input:
-        total_required_files,
+        expand(join(OUT_MAP["{name}"], "features", "{name}." + FEATURE_SUFFIX), name=NAMES),
+        expand(join(OUT_MAP["{name}"], "predictions", "{fold}", "completed_fold.txt"), name=NAMES, fold=lambda wc: load_dataset(wc).fold_specifications),
+        expand(join(OUT_MAP["{name}"], "reports", "report.html"), name=NAMES)
 
 rule symlink_local_files:
     input:
-        dataset.sequences_by_origin["local"],
+        lambda wc: load_dataset(wc).sequences_by_origin["local"]
     output:
-        [
-            join(OUT_MAP[name], "data", f"{splitext(basename(x))[0]}.fasta")
-            for x in dataset.sequences_by_origin["local"]
-
-        ],
-    resources:
-        avg_mem = lambda wildcards, attempt: 600 * attempt,
-        mem_mb = lambda wildcards, attempt: 800 * attempt,
-        walltime = lambda wildcards, attempt: 10 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        lambda wc: [
+            join(OUT_MAP[wc.name], "data", f"{splitext(basename(x))[0]}.fasta")
+            for x in load_dataset(wc).sequences_by_origin["local"]
+        ]
     run:
-        dataset.symlink_local_files(output_directory = join(OUT_MAP[name], "data"))
+        load_dataset(wc).symlink_local_files(output_directory=join(OUT_MAP[wc.name], "data"))
 
 rule download_uniprot:
     output:
-        join(OUT_MAP[name], "data", "{uniprot_id}.fasta"),
-    resources:
-        avg_mem = lambda wildcards, attempt: 600 * attempt,
-        mem_mb = lambda wildcards, attempt: 800 * attempt,
-        walltime = lambda wildcards, attempt: 10 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
-    shell:"""
-        temp_file=$(mktemp)
-        curl -o ${{temp_file}} https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta
-        echo ">{wildcards.uniprot_id}" > {output}
-        tail -n +2 ${{temp_file}} >> {output}
+        join(OUT_MAP["{name}"], "data", "{uniprot_id}.fasta")
+    shell:
         """
-
-feature_scaling = config.get("feature_create_ram_scaling", 1.1)
-base_feature_ram = config.get("feature_create_ram_bytes", 64000)
+        temp_file=$(mktemp)
+        curl -o ${temp_file} https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta
+        echo ">{wildcards.uniprot_id}" > {output}
+        tail -n +2 ${temp_file} >> {output}
+        """
 
 rule symlink_features:
     input:
-        precomputed_features,
+        lambda wc: [
+            f for d in config.get("feature_directory", []) if os.path.isdir(d)
+            for f in [join(d, x) for x in os.listdir(d)]
+            if basename(f) in {basename(x) for x in load_dataset(wc).unique_sequences}
+        ]
     output:
-        expand(
-            join(OUT_MAP[name], "features", "{feature}"),
-            feature = [basename(x) for x in precomputed_features]
-        ),
-    resources:
-        avg_mem = lambda wildcards, attempt: 600 * attempt,
-        mem_mb = lambda wildcards, attempt: 800 * attempt,
-        walltime = lambda wildcards, attempt: 10 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        lambda wc: [
+            join(OUT_MAP[wc.name], "features", basename(x)) for x in input
+        ]
     run:
-       for in_file, out_file in zip(input, output):
-            if exists(out_file):
-                os.remove(out_file)
-            symlink(abspath(in_file), out_file)
-
+        for src, dst in zip(input, output):
+            if os.path.exists(dst):
+                os.remove(dst)
+            os.symlink(abspath(src), dst)
 
 rule create_features:
     input:
-        join(OUT_MAP[name], "data", "{fasta_basename}.fasta"),
+        join(OUT_MAP["{name}"], "data", "{fasta_basename}.fasta")
     output:
-        join(OUT_MAP[name], "features", "{fasta_basename}." + FEATURE_SUFFIX),
+        join(OUT_MAP["{name}"], "features", "{fasta_basename}." + FEATURE_SUFFIX)
     params:
-        data_directory = config["alphafold_data_directory"],
-        output_directory = join(OUT_MAP[name], "features"),
-        cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
-        )
-    resources:
-        mem_mb = lambda wildcards, attempt: base_feature_ram * (feature_scaling ** attempt),
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
-    threads: 8, # everything is harcoded anyways ...
+        data_dir=config["alphafold_data_directory"],
+        out_dir=lambda wc: join(OUT_MAP[wc.name], "features"),
+        cli=lambda wc: " ".join(f"{k}={v}" for k,v in config["create_feature_arguments"].items())
+    threads:
+        config["alphafold_inference_threads"]
     container:
-       config["prediction_container"],
-    shell:"""
-        create_individual_features.py \
-            --fasta_paths={input} \
-            --data_dir={params.data_directory} \
-            --output_dir={params.output_directory} \
-            {params.cli_parameters}
+        config["prediction_container"]
+    shell:
+        """
+        create_individual_features.py --fasta_paths={input} --data_dir={params.data_dir} \
+        --output_dir={params.out_dir} {params.cli}
         """
 
 checkpoint cluster_sequence_length:
     input:
-        [join(OUT_MAP[name], "features", f"{feature}.{FEATURE_SUFFIX}")
-        for feature in dataset.unique_sequences
-        ],
+        lambda wc: [
+            join(OUT_MAP[wc.name], "features", f"{f}.{FEATURE_SUFFIX}")
+            for f in load_dataset(wc).unique_sequences
+        ]
     output:
-        join(OUT_MAP[name], "resources", "sequence_clusters.txt"),
-    resources:
-        avg_mem = lambda wildcards, attempt: 600 * attempt,
-        mem_mb = lambda wildcards, attempt: 800 * attempt,
-        walltime = lambda wildcards, attempt: 10 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        join(OUT_MAP["{name}"], "resources", "sequence_clusters.txt")
     params:
-        folds = dataset.fold_specifications,
-        protein_delimiter = protein_delimiter,
-        feature_directory = join(OUT_MAP[name], "features"),
-        cluster_bin_size = config.get("clustering_bin_size", 150),
+        folds=lambda wc: load_dataset(wc).fold_specifications,
+        feature_directory=lambda wc: join(OUT_MAP[wc.name], "features"),
+        cluster_bin_size=config.get("clustering_bin_size", 150)
     container:
-       config["prediction_container"],
+        config["prediction_container"]
     script:
         "scripts/cluster_sequence_length.py"
 
-def lookup_features(wildcards):
+def lookup_features(wc):
     if config.get("cluster_jobs", False):
-        cluster_data = {}
         with checkpoints.cluster_sequence_length.get().output[0].open() as f:
-            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
-
+            data = [x.strip().split(",") for x in f.read().splitlines() if x]
         headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
-        dataset.update_clustering(data = ret)
-
-    features = [join(
-        OUT_MAP[name], "features", f"{feature}.{FEATURE_SUFFIX}")
-        for feature in dataset.sequences_by_fold[wildcards.fold]
+        ret = {h: list(col) for h, col in zip(headers, zip(*data))}
+        load_dataset(wc).update_clustering(data=ret)
+    return [
+        join(OUT_MAP[wc.name], "features", f"{seq}.{FEATURE_SUFFIX}")
+        for seq in load_dataset(wc).sequences_by_fold[wc.fold]
     ]
-    return features
-
-def format_clustering(wildcards):
-    parameter_string = ""
-    if config.get("cluster_jobs", False):
-        cluster_data = {}
-        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
-            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
-
-        headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
-
-        fold = wildcards.fold.split(" ")[0]
-        for name, length, depth in zip(ret["name"], ret["max_seq_length"], ret["max_msa_depth"]):
-            if name == fold:
-                parameter_string += f"--desired_num_res={length} "
-                parameter_string += f"--desired_num_msa={depth} "
-    return parameter_string
-
 
 rule structure_inference:
     input:
-        features = lookup_features,
-        cluster = join(OUT_MAP[name], "resources", "sequence_clusters.txt")
-            if config.get("cluster_jobs", False) else "/dev/null",
+        features=lookup_features,
+        cluster=lambda wc: join(OUT_MAP[wc.name], "resources", "sequence_clusters.txt") if config.get("cluster_jobs", False) else "/dev/null"
     output:
-        join(OUT_MAP[name],"predictions", "{fold}", "completed_fold.txt"),
+        join(OUT_MAP["{name}"], "predictions", "{fold}", "completed_fold.txt")
     params:
-        data_directory = config["alphafold_data_directory"],
-        feature_directory = join(OUT_MAP[name], "features"),
-        output_directory = lambda wildcards: [
-            join(OUT_MAP[name], "predictions", individual_fold)
-            for individual_fold in wildcards.fold.split(" ")
-            ],
-        requested_fold = lambda  wildcards : wildcards.fold.replace(" ", ","),
-        protein_delimiter = protein_delimiter,
-        cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
-        ),
-        clustering_format = format_clustering,
-    resources:
-        mem_mb = lambda wildcards, attempt:
-            config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
-        slurm = config.get("alphafold_inference", ""),
+        data_dir=config["alphafold_data_directory"],
+        feature_dir=lambda wc: join(OUT_MAP[wc.name], "features"),
+        out_dirs=lambda wc: [join(OUT_MAP[wc.name], "predictions", f) for f in wc.fold.split(" ")],
+        req_fold=lambda wc: wc.fold.replace(" ", ","),
+        cli=lambda wc: " ".join(f"{k}={v}" for k,v in config["structure_inference_arguments"].items()),
+        cluster_fmt=lambda wc: ""
     threads:
-        config["alphafold_inference_threads"],
+        config["alphafold_inference_threads"]
     container:
-       config["prediction_container"],
-    shell:"""
-        #MAXRAM=$(bc <<< "$(ulimit -m) / 1024.0")
-        #GPUMEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | tail -1)
-        #export XLA_PYTHON_CLIENT_MEM_FRACTION=$(echo "scale=3; $MAXRAM / $GPUMEM" | bc)
-        #export TF_FORCE_UNIFIED_MEMORY='1'
-
-        run_structure_prediction.py \
-            --input {params.requested_fold} \
-            --output_directory={params.output_directory} \
-            --protein_delimiter={params.protein_delimiter} \
-            --data_directory={params.data_directory} \
-            --features_directory={params.feature_directory} \
-            {params.clustering_format} \
-            {params.cli_parameters}
-
-        echo "Completed" > "{output}"
+        config["prediction_container"]
+    shell:
         """
-
-
-def update_clustering(wildcards):
-    if config.get("cluster_jobs", False):
-        cluster_data = {}
-        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
-            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
-
-        headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
-        dataset.update_clustering(data = ret)
-
-    required_folds = [
-        join(
-            OUT_MAP[name],
-            "predictions", fold, "completed_fold.txt"
-        )
-        for fold in dataset.fold_specifications
-    ]
-    return required_folds
-
+        run_structure_prediction.py \
+        --input {params.req_fold} \
+        --output_directory={params.out_dirs} \
+        --protein_delimiter={protein_delimiter} \
+        --data_directory={params.data_dir} \
+        --features_directory={params.feature_dir} \
+        {params.cluster_fmt} {params.cli}; echo Completed > {output}
+        """
 
 rule analyze_structure:
     input:
-        rules.structure_inference.output,
+        rules.structure_inference.output
     output:
-        join(
-            OUT_MAP[name], "predictions", "{fold}", "analysis.csv"
-        ),
-    resources:
-        mem_mb = lambda wildcards, attempt: 8000 * attempt,
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        join(OUT_MAP["{name}"], "predictions", "{fold}", "analysis.csv")
     params:
-        prediction_dir = lambda wildcards: join(
-            OUT_MAP[name], "predictions", wildcards.fold
-        ),
-        fold = lambda wildcards: wildcards.fold,
-        report_dir = join(OUT_MAP[name], "reports"),
-        cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
-        ),
+        pred_dir=lambda wc: join(OUT_MAP[wc.name], "predictions", wc.fold),
+        cli=lambda wc: " ".join(f"{k}={v}" for k,v in config["analyze_structure_arguments"].items())
     container:
-       config["analysis_container"],
-    shell:"""
-        tmpdir=$(mktemp -d)
-
-        cd $tmpdir
-        ln -s {params.prediction_dir} $tmpdir/{params.fold}
-        get_good_inter_pae.py \
-            --output_dir=$tmpdir \
-            {params.cli_parameters}
-
-        touch predictions_with_good_interpae.csv
-        mv predictions_with_good_interpae.csv {output}
-        rm -rf $tmpdir
+        config["analysis_container"]
+    shell:
         """
-
-def update_statistics(wildcards):
-    required_folds = [
-        join(
-            OUT_MAP[name],
-            "predictions", fold, "analysis.csv"
-        )
-        for fold in dataset.fold_specifications
-    ]
-    return required_folds
+        tmp=$(mktemp -d); cd $tmp
+        ln -s {params.pred_dir} $tmp/{wildcards.fold}
+        get_good_inter_pae.py --output_dir=$tmp {params.cli}
+        mv predictions_with_good_interpae.csv {output}
+        """
 
 rule merge_analyses:
     input:
-        update_statistics,
+        lambda wc: [
+            join(OUT_MAP[wc.name], "predictions", f, "analysis.csv")
+            for f in load_dataset(wc).fold_specifications
+        ]
     output:
-        join(
-            OUT_MAP[name], "reports", "analysis.csv"
-        ),
-    resources:
-        mem_mb = lambda wildcards, attempt: 2000 * attempt,
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
-    params:
-        prediction_dir = join(OUT_MAP[name], "predictions"),
-    container:
-       config["analysis_container"],
-    shell:"""
-        head -n 1 {input[0]} > {output}
-
-        for f in {input}; do
-            tail -n +2 "$f" >> {output}
-        done
+        join(OUT_MAP["{name}"], "reports", "analysis.csv")
+    shell:
         """
-
+        head -n 1 {input[0]} > {output}
+        for f in {input}; do tail -n +2 $f >> {output}; done
+        """
 
 rule generate_report:
     input:
-        update_clustering,
+        lambda wc: [
+            join(OUT_MAP[wc.name], "resources", "sequence_clusters.txt")
+        ] if config.get("cluster_jobs", False) else []
     output:
-        join(
-            OUT_MAP[name], "reports", "report.html"
-        ),
-    resources:
-        mem_mb = lambda wildcards, attempt: 32000 * attempt,
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        join(OUT_MAP["{name}"], "reports", "report.html")
     params:
-        prediction_dir = join(OUT_MAP[name], "predictions"),
-        report_dir = join(OUT_MAP[name], "reports"),
-        cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["generate_report_arguments"].items()]
-        ),
+        pred_dir=lambda wc: join(OUT_MAP[wc.name], "predictions"),
+        cli=lambda wc: " ".join(f"{k}={v}" for k,v in config["generate_report_arguments"].items())
     container:
-       config["prediction_container"],
-    shell:"""
-        cd {params.prediction_dir}
-        create_notebook.py \
-            --output_dir={params.prediction_dir} \
-            {params.cli_parameters}
-
+        config["prediction_container"]
+    shell:
+        """
+        cd {params.pred_dir}
+        create_notebook.py --output_dir={params.pred_dir} {params.cli}
         jupyter nbconvert --to html --execute output.ipynb
-        mv output.ipynb {params.report_dir}
         mv output.html {output}
         """
