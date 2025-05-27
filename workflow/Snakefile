@@ -1,5 +1,4 @@
-""" Snakemake pipeline for multi-run automated structure prediction. """
-
+# Snakefile for multi-run automated structure prediction
 import os
 import tempfile
 from os.path import abspath, join, basename, splitext
@@ -7,257 +6,254 @@ from os.path import abspath, join, basename, splitext
 include: "rules/common.smk"
 configfile: "config/config.yaml"
 
-# --- multi-run setup ---
-RUNS = config["run"]
-RUN_NAMES = [r["name"] for r in RUNS]
-INPUT_PATHS = {r["name"]: abspath(r["input"]) for r in RUNS}
-OUTPUT_PATHS = {r["name"]: abspath(r["output"]) for r in RUNS}
+ruleorder: symlink_features > create_features
 
+
+# --- multi-run setup and per-run parsing ---
+RUNS = config["run"]
+# Map each run to its input-sheet and absolute output dir
+RUN_CONFIGS = [
+    (r["name"], abspath(r["input"]), abspath(r["output"]))
+    for r in RUNS
+]
+# Datasets keyed by run_dir
+DATASETS = {}
+for name, sheet, run_dir in RUN_CONFIGS:
+    os.makedirs(run_dir, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+        process_files(
+            input_files=[sheet],
+            output_path=tmp.name,
+            delimiter=config.get("protein_delimiter",";")
+        )
+        DATASETS[run_dir] = InputParser.from_file(
+            filepath=tmp.name,
+            file_format="alphaabriss",
+            protein_delimiter=config.get("protein_delimiter",";")
+        )
+
+RUN_DIRS = list(DATASETS.keys())
+
+# feature‐compression suffix
 FEATURE_COMPRESSION = None
 if config["create_feature_arguments"].get("--compress_features", False):
     FEATURE_COMPRESSION = "lzma"
 FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION)
-protein_delimiter = config.get("protein_delimiter", "_")
 
-# parse all sample sheets together
-with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_input:
-    input_files = list(INPUT_PATHS.values())
-    process_files(
-        input_files=input_files,
-        output_path=tmp_input.name,
-        delimiter=protein_delimiter
-    )
-    dataset = InputParser.from_file(
-        filepath=tmp_input.name,
-        file_format="alphaabriss",
-        protein_delimiter=protein_delimiter
-    )
+# --- top‐level target lists ---
+required_folds    = []
+required_reports  = []
+required_features = []
+required_clusters = []
 
-# --- compute required files ---
-required_folds = expand(
-    join(OUTPUT_PATHS[run], "predictions", fold, "completed_fold.txt"),
-    run=RUN_NAMES,
-    fold=dataset.fold_specifications
-)
-required_reports = (
-    expand(
-        join(OUTPUT_PATHS[run], "reports", "analysis.csv"),
-        run=RUN_NAMES
-    ) +
-    expand(
-        join(OUTPUT_PATHS[run], "reports", "report.html"),
-        run=RUN_NAMES
-    )
-)
-# feature files
-required_features = expand(
-    join(OUTPUT_PATHS[run], "features", f"{{fasta_basename}}.{FEATURE_SUFFIX}"),
-    run=RUN_NAMES,
-    fasta_basename=dataset.unique_sequences
-)
-
-# choose total inputs
-if config.get("only_generate_features", False):
-    total_required_files = required_features
-else:
-    total_required_files = required_folds + required_reports
+for run_dir in RUN_DIRS:
+    ds = DATASETS[run_dir]
+    # per‐fold completion flags
+    for fold in ds.fold_specifications:
+        required_folds.append(join(run_dir, "predictions", fold, "completed_fold.txt"))
+    # per‐run reports
+    required_reports += [
+        join(run_dir, "reports", "analysis.csv"),
+        join(run_dir, "reports", "report.html")
+    ]
+    # per‐sequence feature files
+    for seq in ds.unique_sequences:
+        required_features.append(join(run_dir, "features", f"{seq}.{FEATURE_SUFFIX}"))
+    # optional cluster checkpoint
     if config.get("cluster_jobs", False):
-        total_required_files += expand(
-            join(OUTPUT_PATHS[run], "resources", "sequence_clusters.txt"),
-            run=RUN_NAMES
-        )
+        required_clusters.append(join(run_dir, "resources", "sequence_clusters.txt"))
 
-# collect precomputed features
-precomputed_features = []
-feature_directories = config.get("feature_directory", [])
-req_feat_names = set(basename(x) for x in required_features)
-for feature_directory in feature_directories:
-    if not os.path.exists(feature_directory):
-        continue
-    for available in os.listdir(feature_directory):
-        if available in req_feat_names:
-            precomputed_features.append(join(feature_directory, available))
+if config.get("only_generate_features", False):
+    total_required = required_features
+else:
+    total_required = required_folds + required_reports
+    if config.get("cluster_jobs", False):
+        total_required += required_clusters
 
 rule all:
-    input: total_required_files
+    input: total_required
+
+# --- symlink local FASTAs into each run_dir/data ---
+SYMLINK_LOCAL_INPUTS  = []
+SYMLINK_LOCAL_OUTPUTS = []
+for run_dir in RUN_DIRS:
+    locs = DATASETS[run_dir].sequences_by_origin["local"]
+    SYMLINK_LOCAL_INPUTS.extend(locs)
+    SYMLINK_LOCAL_OUTPUTS.extend(
+        join(run_dir, "data", f"{splitext(basename(x))[0]}.fasta")
+        for x in locs
+    )
 
 rule symlink_local_files:
-    input:
-        lambda wc: dataset.sequences_by_origin["local"]
-    output:
-        lambda wc: [
-            join(OUTPUT_PATHS[run], "data", f"{splitext(basename(x))[0]}.fasta")
-            for run in RUN_NAMES
-            for x in dataset.sequences_by_origin["local"]
-        ]
+    input:  SYMLINK_LOCAL_INPUTS
+    output: SYMLINK_LOCAL_OUTPUTS
     run:
-        for run in RUN_NAMES:
-            dataset.symlink_local_files(
-                output_directory=join(OUTPUT_PATHS[run], "data")
+        for run_dir in RUN_DIRS:
+            DATASETS[run_dir].symlink_local_files(
+                output_directory=join(run_dir, "data")
             )
 
+# --- download any UniProt IDs missing locally ---
 rule download_uniprot:
     output:
-        lambda wc: [
-            join(OUTPUT_PATHS[run], "data", f"{wc.uniprot_id}.fasta")
-            for run in RUN_NAMES
-        ]
-    shell: """
-        temp_file=$(mktemp)
-        curl -o ${{temp_file}} https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta
-        for out in {output}; do
-            echo ">{wildcards.uniprot_id}" > "$out"
-            tail -n +2 ${{temp_file}} >> "$out"
-        done
-    """
+        "{run_dir}/data/{uniprot_id}.fasta"
+    run:
+        out = output[0]
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        tmp = tempfile.mktemp()
+        shell("curl -s -o {tmp} https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta")
+        with open(out, "w") as fo:
+            fo.write(f">{wildcards.uniprot_id}\n")
+            fo.write(open(tmp).read().split("\n",1)[1])
+        os.remove(tmp)
+
+# --- symlink any precomputed features into each run_dir/features ---
+precomputed_features = []
+for d in config.get("feature_directory", []):
+    if os.path.isdir(d):
+        precomputed_features += [join(d,f) for f in os.listdir(d)]
 
 rule symlink_features:
     input:
-        lambda wc: precomputed_features
-    output:
         lambda wc: [
-            join(OUTPUT_PATHS[run], "features", basename(f))
-            for run in RUN_NAMES
-            for f in precomputed_features
+            src for src in precomputed_features
+            if basename(src).startswith(basename(src).split(".")[0])
         ]
+    output:
+        "{run_dir}/features/{feature}"
     run:
-        for src, dst in zip(input, output):
-            if os.path.exists(dst):
-                os.remove(dst)
-            os.symlink(os.path.abspath(src), dst)
+        src = next(p for p in precomputed_features if basename(p)==wildcards.feature)
+        dst = output[0]
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.exists(dst):
+            os.remove(dst)
+        os.symlink(abspath(src), dst)
 
+# --- compute features for any remaining FASTAs ---
 rule create_features:
     input:
-        lambda wc: join(OUTPUT_PATHS[wc.run], "data", f"{wc.fasta_basename}.fasta")
+        "{run_dir}/data/{fasta_basename}.fasta"
     output:
-        lambda wc: join(OUTPUT_PATHS[wc.run], "features", f"{wc.fasta_basename}.{FEATURE_SUFFIX}")
+        "{run_dir}/features/{fasta_basename}.{FEATURE_SUFFIX}"
     params:
-        data_directory = config["alphafold_data_directory"],
-        output_directory = lambda wc: join(OUTPUT_PATHS[wc.run], "features"),
-        cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
-        )
+        data_directory   = config["alphafold_data_directory"],
+        output_directory = lambda wc: join(wc.run_dir, "features"),
+        cli_parameters   = " ".join(f"{k}={v}" for k,v in config["create_feature_arguments"].items())
     threads: 8
     container: config["prediction_container"]
     resources:
-        mem_mb = lambda wc, attempt: config.get("feature_create_ram_bytes", 64000) * (config.get("feature_create_ram_scaling", 1.1) ** attempt),
-        walltime = lambda wc, attempt: 1440 * attempt,
-        attempt = lambda wc, attempt: attempt
+        mem_mb   = lambda wildcards, attempt: config.get("feature_create_ram_bytes", 64000) * (config.get("feature_create_ram_scaling", 1.1)**attempt),
+        walltime = lambda wildcards, attempt: 1440 * attempt,
+        attempt  = lambda wildcards, attempt: attempt
     shell: """
         create_individual_features.py \
-            --fasta_paths={input} \
-            --data_dir={params.data_directory} \
-            --output_dir={params.output_directory} \
-            {params.cli_parameters}
+          --fasta_paths={input} \
+          --data_dir={params.data_directory} \
+          --output_dir={params.output_directory} \
+          {params.cli_parameters}
     """
 
-# --- sequence clustering checkpoint ---
+# --- sequence‐length clustering per run ---
 checkpoint cluster_sequence_length:
     input:
-        [join(OUTPUT_PATHS[run], "features", f"{feature}.{FEATURE_SUFFIX}") for run in RUN_NAMES for feature in dataset.unique_sequences]
+        lambda wc: [
+            join(wc.run_dir, "features", f"{seq}.{FEATURE_SUFFIX}")
+            for seq in DATASETS[wc.run_dir].unique_sequences
+        ]
     output:
-        [join(OUTPUT_PATHS[run], "resources", "sequence_clusters.txt") for run in RUN_NAMES]
+        "{run_dir}/resources/sequence_clusters.txt"
     params:
-        folds = dataset.fold_specifications,
-        protein_delimiter = protein_delimiter,
-        feature_directory = lambda wc: join(OUTPUT_PATHS[wc.run], "features"),
-        cluster_bin_size = config.get("clustering_bin_size", 150)
+        folds             = lambda wc: DATASETS[wc.run_dir].fold_specifications,
+        protein_delimiter = config.get("protein_delimiter",";"),
+        feature_directory = lambda wc: join(wc.run_dir, "features"),
+        cluster_bin_size  = config.get("clustering_bin_size",150)
     threads: 1
     container: config["prediction_container"]
     resources:
-        attempt = lambda wc, attempt: attempt,
-        mem_mb = lambda wc, attempt: 800 * attempt,
-        walltime = lambda wc, attempt: 10 * attempt
+        mem_mb   = lambda wildcards, attempt: 800 * attempt,
+        walltime = lambda wildcards, attempt: 10 * attempt,
+        attempt  = lambda wildcards, attempt: attempt
     script: "scripts/cluster_sequence_length.py"
 
 # --- helpers for inference ---
 def lookup_features(wc):
     if config.get("cluster_jobs", False):
-        # update clustering data
-        path = join(OUTPUT_PATHS[wc.run], "resources", "sequence_clusters.txt")
-        with open(path) as f:
-            data = [x.strip().split(",") for x in f if x.strip()]
-        headers = data.pop(0)
-        ret = {h: list(col) for h, col in zip(headers, zip(*data))}
-        dataset.update_clustering(data=ret)
+        path = join(wc.run_dir, "resources", "sequence_clusters.txt")
+        data = [l.split(",") for l in open(path).read().splitlines() if l]
+        hdrs = data.pop(0)
+        table = {h:list(col) for h,col in zip(hdrs, zip(*data))}
+        DATASETS[wc.run_dir].update_clustering(data=table)
     return [
-        join(OUTPUT_PATHS[wc.run], "features", f"{feature}.{FEATURE_SUFFIX}")
-        for feature in dataset.sequences_by_fold[wc.fold]
+        join(wc.run_dir, "features", f"{feat}.{FEATURE_SUFFIX}")
+        for feat in DATASETS[wc.run_dir].sequences_by_fold[wc.fold]
     ]
 
-
 def format_clustering(wc):
-    params = ""
+    s = ""
     if config.get("cluster_jobs", False):
-        path = join(OUTPUT_PATHS[wc.run], "resources", "sequence_clusters.txt")
-        with open(path) as f:
-            data = [x.strip().split(",") for x in f if x.strip()]
-        headers = data.pop(0)
-        ret = {h: list(col) for h, col in zip(headers, zip(*data))}
-        for name, length, depth in zip(ret["name"], ret["max_seq_length"], ret["max_msa_depth"]):
+        path = join(wc.run_dir, "resources", "sequence_clusters.txt")
+        data = [l.split(",") for l in open(path).read().splitlines() if l]
+        hdrs = data.pop(0)
+        table = {h:list(col) for h,col in zip(hdrs, zip(*data))}
+        for name,length,depth in zip(table["name"], table["max_seq_length"], table["max_msa_depth"]):
             if name == wc.fold:
-                params += f"--desired_num_res={length} "
-                params += f"--desired_num_msa={depth} "
-    return params
+                s += f"--desired_num_res={length} --desired_num_msa={depth} "
+    return s
+
+# --- inference, analysis, reporting ---
 
 rule structure_inference:
     input:
         features = lookup_features,
-        cluster = lambda wc: join(OUTPUT_PATHS[wc.run], "resources", "sequence_clusters.txt") if config.get("cluster_jobs", False) else "/dev/null"
+        cluster  = "{run_dir}/resources/sequence_clusters.txt" if config.get("cluster_jobs") else "/dev/null"
     output:
-        lambda wc: join(OUTPUT_PATHS[wc.run], "predictions", wc.fold, "completed_fold.txt")
+        "{run_dir}/predictions/{fold}/completed_fold.txt"
     params:
-        data_directory = config["alphafold_data_directory"],
-        feature_directory = lambda wc: join(OUTPUT_PATHS[wc.run], "features"),
-        output_directory = lambda wc: join(OUTPUT_PATHS[wc.run], "predictions", wc.fold),
-        requested_fold = lambda wc: wc.fold,
-        protein_delimiter = protein_delimiter,
-        clustering_format = format_clustering,
-        cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
-        )
+        data_directory     = config["alphafold_data_directory"],
+        feature_directory  = lambda wc: join(wc.run_dir, "features"),
+        output_directory   = lambda wc: join(wc.run_dir, "predictions", wc.fold),
+        requested_fold     = lambda wc: wc.fold,
+        protein_delimiter  = config.get("protein_delimiter",";"),
+        clustering_format  = format_clustering,
+        cli_parameters     = " ".join(f"{k}={v}" for k,v in config["structure_inference_arguments"].items())
     threads: config["alphafold_inference_threads"]
     container: config["prediction_container"]
     resources:
-        mem_mb = lambda wc, attempt: config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
-        walltime = lambda wc, attempt: 1440 * attempt,
-        attempt = lambda wc, attempt: attempt
+        mem_mb   = lambda wildcards, attempt: config.get("structure_inference_ram_bytes",32000)*(1.1**attempt),
+        walltime = lambda wildcards, attempt: 1440*attempt,
+        attempt  = lambda wildcards, attempt: attempt
     shell: """
         run_structure_prediction.py \
-            --input {params.requested_fold} \
-            --output_directory={params.output_directory} \
-            --protein_delimiter={params.protein_delimiter} \
-            --data_directory={params.data_directory} \
-            --features_directory={params.feature_directory} \
-            {params.clustering_format} \
-            {params.cli_parameters}
+          --input {params.requested_fold} \
+          --output_directory={params.output_directory} \
+          --protein_delimiter={params.protein_delimiter} \
+          --data_directory={params.data_directory} \
+          --features_directory={params.feature_directory} \
+          {params.clustering_format} \
+          {params.cli_parameters}
         echo "Completed" > "{output}"
     """
 
 rule analyze_structure:
     input:
-        lambda wc: join(OUTPUT_PATHS[wc.run], "predictions", wc.fold, "completed_fold.txt")
+        "{run_dir}/predictions/{fold}/completed_fold.txt"
     output:
-        lambda wc: join(OUTPUT_PATHS[wc.run], "predictions", wc.fold, "analysis.csv")
+        "{run_dir}/predictions/{fold}/analysis.csv"
     params:
-        prediction_dir = lambda wc: join(OUTPUT_PATHS[wc.run], "predictions", wc.fold),
-        fold = lambda wc: wc.fold,
-        report_dir = lambda wc: join(OUTPUT_PATHS[wc.run], "reports"),
-        cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
-        )
+        prediction_dir = lambda wc: join(wc.run_dir, "predictions", wc.fold),
+        fold           = lambda wc: wc.fold,
+        report_dir     = lambda wc: join(wc.run_dir, "reports"),
+        cli_parameters = " ".join(f"{k}={v}" for k,v in config["analyze_structure_arguments"].items())
     container: config["analysis_container"]
     resources:
-        mem_mb = lambda wc, attempt: 8000 * attempt,
-        walltime = lambda wc, attempt: 1440 * attempt,
-        attempt = lambda wc, attempt: attempt
+        mem_mb   = lambda wildcards, attempt: 8000*attempt,
+        walltime = lambda wildcards, attempt: 1440*attempt,
+        attempt  = lambda wildcards, attempt: attempt
     shell: """
         tmpdir=$(mktemp -d)
         cd $tmpdir
         ln -s {params.prediction_dir} $tmpdir/{params.fold}
-        get_good_inter_pae.py \
-            --output_dir=$tmpdir \
-            {params.cli_parameters}
+        get_good_inter_pae.py --output_dir=$tmpdir {params.cli_parameters}
         mv predictions_with_good_interpae.csv {output}
         rm -rf $tmpdir
     """
@@ -265,53 +261,44 @@ rule analyze_structure:
 rule merge_analyses:
     input:
         lambda wc: [
-            join(OUTPUT_PATHS[run], "predictions", fold, "analysis.csv")
-            for run in RUN_NAMES
-            for fold in dataset.fold_specifications
+            join(wc.run_dir, "predictions", f, "analysis.csv")
+            for f in DATASETS[wc.run_dir].fold_specifications
         ]
     output:
-        lambda wc: [
-            join(OUTPUT_PATHS[run], "reports", "analysis.csv")
-            for run in RUN_NAMES
-        ]
+        "{run_dir}/reports/analysis.csv"
     container: config["analysis_container"]
     resources:
-        mem_mb = lambda wc, attempt: 2000 * attempt,
-        walltime = lambda wc, attempt: 1440 * attempt,
-        attempt = lambda wc, attempt: attempt
+        mem_mb   = lambda wildcards, attempt: 2000*attempt,
+        walltime = lambda wildcards, attempt: 1440*attempt,
+        attempt  = lambda wildcards, attempt: attempt
     shell: """
-        head -n 1 {input[0]} > {output[0]}
+        head -n 1 {input[0]} > {output}
         for f in {input}; do
-            tail -n +2 "$f" >> {output[0]}
+            tail -n +2 "$f" >> {output}
         done
     """
 
 rule generate_report:
     input:
         lambda wc: [
-            join(OUTPUT_PATHS[wc.run], "predictions", fold, "completed_fold.txt")
-            for fold in dataset.fold_specifications
+            join(wc.run_dir, "predictions", f, "completed_fold.txt")
+            for f in DATASETS[wc.run_dir].fold_specifications
         ]
     output:
-        lambda wc: join(OUTPUT_PATHS[wc.run], "reports", "report.html")
+        "{run_dir}/reports/report.html"
     params:
-        prediction_dir = lambda wc: join(OUTPUT_PATHS[wc.run], "predictions"),
-        report_dir = lambda wc: join(OUTPUT_PATHS[wc.run], "reports"),
-        cli_parameters = " ".join(
-            [f"{k}={v}" for k, v in config["generate_report_arguments"].items()]
-        )
+        prediction_dir = lambda wc: join(wc.run_dir, "predictions"),
+        report_dir     = lambda wc: join(wc.run_dir, "reports"),
+        cli_parameters = " ".join(f"{k}={v}" for k,v in config["generate_report_arguments"].items())
     container: config["prediction_container"]
     resources:
-        mem_mb = lambda wc, attempt: 32000 * attempt,
-        walltime = lambda wc, attempt: 1440 * attempt,
-        attempt = lambda wc, attempt: attempt
+        mem_mb   = lambda wildcards, attempt: 32000*attempt,
+        walltime = lambda wildcards, attempt: 1440*attempt,
+        attempt  = lambda wildcards, attempt: attempt
     shell: """
         cd {params.prediction_dir}
-        create_notebook.py \
-            --output_dir={params.prediction_dir} \
-            {params.cli_parameters}
+        create_notebook.py --output_dir={params.prediction_dir} {params.cli_parameters}
         jupyter nbconvert --to html --execute output.ipynb
         mv output.ipynb {params.report_dir}
         mv output.html {output}
     """
-
