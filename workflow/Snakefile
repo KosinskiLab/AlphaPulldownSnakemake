@@ -1,4 +1,5 @@
 # Snakefile for multi-run automated structure prediction
+
 import os
 import tempfile
 from os.path import abspath, join, basename, splitext
@@ -6,17 +7,10 @@ from os.path import abspath, join, basename, splitext
 include: "rules/common.smk"
 configfile: "config/config.yaml"
 
-ruleorder: symlink_features > create_features
-
-
-# --- multi-run setup and per-run parsing ---
+# --- 1. Multi-run setup & parsing ---
 RUNS = config["run"]
-# Map each run to its input-sheet and absolute output dir
-RUN_CONFIGS = [
-    (r["name"], abspath(r["input"]), abspath(r["output"]))
-    for r in RUNS
-]
-# Datasets keyed by run_dir
+RUN_CONFIGS = [(r["name"], abspath(r["input"]), abspath(r["output"])) for r in RUNS]
+
 DATASETS = {}
 for name, sheet, run_dir in RUN_CONFIGS:
     os.makedirs(run_dir, exist_ok=True)
@@ -31,106 +25,98 @@ for name, sheet, run_dir in RUN_CONFIGS:
             file_format="alphaabriss",
             protein_delimiter=config.get("protein_delimiter",";")
         )
-
 RUN_DIRS = list(DATASETS.keys())
 
-# feature‐compression suffix
+# feature suffix
 FEATURE_COMPRESSION = None
 if config["create_feature_arguments"].get("--compress_features", False):
     FEATURE_COMPRESSION = "lzma"
 FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION)
 
-# --- top‐level target lists ---
+# --- 2. Build lists of all required targets ---
+required_features = []
 required_folds    = []
 required_reports  = []
-required_features = []
 required_clusters = []
 
 for run_dir in RUN_DIRS:
     ds = DATASETS[run_dir]
-    # per‐fold completion flags
+
+    # features (either symlinked or built)
+    for seq in ds.unique_sequences:
+        required_features.append(join(run_dir, "features", f"{seq}.{FEATURE_SUFFIX}"))
+
+    # fold-completion flags
     for fold in ds.fold_specifications:
         required_folds.append(join(run_dir, "predictions", fold, "completed_fold.txt"))
-    # per‐run reports
+
+    # reports
     required_reports += [
         join(run_dir, "reports", "analysis.csv"),
         join(run_dir, "reports", "report.html")
     ]
-    # per‐sequence feature files
-    for seq in ds.unique_sequences:
-        required_features.append(join(run_dir, "features", f"{seq}.{FEATURE_SUFFIX}"))
-    # optional cluster checkpoint
+
+    # optional clustering checkpoint
     if config.get("cluster_jobs", False):
         required_clusters.append(join(run_dir, "resources", "sequence_clusters.txt"))
 
+# Decide what “all” should do
 if config.get("only_generate_features", False):
-    total_required = required_features
+    # only generate/symlink features
+    TOTAL_REQUIRED = required_features
 else:
-    total_required = required_folds + required_reports
+    TOTAL_REQUIRED = required_features + required_folds + required_reports
     if config.get("cluster_jobs", False):
-        total_required += required_clusters
+        TOTAL_REQUIRED += required_clusters
 
 rule all:
-    input: total_required
+    input: TOTAL_REQUIRED
 
-# --- symlink local FASTAs into each run_dir/data ---
-SYMLINK_LOCAL_INPUTS  = []
-SYMLINK_LOCAL_OUTPUTS = []
-for run_dir in RUN_DIRS:
-    locs = DATASETS[run_dir].sequences_by_origin["local"]
-    SYMLINK_LOCAL_INPUTS.extend(locs)
-    SYMLINK_LOCAL_OUTPUTS.extend(
-        join(run_dir, "data", f"{splitext(basename(x))[0]}.fasta")
-        for x in locs
-    )
-
-rule symlink_local_files:
-    input:  SYMLINK_LOCAL_INPUTS
-    output: SYMLINK_LOCAL_OUTPUTS
-    run:
-        for run_dir in RUN_DIRS:
-            DATASETS[run_dir].symlink_local_files(
-                output_directory=join(run_dir, "data")
-            )
-
-# --- download any UniProt IDs missing locally ---
+# --- 3. Download FASTAs on demand ---
 rule download_uniprot:
     output:
-        "{run_dir}/data/{uniprot_id}.fasta"
-    run:
-        out = output[0]
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        tmp = tempfile.mktemp()
-        shell("curl -s -o {tmp} https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta")
-        with open(out, "w") as fo:
-            fo.write(f">{wildcards.uniprot_id}\n")
-            fo.write(open(tmp).read().split("\n",1)[1])
-        os.remove(tmp)
+        "{run_dir}/data/{fasta_basename}.fasta"
+    shell:
+        """
+        mkdir -p $(dirname {output})
+        tmp=$(mktemp)
+        curl -s -o $tmp https://rest.uniprot.org/uniprotkb/{wildcards.fasta_basename}.fasta
+        echo ">{wildcards.fasta_basename}" > {output}
+        tail -n +2 $tmp >> {output}
+        rm $tmp
+        """
 
-# --- symlink any precomputed features into each run_dir/features ---
-precomputed_features = []
+# --- 4. Precomputed features symlinks (if any) ---
+PRECOMP = []
 for d in config.get("feature_directory", []):
     if os.path.isdir(d):
-        precomputed_features += [join(d,f) for f in os.listdir(d)]
-
-rule symlink_features:
-    input:
-        lambda wc: [
-            src for src in precomputed_features
-            if basename(src).startswith(basename(src).split(".")[0])
+        PRECOMP += [
+            join(d, f) for f in os.listdir(d)
+            if f.endswith(f".{FEATURE_SUFFIX}")
         ]
-    output:
-        "{run_dir}/features/{feature}"
-    run:
-        src = next(p for p in precomputed_features if basename(p)==wildcards.feature)
-        dst = output[0]
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        if os.path.exists(dst):
-            os.remove(dst)
-        os.symlink(abspath(src), dst)
 
-# --- compute features for any remaining FASTAs ---
+if PRECOMP:
+    SYM_IN  = PRECOMP
+    SYM_OUT = [
+        join(run_dir, "features", basename(src))
+        for run_dir in RUN_DIRS
+        for src in PRECOMP
+    ]
+
+    rule symlink_features:
+        priority: 100
+        input:  SYM_IN
+        output: SYM_OUT
+        run:
+            for src, dst in zip(input, output):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                if os.path.exists(dst):
+                    os.remove(dst)
+                os.symlink(abspath(src), dst)
+
+# --- 5. Generate any missing features ---
 rule create_features:
+    priority: 50
     input:
         "{run_dir}/data/{fasta_basename}.fasta"
     output:
@@ -142,18 +128,20 @@ rule create_features:
     threads: 8
     container: config["prediction_container"]
     resources:
-        mem_mb   = lambda wildcards, attempt: config.get("feature_create_ram_bytes", 64000) * (config.get("feature_create_ram_scaling", 1.1)**attempt),
+        mem_mb   = lambda wildcards, attempt: config.get("feature_create_ram_bytes", 64000) * (config.get("feature_create_ram_scaling",1.1)**attempt),
         walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt  = lambda wildcards, attempt: attempt
-    shell: """
+    shell:
+        """
         create_individual_features.py \
           --fasta_paths={input} \
           --data_dir={params.data_directory} \
           --output_dir={params.output_directory} \
           {params.cli_parameters}
-    """
+        """
 
-# --- sequence‐length clustering per run ---
+# --- 6. The rest: clustering, inference, analysis, reporting ---
+
 checkpoint cluster_sequence_length:
     input:
         lambda wc: [
@@ -175,7 +163,6 @@ checkpoint cluster_sequence_length:
         attempt  = lambda wildcards, attempt: attempt
     script: "scripts/cluster_sequence_length.py"
 
-# --- helpers for inference ---
 def lookup_features(wc):
     if config.get("cluster_jobs", False):
         path = join(wc.run_dir, "resources", "sequence_clusters.txt")
@@ -200,8 +187,6 @@ def format_clustering(wc):
                 s += f"--desired_num_res={length} --desired_num_msa={depth} "
     return s
 
-# --- inference, analysis, reporting ---
-
 rule structure_inference:
     input:
         features = lookup_features,
@@ -219,10 +204,11 @@ rule structure_inference:
     threads: config["alphafold_inference_threads"]
     container: config["prediction_container"]
     resources:
-        mem_mb   = lambda wildcards, attempt: config.get("structure_inference_ram_bytes",32000)*(1.1**attempt),
-        walltime = lambda wildcards, attempt: 1440*attempt,
+        mem_mb   = lambda wildcards, attempt: config.get("structure_inference_ram_bytes",32000) * (1.1**attempt),
+        walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt  = lambda wildcards, attempt: attempt
-    shell: """
+    shell:
+        """
         run_structure_prediction.py \
           --input {params.requested_fold} \
           --output_directory={params.output_directory} \
@@ -232,7 +218,7 @@ rule structure_inference:
           {params.clustering_format} \
           {params.cli_parameters}
         echo "Completed" > "{output}"
-    """
+        """
 
 rule analyze_structure:
     input:
@@ -246,17 +232,18 @@ rule analyze_structure:
         cli_parameters = " ".join(f"{k}={v}" for k,v in config["analyze_structure_arguments"].items())
     container: config["analysis_container"]
     resources:
-        mem_mb   = lambda wildcards, attempt: 8000*attempt,
-        walltime = lambda wildcards, attempt: 1440*attempt,
+        mem_mb   = lambda wildcards, attempt: 8000 * attempt,
+        walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt  = lambda wildcards, attempt: attempt
-    shell: """
+    shell:
+        """
         tmpdir=$(mktemp -d)
         cd $tmpdir
         ln -s {params.prediction_dir} $tmpdir/{params.fold}
         get_good_inter_pae.py --output_dir=$tmpdir {params.cli_parameters}
         mv predictions_with_good_interpae.csv {output}
         rm -rf $tmpdir
-    """
+        """
 
 rule merge_analyses:
     input:
@@ -268,15 +255,16 @@ rule merge_analyses:
         "{run_dir}/reports/analysis.csv"
     container: config["analysis_container"]
     resources:
-        mem_mb   = lambda wildcards, attempt: 2000*attempt,
-        walltime = lambda wildcards, attempt: 1440*attempt,
+        mem_mb   = lambda wildcards, attempt: 2000 * attempt,
+        walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt  = lambda wildcards, attempt: attempt
-    shell: """
+    shell:
+        """
         head -n 1 {input[0]} > {output}
         for f in {input}; do
             tail -n +2 "$f" >> {output}
         done
-    """
+        """
 
 rule generate_report:
     input:
@@ -292,13 +280,14 @@ rule generate_report:
         cli_parameters = " ".join(f"{k}={v}" for k,v in config["generate_report_arguments"].items())
     container: config["prediction_container"]
     resources:
-        mem_mb   = lambda wildcards, attempt: 32000*attempt,
-        walltime = lambda wildcards, attempt: 1440*attempt,
+        mem_mb   = lambda wildcards, attempt: 32000 * attempt,
+        walltime = lambda wildcards, attempt: 1440 * attempt,
         attempt  = lambda wildcards, attempt: attempt
-    shell: """
+    shell:
+        """
         cd {params.prediction_dir}
         create_notebook.py --output_dir={params.prediction_dir} {params.cli_parameters}
         jupyter nbconvert --to html --execute output.ipynb
         mv output.ipynb {params.report_dir}
         mv output.html {output}
-    """
+        """
