@@ -3,7 +3,9 @@ input_files :
 protein_delimiter : "_"
 
 output_directory : /scratch/vmaurer/fold_temp
-alphafold_data_directory : /scratch/AlphaFold_DBs/2.3.2
+databases_directory : /scratch/AlphaFold_DBs/2.3.2
+backend_weights_directory : /scratch/AlphaFold_DBs/2.3.2
+
 feature_directory :
   - "abc"
   - "def"
@@ -17,11 +19,11 @@ create_feature_arguments:
   --save_msa_files: False
   --use_precomputed_msas: True
   --max_template_date: 2050-01-01
-  --compress_features: False
+  --compress_features: True
 
 structure_inference_arguments:
-  --num_predictions_per_model : 5
-  --num_cycle: 24
+  --num_predictions_per_model : 1
+  --num_cycle: 3
 
 analyze_structure_arguments:
   --cutoff: 100.0
