@@ -152,7 +152,7 @@ rule create_features:
     output:
         join(config["output_directory"], "features", "{fasta_basename}." + FEATURE_SUFFIX),
     params:
-        data_directory = config["alphafold_data_directory"],
+        data_directory = config["databases_directory"],
         output_directory = join(config["output_directory"], "features"),
         cli_parameters = " ".join(
             [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
@@ -236,7 +236,7 @@ rule structure_inference:
     output:
         join(config["output_directory"],"predictions", "{fold}", "completed_fold.txt"),
     params:
-        data_directory = config["alphafold_data_directory"],
+        data_directory = config["backend_weights_directory"],
         feature_directory = join(config["output_directory"], "features"),
         output_directory = lambda wildcards: [
             join(config["output_directory"], "predictions", individual_fold)
