@@ -74,7 +74,8 @@ protein_delimiter: "_"
 output_directory: /path/to/output/directory
 
 # Path to AlphaFold database containing required weights and files
-alphafold_data_directory: /scratch/AlphaFold_DBs/2.3.2
+# Note prior to version 2.0.4 this was called alphafold_data_directory
+databases_directory: /scratch/AlphaFold_DBs/2.3.2
 
 # Directories containing precomputed features
 feature_directory:
