@@ -133,8 +133,6 @@ rule download_uniprot:
         tail -n +2 "${{temp_file}}" >> {output}
     """
 
-
-
 feature_scaling = config.get("feature_create_ram_scaling", 1.1)
 base_feature_ram = config.get("feature_create_ram_bytes", 64000)
 
@@ -216,7 +214,7 @@ def lookup_features(wildcards):
         with checkpoints.cluster_sequence_length.get().output[0].open() as f:
             data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
         headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))]
         dataset.update_clustering(data=ret)
 
     return [
@@ -238,6 +236,14 @@ def format_clustering(wildcards):
                 parameter_string += f"--desired_num_msa={depth} "
     return parameter_string
 
+def requested_input(wildcards):
+    # AF3: pass filenames (relative to --features_directory)
+    if IS_AF3:
+        names = [feature_name(f) for f in dataset.sequences_by_fold[wildcards.fold]]
+        return ",".join(names)
+    # AF2: pass bare IDs
+    return wildcards.fold.replace(" ", ",")
+
 rule structure_inference:
     input:
         features=lookup_features,
@@ -252,7 +258,7 @@ rule structure_inference:
             join(config["output_directory"], "predictions", individual_fold)
             for individual_fold in wildcards.fold.split(" ")
         ],
-        requested_fold=lambda wildcards: wildcards.fold.replace(" ", ","),
+        requested_input=requested_input,
         protein_delimiter=protein_delimiter,
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
@@ -270,7 +276,7 @@ rule structure_inference:
     shell:
         r"""
         run_structure_prediction.py \
-            --input {params.requested_fold} \
+            --input {params.requested_input} \
             --output_directory={params.output_directory} \
             --protein_delimiter={params.protein_delimiter} \
             --data_directory={params.data_directory} \
@@ -286,7 +292,7 @@ def update_clustering(wildcards):
         with checkpoints.cluster_sequence_length.get().output[0].open() as f:
             data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
         headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))]
         dataset.update_clustering(data=ret)
 
     return [
