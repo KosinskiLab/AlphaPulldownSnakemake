@@ -20,10 +20,12 @@ create_feature_arguments:
   --use_precomputed_msas: True
   --max_template_date: 2050-01-01
   --compress_features: True
+  --data_pipeline: alphafold2
 
 structure_inference_arguments:
   --num_predictions_per_model : 1
   --num_cycle: 3
+  --fold_backend: alphafold
 
 analyze_structure_arguments:
   --cutoff: 100.0
@@ -38,7 +40,7 @@ structure_inference_ram_bytes: 32000
 alphafold_inference_threads : 8
 alphafold_inference : >
   gres=gpu:1 partition=gpu-el8
-  qos=high constraint=gpu=3090
+  qos=normal constraint=gpu=3090
 
-prediction_container : "docker://kosinskilab/fold:latest"
-analysis_container : "docker://kosinskilab/fold_analysis:latest"
+prediction_container : "docker://kosinskilab/fold:2.1.2"
+analysis_container : "docker://kosinskilab/fold_analysis:2.1.2"
