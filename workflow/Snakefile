@@ -1,3 +1,6 @@
+here’s the full drop-in `Snakefile` with AF3 JSON support wired in:
+
+```python
 """ Snakemake pipeline for automated structure prediction using various backends.
 
     Copyright (c) 2024 European Molecular Biology Laboratory
@@ -8,7 +11,7 @@ import tempfile
 
 from sys import exit
 from os import makedirs, listdir, symlink, remove
-from os.path import abspath, join, splitext, basename
+from os.path import abspath, join, splitext, basename, exists
 
 include: "rules/common.smk"
 
@@ -17,10 +20,19 @@ configfile: "config/config.yaml"
 config["output_directory"] = abspath(config["output_directory"])
 makedirs(config["output_directory"], exist_ok = True)
 
+# decide AF2 vs AF3 outputs
+DATA_PIPELINE = config["create_feature_arguments"].get("--data_pipeline", "alphafold2").lower()
+IS_AF3 = DATA_PIPELINE in ("alphafold3", "af3")
+
+# AF2 keeps optional compression; AF3 forces plain JSON filenames as requested
 FEATURE_COMPRESSION = None
-if config["create_feature_arguments"].get("--compress_features", False):
+if (not IS_AF3) and config["create_feature_arguments"].get("--compress_features", False):
     FEATURE_COMPRESSION = "lzma"
-FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION)
+FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION) if not IS_AF3 else None
+
+def feature_name(basename: str) -> str:
+    """Return the feature filename (no directory) for a given fasta basename."""
+    return f"{basename}_af3_input.json" if IS_AF3 else f"{basename}.{FEATURE_SUFFIX}"
 
 protein_delimiter = config.get("protein_delimiter", ";")
 
@@ -64,7 +76,7 @@ total_required_files = [*required_reports]
 
 required_features = [
     join(
-        config["output_directory"], "features", f"{fasta_basename}.{FEATURE_SUFFIX}"
+        config["output_directory"], "features", feature_name(fasta_basename)
     ) for fasta_basename in dataset.unique_sequences
 ]
 if config.get("only_generate_features", False):
@@ -140,9 +152,9 @@ rule symlink_features:
         walltime = lambda wildcards, attempt: 10 * attempt,
         attempt = lambda wildcards, attempt: attempt,
     run:
-       for in_file, out_file in zip(input, output):
+        for in_file, out_file in zip(input, output):
             if exists(out_file):
-                os.remove(out_file)
+                remove(out_file)
             symlink(abspath(in_file), out_file)
 
 
@@ -150,7 +162,9 @@ rule create_features:
     input:
         join(config["output_directory"], "data", "{fasta_basename}.fasta"),
     output:
-        join(config["output_directory"], "features", "{fasta_basename}." + FEATURE_SUFFIX),
+        lambda wildcards: join(
+            config["output_directory"], "features", feature_name(wildcards.fasta_basename)
+        ),
     params:
         data_directory = config["databases_directory"],
         output_directory = join(config["output_directory"], "features"),
@@ -174,8 +188,9 @@ rule create_features:
 
 checkpoint cluster_sequence_length:
     input:
-        [join(config["output_directory"], "features", f"{feature}.{FEATURE_SUFFIX}")
-        for feature in dataset.unique_sequences
+        [
+            join(config["output_directory"], "features", feature_name(feature))
+            for feature in dataset.unique_sequences
         ],
     output:
         join(config["output_directory"], "resources", "sequence_clusters.txt"),
@@ -204,8 +219,8 @@ def lookup_features(wildcards):
         ret = {header: list(column) for header, column in zip(headers, zip(*data))}
         dataset.update_clustering(data = ret)
 
-    features = [join(
-        config["output_directory"], "features", f"{feature}.{FEATURE_SUFFIX}")
+    features = [
+        join(config["output_directory"], "features", feature_name(feature))
         for feature in dataset.sequences_by_fold[wildcards.fold]
     ]
     return features
@@ -396,3 +411,4 @@ rule generate_report:
         mv output.ipynb {params.report_dir}
         mv output.html {output}
         """
+```
