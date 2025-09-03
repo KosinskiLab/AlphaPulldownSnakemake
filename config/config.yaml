@@ -1,6 +1,6 @@
 input_files :
   - config/sample_sheet.csv
-protein_delimiter : "_"
+protein_delimiter : "+"
 
 output_directory : /scratch/vmaurer/fold_temp
 databases_directory : /scratch/AlphaFold_DBs/2.3.2
