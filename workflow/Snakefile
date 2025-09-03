@@ -127,11 +127,10 @@ rule download_uniprot:
         attempt=lambda wildcards, attempt: attempt,
     shell:
         r"""
-        temp_file=$(mktemp)
-        curl -sS -o "${temp_file}" https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta
-        echo ">{wildcards.uniprot_id}" > {output}
-        tail -n +2 "${temp_file}" >> {output}
+        curl -sS "https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta" \
+          | awk 'NR==1{print ">{wildcards.uniprot_id}"; next} NR>1' > {output}
         """
+
 
 feature_scaling = config.get("feature_create_ram_scaling", 1.1)
 base_feature_ram = config.get("feature_create_ram_bytes", 64000)
