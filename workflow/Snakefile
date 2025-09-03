@@ -125,11 +125,14 @@ rule download_uniprot:
         mem_mb=lambda wildcards, attempt: 800 * attempt,
         walltime=lambda wildcards, attempt: 10 * attempt,
         attempt=lambda wildcards, attempt: attempt,
-    shell:
-        r"""
-        curl -sS "https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta" \
-          | awk 'NR==1{print ">{wildcards.uniprot_id}"; next} NR>1' > {output}
-        """
+    shell:r"""
+        set -euo pipefail
+        temp_file=$(mktemp)
+        curl -fsS -o "${{temp_file}}" "https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta"
+        echo ">{wildcards.uniprot_id}" > {output}
+        tail -n +2 "${{temp_file}}" >> {output}
+    """
+
 
 
 feature_scaling = config.get("feature_create_ram_scaling", 1.1)
