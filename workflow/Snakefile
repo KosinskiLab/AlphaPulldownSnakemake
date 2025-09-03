@@ -1,6 +1,3 @@
-here’s the full drop-in `Snakefile` with AF3 JSON support wired in:
-
-```python
 """ Snakemake pipeline for automated structure prediction using various backends.
 
     Copyright (c) 2024 European Molecular Biology Laboratory
