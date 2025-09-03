@@ -408,4 +408,3 @@ rule generate_report:
         mv output.ipynb {params.report_dir}
         mv output.html {output}
         """
-```
