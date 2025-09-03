@@ -214,7 +214,7 @@ def lookup_features(wildcards):
         with checkpoints.cluster_sequence_length.get().output[0].open() as f:
             data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
         headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))]
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
         dataset.update_clustering(data=ret)
 
     return [
@@ -292,7 +292,7 @@ def update_clustering(wildcards):
         with checkpoints.cluster_sequence_length.get().output[0].open() as f:
             data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
         headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))]
+        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
         dataset.update_clustering(data=ret)
 
     return [
