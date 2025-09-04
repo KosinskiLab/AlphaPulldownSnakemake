@@ -1,4 +1,4 @@
-README.md A snakemake pipeline for automated structure prediction using various backends.
+A snakemake pipeline for automated structure prediction using various backends.
 
 ## Installation
 
@@ -128,9 +128,9 @@ alphafold_inference: >
 
 # Specify the backend by changing the prediction container
 # (you can also use local singularity .sif files)
-# - "docker://kosinskilab/fold" for AlphaFold2
-# - "docker://kosinskilab/alphafold3" for AlphaFold3
-# - "docker://kosinskilab/alphalink" for AlphaLink2
+# - "docker://kosinskilab/fold:2.1.2" for AlphaFold2
+# - "docker://kosinskilab/alphafold3:2.1.2" for AlphaFold3
+# - "docker://kosinskilab/alphalink:2.1.2" for AlphaLink2
 # - "/path/to/my/container.sif"
 prediction_container: "docker://kosinskilab/fold:2.1.2"
 
