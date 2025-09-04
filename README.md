@@ -1,4 +1,4 @@
-README.md A snakemake pipeline for automated structure prediction using various backends.
+A snakemake pipeline for automated structure prediction using various backends.
 
 ## Installation
 
@@ -55,7 +55,7 @@ python3 --version
     snakedeploy deploy-workflow \
       https://github.com/KosinskiLab/AlphaPulldownSnakemake \
       AlphaPulldownSnakemake \
-      --tag 2.0.4
+      --tag 2.1.2
     cd AlphaPulldownSnakemake
     ```
 
@@ -97,11 +97,13 @@ create_feature_arguments:
   --use_precomputed_msas: True  # Use precomputed MSA files if available
   --max_template_date: 2050-01-01  # Set maximum template date to include all templates
   --compress_features: False  # Do not compress generated features
+  --data_pipeline: alphafold2 # Use alphafold2 or alphafold3 data pipeline for generating fatures
 
 # Arguments for structure inference
 structure_inference_arguments:
   --num_predictions_per_model: 5  # Number of predictions per model
   --num_cycle: 24  # Number of recycles during structure prediction
+  --fold_backend: alphafold # Use alphafold2 for predictions
 
 # Arguments for structure analysis
 analyze_structure_arguments:
@@ -122,18 +124,18 @@ alphafold_inference_threads: 8
 # SLURM parameters for inference execution
 alphafold_inference: >
   gres=gpu:1 partition=gpu-el8
-  qos=high constraint=gpu=3090
+  qos=normal constraint=gpu=3090
 
 # Specify the backend by changing the prediction container
 # (you can also use local singularity .sif files)
-# - "docker://kosinskilab/fold" for AlphaFold 2
-# - "docker://kosinskilab/alphafold3" for AlphaFold 3
-# - "docker://kosinskilab/alphalink" for AlphaLink
+# - "docker://kosinskilab/fold:2.1.2" for AlphaFold2
+# - "docker://kosinskilab/alphafold3:2.1.2" for AlphaFold3
+# - "docker://kosinskilab/alphalink:2.1.2" for AlphaLink2
 # - "/path/to/my/container.sif"
-prediction_container: "docker://kosinskilab/fold:latest"
+prediction_container: "docker://kosinskilab/fold:2.1.2"
 
 # Container for structure analysis
-analysis_container: "docker://kosinskilab/fold_analysis:latest"
+analysis_container: "docker://kosinskilab/fold_analysis:2.1.2"
 ```
 
 ### input_files

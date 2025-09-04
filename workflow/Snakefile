@@ -8,23 +8,37 @@ import tempfile
 
 from sys import exit
 from os import makedirs, listdir, symlink, remove
-from os.path import abspath, join, splitext, basename
+from os.path import abspath, join, splitext, basename, exists
 
 include: "rules/common.smk"
 
-
 configfile: "config/config.yaml"
 config["output_directory"] = abspath(config["output_directory"])
-makedirs(config["output_directory"], exist_ok = True)
+makedirs(config["output_directory"], exist_ok=True)
 
+# decide AF2 vs AF3 outputs
+DATA_PIPELINE = config["create_feature_arguments"].get("--data_pipeline", "alphafold2").lower()
+IS_AF3 = DATA_PIPELINE in ("alphafold3", "af3")
+
+# AF2 keeps optional compression; AF3 forces plain JSON filenames
 FEATURE_COMPRESSION = None
-if config["create_feature_arguments"].get("--compress_features", False):
+if (not IS_AF3) and config["create_feature_arguments"].get("--compress_features", False):
     FEATURE_COMPRESSION = "lzma"
-FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION)
+
+# feature_suffix() comes from rules/common.smk
+FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION) if not IS_AF3 else None
+
+def feature_name(base: str) -> str:
+    return f"{base}_af3_input.json" if IS_AF3 else f"{base}.{FEATURE_SUFFIX}"
+
+# IMPORTANT: output patterns must be static strings (no lambdas)
+FEATURE_OUTPUT_PATTERN = (
+    "{fasta_basename}_af3_input.json" if IS_AF3 else "{fasta_basename}." + FEATURE_SUFFIX
+)
 
 protein_delimiter = config.get("protein_delimiter", ";")
 
-with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_input:
+with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp_input:
     input_files = config["input_files"]
     if isinstance(input_files, str):
         input_files = [input_files]
@@ -32,40 +46,30 @@ with tempfile.NamedTemporaryFile(mode='w+', delete=False) as tmp_input:
     process_files(
         input_files=input_files,
         output_path=tmp_input.name,
-        delimiter=protein_delimiter
+        delimiter=protein_delimiter,
     )
 
     dataset = InputParser.from_file(
         filepath=tmp_input.name,
         file_format="alphaabriss",
-        protein_delimiter=protein_delimiter
+        protein_delimiter=protein_delimiter,
     )
-
 
 ruleorder: symlink_local_files > download_uniprot > symlink_features > create_features
 
-
 required_folds = [
-    join(
-        config["output_directory"],
-        "predictions", fold, "completed_fold.txt"
-    )
+    join(config["output_directory"], "predictions", fold, "completed_fold.txt")
     for fold in dataset.fold_specifications
 ]
 required_reports = [
-    join(
-        config["output_directory"], "reports", "analysis.csv"
-    ),
-    join(
-        config["output_directory"], "reports", "report.html"
-    )
+    join(config["output_directory"], "reports", "analysis.csv"),
+    join(config["output_directory"], "reports", "report.html"),
 ]
 total_required_files = [*required_reports]
 
 required_features = [
-    join(
-        config["output_directory"], "features", f"{fasta_basename}.{FEATURE_SUFFIX}"
-    ) for fasta_basename in dataset.unique_sequences
+    join(config["output_directory"], "features", feature_name(fasta_basename))
+    for fasta_basename in dataset.unique_sequences
 ]
 if config.get("only_generate_features", False):
     total_required_files = required_features
@@ -96,32 +100,38 @@ rule symlink_local_files:
         dataset.sequences_by_origin["local"],
     output:
         [
-            join(config["output_directory"], "data", f"{splitext(basename(x))[0]}.fasta")
+            join(
+                config["output_directory"],
+                "data",
+                f"{splitext(basename(x))[0]}.fasta",
+            )
             for x in dataset.sequences_by_origin["local"]
-
         ],
     resources:
-        avg_mem = lambda wildcards, attempt: 600 * attempt,
-        mem_mb = lambda wildcards, attempt: 800 * attempt,
-        walltime = lambda wildcards, attempt: 10 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        avg_mem=lambda wildcards, attempt: 600 * attempt,
+        mem_mb=lambda wildcards, attempt: 800 * attempt,
+        walltime=lambda wildcards, attempt: 10 * attempt,
+        attempt=lambda wildcards, attempt: attempt,
     run:
-        dataset.symlink_local_files(output_directory = join(config["output_directory"], "data"))
+        dataset.symlink_local_files(
+            output_directory=join(config["output_directory"], "data")
+        )
 
 rule download_uniprot:
     output:
         join(config["output_directory"], "data", "{uniprot_id}.fasta"),
     resources:
-        avg_mem = lambda wildcards, attempt: 600 * attempt,
-        mem_mb = lambda wildcards, attempt: 800 * attempt,
-        walltime = lambda wildcards, attempt: 10 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
-    shell:"""
+        avg_mem=lambda wildcards, attempt: 600 * attempt,
+        mem_mb=lambda wildcards, attempt: 800 * attempt,
+        walltime=lambda wildcards, attempt: 10 * attempt,
+        attempt=lambda wildcards, attempt: attempt,
+    shell:r"""
+        set -euo pipefail
         temp_file=$(mktemp)
-        curl -o ${{temp_file}} https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta
+        curl -fsS -o "${{temp_file}}" "https://rest.uniprot.org/uniprotkb/{wildcards.uniprot_id}.fasta"
         echo ">{wildcards.uniprot_id}" > {output}
-        tail -n +2 ${{temp_file}} >> {output}
-        """
+        tail -n +2 "${{temp_file}}" >> {output}
+    """
 
 feature_scaling = config.get("feature_create_ram_scaling", 1.1)
 base_feature_ram = config.get("feature_create_ram_bytes", 64000)
@@ -132,39 +142,43 @@ rule symlink_features:
     output:
         expand(
             join(config["output_directory"], "features", "{feature}"),
-            feature = [basename(x) for x in precomputed_features]
+            feature=[basename(x) for x in precomputed_features],
         ),
     resources:
-        avg_mem = lambda wildcards, attempt: 600 * attempt,
-        mem_mb = lambda wildcards, attempt: 800 * attempt,
-        walltime = lambda wildcards, attempt: 10 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        avg_mem=lambda wildcards, attempt: 600 * attempt,
+        mem_mb=lambda wildcards, attempt: 800 * attempt,
+        walltime=lambda wildcards, attempt: 10 * attempt,
+        attempt=lambda wildcards, attempt: attempt,
     run:
-       for in_file, out_file in zip(input, output):
+        for in_file, out_file in zip(input, output):
             if exists(out_file):
-                os.remove(out_file)
+                remove(out_file)
             symlink(abspath(in_file), out_file)
-
 
 rule create_features:
     input:
         join(config["output_directory"], "data", "{fasta_basename}.fasta"),
     output:
-        join(config["output_directory"], "features", "{fasta_basename}." + FEATURE_SUFFIX),
+        join(
+            config["output_directory"],
+            "features",
+            FEATURE_OUTPUT_PATTERN,
+        ),
     params:
-        data_directory = config["databases_directory"],
-        output_directory = join(config["output_directory"], "features"),
-        cli_parameters = " ".join(
+        data_directory=config["databases_directory"],
+        output_directory=join(config["output_directory"], "features"),
+        cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
-        )
+        ),
     resources:
-        mem_mb = lambda wildcards, attempt: base_feature_ram * (feature_scaling ** attempt),
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
-    threads: 8, # everything is harcoded anyways ...
+        mem_mb=lambda wildcards, attempt: base_feature_ram * (feature_scaling ** attempt),
+        walltime=lambda wildcards, attempt: 1440 * attempt,
+        attempt=lambda wildcards, attempt: attempt,
+    threads: 8,  # everything is hardcoded anyways ...
     container:
-       config["prediction_container"],
-    shell:"""
+        config["prediction_container"],
+    shell:
+        r"""
         create_individual_features.py \
             --fasta_paths={input} \
             --data_dir={params.data_directory} \
@@ -174,52 +188,47 @@ rule create_features:
 
 checkpoint cluster_sequence_length:
     input:
-        [join(config["output_directory"], "features", f"{feature}.{FEATURE_SUFFIX}")
-        for feature in dataset.unique_sequences
+        [
+            join(config["output_directory"], "features", feature_name(feature))
+            for feature in dataset.unique_sequences
         ],
     output:
         join(config["output_directory"], "resources", "sequence_clusters.txt"),
     resources:
-        avg_mem = lambda wildcards, attempt: 600 * attempt,
-        mem_mb = lambda wildcards, attempt: 800 * attempt,
-        walltime = lambda wildcards, attempt: 10 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        avg_mem=lambda wildcards, attempt: 600 * attempt,
+        mem_mb=lambda wildcards, attempt: 800 * attempt,
+        walltime=lambda wildcards, attempt: 10 * attempt,
+        attempt=lambda wildcards, attempt: attempt,
     params:
-        folds = dataset.fold_specifications,
-        protein_delimiter = protein_delimiter,
-        feature_directory = join(config["output_directory"], "features"),
-        cluster_bin_size = config.get("clustering_bin_size", 150),
+        folds=dataset.fold_specifications,
+        protein_delimiter=protein_delimiter,
+        feature_directory=join(config["output_directory"], "features"),
+        cluster_bin_size=config.get("clustering_bin_size", 150),
     container:
-       config["prediction_container"],
+        config["prediction_container"],
     script:
         "scripts/cluster_sequence_length.py"
 
 def lookup_features(wildcards):
     if config.get("cluster_jobs", False):
-        cluster_data = {}
         with checkpoints.cluster_sequence_length.get().output[0].open() as f:
             data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
-
         headers = data.pop(0)
         ret = {header: list(column) for header, column in zip(headers, zip(*data))}
-        dataset.update_clustering(data = ret)
+        dataset.update_clustering(data=ret)
 
-    features = [join(
-        config["output_directory"], "features", f"{feature}.{FEATURE_SUFFIX}")
+    return [
+        join(config["output_directory"], "features", feature_name(feature))
         for feature in dataset.sequences_by_fold[wildcards.fold]
     ]
-    return features
 
 def format_clustering(wildcards):
     parameter_string = ""
     if config.get("cluster_jobs", False):
-        cluster_data = {}
         with checkpoints.cluster_sequence_length.get().output[0].open() as f:
             data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
-
         headers = data.pop(0)
         ret = {header: list(column) for header, column in zip(headers, zip(*data))}
-
         fold = wildcards.fold.split(" ")[0]
         for name, length, depth in zip(ret["name"], ret["max_seq_length"], ret["max_msa_depth"]):
             if name == fold:
@@ -227,45 +236,47 @@ def format_clustering(wildcards):
                 parameter_string += f"--desired_num_msa={depth} "
     return parameter_string
 
+def requested_input(wildcards):
+    # AF3: pass filenames (relative to --features_directory)
+    if IS_AF3:
+        names = [feature_name(f) for f in dataset.sequences_by_fold[wildcards.fold]]
+        return ",".join(names)
+    # AF2: pass bare IDs
+    return wildcards.fold.replace(" ", ",")
 
 rule structure_inference:
     input:
-        features = lookup_features,
-        cluster = join(config["output_directory"], "resources", "sequence_clusters.txt")
-            if config.get("cluster_jobs", False) else "/dev/null",
+        features=lookup_features,
+        cluster=join(config["output_directory"], "resources", "sequence_clusters.txt")
+        if config.get("cluster_jobs", False) else "/dev/null",
     output:
-        join(config["output_directory"],"predictions", "{fold}", "completed_fold.txt"),
+        join(config["output_directory"], "predictions", "{fold}", "completed_fold.txt"),
     params:
-        data_directory = config["backend_weights_directory"],
-        feature_directory = join(config["output_directory"], "features"),
-        output_directory = lambda wildcards: [
+        data_directory=config["backend_weights_directory"],
+        feature_directory=join(config["output_directory"], "features"),
+        output_directory=lambda wildcards: [
             join(config["output_directory"], "predictions", individual_fold)
             for individual_fold in wildcards.fold.split(" ")
-            ],
-        requested_fold = lambda  wildcards : wildcards.fold.replace(" ", ","),
-        protein_delimiter = protein_delimiter,
-        cli_parameters = " ".join(
+        ],
+        requested_input=requested_input,
+        protein_delimiter=protein_delimiter,
+        cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
         ),
-        clustering_format = format_clustering,
+        clustering_format=format_clustering,
     resources:
-        mem_mb = lambda wildcards, attempt:
-            config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
-        slurm = config.get("alphafold_inference", ""),
+        mem_mb=lambda wildcards, attempt: config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
+        walltime=lambda wildcards, attempt: 1440 * attempt,
+        attempt=lambda wildcards, attempt: attempt,
+        slurm=config.get("alphafold_inference", ""),
     threads:
         config["alphafold_inference_threads"],
     container:
-       config["prediction_container"],
-    shell:"""
-        #MAXRAM=$(bc <<< "$(ulimit -m) / 1024.0")
-        #GPUMEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | tail -1)
-        #export XLA_PYTHON_CLIENT_MEM_FRACTION=$(echo "scale=3; $MAXRAM / $GPUMEM" | bc)
-        #export TF_FORCE_UNIFIED_MEMORY='1'
-
+        config["prediction_container"],
+    shell:
+        r"""
         run_structure_prediction.py \
-            --input {params.requested_fold} \
+            --input {params.requested_input} \
             --output_directory={params.output_directory} \
             --protein_delimiter={params.protein_delimiter} \
             --data_directory={params.data_directory} \
@@ -276,122 +287,102 @@ rule structure_inference:
         echo "Completed" > "{output}"
         """
 
-
 def update_clustering(wildcards):
     if config.get("cluster_jobs", False):
-        cluster_data = {}
         with checkpoints.cluster_sequence_length.get().output[0].open() as f:
             data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
-
         headers = data.pop(0)
         ret = {header: list(column) for header, column in zip(headers, zip(*data))}
-        dataset.update_clustering(data = ret)
+        dataset.update_clustering(data=ret)
 
-    required_folds = [
-        join(
-            config["output_directory"],
-            "predictions", fold, "completed_fold.txt"
-        )
+    return [
+        join(config["output_directory"], "predictions", fold, "completed_fold.txt")
         for fold in dataset.fold_specifications
     ]
-    return required_folds
-
 
 rule analyze_structure:
     input:
         rules.structure_inference.output,
     output:
-        join(
-            config["output_directory"], "predictions", "{fold}", "analysis.csv"
-        ),
+        join(config["output_directory"], "predictions", "{fold}", "analysis.csv"),
     resources:
-        mem_mb = lambda wildcards, attempt: 8000 * attempt,
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        mem_mb=lambda wildcards, attempt: 8000 * attempt,
+        walltime=lambda wildcards, attempt: 1440 * attempt,
+        attempt=lambda wildcards, attempt: attempt,
     params:
-        prediction_dir = lambda wildcards: join(
+        prediction_dir=lambda wildcards: join(
             config["output_directory"], "predictions", wildcards.fold
         ),
-        fold = lambda wildcards: wildcards.fold,
-        report_dir = join(config["output_directory"], "reports"),
-        cli_parameters = " ".join(
+        fold=lambda wildcards: wildcards.fold,
+        report_dir=join(config["output_directory"], "reports"),
+        cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
         ),
     container:
-       config["analysis_container"],
-    shell:"""
+        config["analysis_container"],
+    shell:
+        r"""
         tmpdir=$(mktemp -d)
-
-        cd $tmpdir
-        ln -s {params.prediction_dir} $tmpdir/{params.fold}
+        cd "$tmpdir"
+        ln -s {params.prediction_dir} "$tmpdir/{params.fold}"
         get_good_inter_pae.py \
-            --output_dir=$tmpdir \
+            --output_dir="$tmpdir" \
             {params.cli_parameters}
-
         touch predictions_with_good_interpae.csv
         mv predictions_with_good_interpae.csv {output}
-        rm -rf $tmpdir
+        rm -rf "$tmpdir"
         """
 
 def update_statistics(wildcards):
-    required_folds = [
-        join(
-            config["output_directory"],
-            "predictions", fold, "analysis.csv"
-        )
+    return [
+        join(config["output_directory"], "predictions", fold, "analysis.csv")
         for fold in dataset.fold_specifications
     ]
-    return required_folds
 
 rule merge_analyses:
     input:
         update_statistics,
     output:
-        join(
-            config["output_directory"], "reports", "analysis.csv"
-        ),
+        join(config["output_directory"], "reports", "analysis.csv"),
     resources:
-        mem_mb = lambda wildcards, attempt: 2000 * attempt,
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        mem_mb=lambda wildcards, attempt: 2000 * attempt,
+        walltime=lambda wildcards, attempt: 1440 * attempt,
+        attempt=lambda wildcards, attempt: attempt,
     params:
-        prediction_dir = join(config["output_directory"], "predictions"),
+        prediction_dir=join(config["output_directory"], "predictions"),
     container:
-       config["analysis_container"],
-    shell:"""
+        config["analysis_container"],
+    shell:
+        r"""
         head -n 1 {input[0]} > {output}
-
         for f in {input}; do
             tail -n +2 "$f" >> {output}
         done
         """
 
-
 rule generate_report:
     input:
         update_clustering,
     output:
-        join(
-            config["output_directory"], "reports", "report.html"
-        ),
+        join(config["output_directory"], "reports", "report.html"),
     resources:
-        mem_mb = lambda wildcards, attempt: 32000 * attempt,
-        walltime = lambda wildcards, attempt: 1440 * attempt,
-        attempt = lambda wildcards, attempt: attempt,
+        mem_mb=lambda wildcards, attempt: 32000 * attempt,
+        walltime=lambda wildcards, attempt: 1440 * attempt,
+        attempt=lambda wildcards, attempt: attempt,
     params:
-        prediction_dir = join(config["output_directory"], "predictions"),
-        report_dir = join(config["output_directory"], "reports"),
-        cli_parameters = " ".join(
+        prediction_dir=join(config["output_directory"], "predictions"),
+        report_dir=join(config["output_directory"], "reports"),
+        cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["generate_report_arguments"].items()]
         ),
     container:
-       config["prediction_container"],
-    shell:"""
+        config["prediction_container"],
+    shell:
+        r"""
         cd {params.prediction_dir}
         create_notebook.py \
             --output_dir={params.prediction_dir} \
             {params.cli_parameters}
-
         jupyter nbconvert --to html --execute output.ipynb
         mv output.ipynb {params.report_dir}
         mv output.html {output}
