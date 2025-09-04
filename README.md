@@ -1,142 +1,74 @@
-README.md A snakemake pipeline for automated structure prediction using various backends.
+# AlphaPulldownSnakemake
+
+A Snakemake pipeline for automated structure prediction using various backends (AlphaFold2, AlphaFold3, AlphaLink2).
+
+---
 
 ## Installation
 
-Before installation, make sure your python version is at least 3.10.
-
 ```bash
-python3 --version
+# Create environment and activate
+mamba create -n AlphaPulldownSnakemake -c conda-forge python=3.12 \
+  snakemake snakemake-executor-plugin-slurm snakedeploy pulp click
+mamba activate AlphaPulldownSnakemake
 ```
 
-1. **Install Dependencies**
+### Singularity
 
-    ```bash
-    pip install snakemake==7.32.4 snakedeploy==0.10.0 pulp==2.7 click==8.1 cookiecutter==2.6
-    ```
+Ensure Singularity is installed and available on your system.
+See the [official installation guide](https://docs.sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps).
 
-2. **Snakemake Cluster Setup**
+---
 
-    In order to allow snakemake to interface with a compute cluster, we are going to use the [Snakemake-Profile for SLURM](https://github.com/Snakemake-Profiles/slurm). If you are not working on a SLURM cluster you can find profiles for different architectures [here](https://github.com/Snakemake-Profiles/slurm). The following will create a profile that can be used with snakemake and prompt you for some additional information.
+## Deploy workflow
 
-    ```bash
-    git clone https://github.com/Snakemake-Profiles/slurm.git
-    profile_dir="${HOME}/.config/snakemake"
-    mkdir -p "$profile_dir"
-    template="gh:Snakemake-Profiles/slurm"
-    cookiecutter --output-dir "$profile_dir" "$template"
-    ```
+```bash
+snakedeploy deploy-workflow https://github.com/KosinskiLab/AlphaPulldownSnakemake \
+  AlphaPulldownSnakemake --tag 2.1.2
+cd AlphaPulldownSnakemake
+```
 
-    During the setup process, you will be prompted to answer several configuration questions. Below are the questions and the recommended responses:
-
-    - `profile_name [slurm]:` **slurm_noSidecar**
-    - `Select use_singularity:` **1 (False)**
-    - `Select use_conda:` **1 (False)**
-    - `jobs [500]:` *(Press Enter to accept default)*
-    - `restart_times [0]:` *(Press Enter to accept default)*
-    - `max_status_checks_per_second [10]:` *(Press Enter to accept default)*
-    - `max_jobs_per_second [10]:` *(Press Enter to accept default)*
-    - `latency_wait [5]:` **30**
-    - `Select print_shell_commands:` **1 (False)**
-    - `sbatch_defaults []:` **qos=low nodes=1**
-    - `Select cluster_sidecar:` **2 (no)**
-    - `cluster_name []:` *(Press Enter to leave blank)*
-    - `cluster_jobname [%r_%w]:` *(Press Enter to accept default)*
-    - `cluster_logpath [logs/slurm/%r/%j]:` *(Press Enter to accept default)*
-    - `cluster_config []:` *(Press Enter to leave blank)*
-
-    After responding to these prompts, your Slurm profile named *slurm_noSidecar* for Snakemake will be configured as specified.
-
-3. **Singularity (Probably Installed Already)**: This pipeline makes use of containers for reproducibility. If you are working on the EMBL cluster singularity is already installed and you can skip this step. Otherwise, please install Singularity using the [official Singularity guide](https://sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps).
-
-
-4. **Download The Pipeline**:
-    This will download the version specified by '--tag' of the snakemake pipeline and create the repository AlphaPulldownSnakemake, or any other name you choose.
-    ```bash
-    snakedeploy deploy-workflow \
-      https://github.com/KosinskiLab/AlphaPulldownSnakemake \
-      AlphaPulldownSnakemake \
-      --tag 2.0.4
-    cd AlphaPulldownSnakemake
-    ```
+---
 
 ## Configuration
 
-Adjust `config/config.yaml` for your particular use case:
+Edit `config/config.yaml` (minimal example):
+
 ```yaml
-# List of input sample sheets
 input_files:
   - config/sample_sheet.csv
 
-# Delimiter used in protein names
-protein_delimiter: "_"
-
-# Directory where all output files will be stored
-output_directory: /path/to/output/directory
-
-# Path to AlphaFold database containing required weights and files
-# Note prior to version 2.0.4 this was called alphafold_data_directory
+output_directory: /path/to/output
 databases_directory: /scratch/AlphaFold_DBs/2.3.2
 
-# Directories containing precomputed features
-feature_directory:
-  - "/path/to/directory/with/features1"
-  - "/path/to/directory/with/features2"
-
-# If True, only generate features without running structure prediction
-only_generate_features: False
-
-# Whether to enable job clustering
-cluster_jobs: False
-
-# Bin size for clustering
-clustering_bin_size: 150
-
-# Arguments for feature generation
 create_feature_arguments:
-  --save_msa_files: False  # Save multiple sequence alignment (MSA) files
-  --use_precomputed_msas: True  # Use precomputed MSA files if available
-  --max_template_date: 2050-01-01  # Set maximum template date to include all templates
-  --compress_features: False  # Do not compress generated features
+  --use_precomputed_msas: True
+  --max_template_date: 2050-01-01
+  --compress_features: False
+  --data_pipeline: alphafold2   # or alphafold3
 
-# Arguments for structure inference
 structure_inference_arguments:
-  --num_predictions_per_model: 5  # Number of predictions per model
-  --num_cycle: 24  # Number of recycles during structure prediction
+  --num_predictions_per_model: 5
+  --num_cycle: 24
+  --fold_backend: alphafold     # or alphafold3 or alphalink
 
-# Arguments for structure analysis
-analyze_structure_arguments:
-  --cutoff: 100.0  # Cutoff for structure analysis
-
-# Arguments for report generation
-generate_report_arguments:
-  --cutoff: 100.0  # Cutoff for structure report generation
-
-# Memory allocation settings for feature creation and structure inference
-feature_create_ram_bytes: 64000
-feature_create_ram_scaling: 1.1
-structure_inference_ram_bytes: 32000
-
-# Number of threads for AlphaFold inference
 alphafold_inference_threads: 8
-
-# SLURM parameters for inference execution
 alphafold_inference: >
-  gres=gpu:1 partition=gpu-el8
-  qos=high constraint=gpu=3090
+  gres=gpu:1 partition=gpu-el8 qos=normal constraint=gpu=3090
 
-# Specify the backend by changing the prediction container
-# (you can also use local singularity .sif files)
-# - "docker://kosinskilab/fold" for AlphaFold 2
-# - "docker://kosinskilab/alphafold3" for AlphaFold 3
-# - "docker://kosinskilab/alphalink" for AlphaLink
-# - "/path/to/my/container.sif"
-prediction_container: "docker://kosinskilab/fold:latest"
+# Choose backend container (or a local .sif path)
+prediction_container: "docker://kosinskilab/fold:2.1.2"        # AF2
+# prediction_container: "docker://kosinskilab/alphafold3:2.1.2" # AF3
+# prediction_container: "docker://kosinskilab/alphalink:2.1.2" # AL2
+analysis_container: "docker://kosinskilab/fold_analysis:2.1.2"
 
-# Container for structure analysis
-analysis_container: "docker://kosinskilab/fold_analysis:latest"
+only_generate_features: False
 ```
 
-### input_files
+---
+
+## Input format
+
 This variable holds the path to your sample sheet, where each line corresponds to a folding job. For this pipeline we use the following format specification:
 
 ```
@@ -184,42 +116,21 @@ input_files :
   - ...
 ```
 
-### alphafold_data_directory
-This is the path to your alphafold database.
+---
 
-### output_directory
-Snakemake will write the pipeline output to this directory. If it does not exist, it will be created.
-
-### save_msa, use_precomputed_msa, predictions_per_model, number_of_recycles, report_cutoff
-Command line arguments that were previously passed to AlphaPulldown's run_multimer_jobs.py and create_notebook.py (report_cutoff).
-
-### alphafold_inference_threads, alphafold_inference
-Slurm specific parameters that do not need to be modified by non-expert users.
-
-### only_generate_features
-If set to True, stops after generating features and does not perform structure prediction and reporting.
-
-## Execution
-
-After following the Installation and Configuration steps, you are now ready to run the snakemake pipeline. To do so, navigate into the cloned pipeline directory and run:
+## Run
 
 ```bash
-snakemake \
-  --use-singularity \
-  --singularity-args "-B /scratch:/scratch \
-    --bind /my/disk:/my/disk \
-    --nv " \
-  --jobs 200 \
-  --restart-times 5 \
-  --profile slurm_noSidecar \
-  --rerun-incomplete \
-  --rerun-triggers mtime \
-  --latency-wait 30 \
-  --keep-going \
-  -n
-
+snakemake --executor slurm --use-singularity \
+  --singularity-args "--bind /scratch:/scratch --bind /my/disk:/my/disk --nv" \
+  --jobs 10 --restart-times 2 --rerun-incomplete --rerun-triggers mtime \
+  --latency-wait 600 --keep-going -n
 ```
 
+Remove `-n` to actually execute.
+Adjust `--jobs` and `--latency-wait` depending on your cluster/filesystem.
+
+---
 Here's a breakdown of what each argument does:
 
 - `--use-singularity`: Enables the use of Singularity containers. This allows for reproducibility and isolation of the pipeline environment.
@@ -244,3 +155,9 @@ Here's a breakdown of what each argument does:
 Executing the command above will submit the following jobs to the cluster:
 
 ![Snakemake rulegraph](static/dag.png)
+
+## Tips
+
+* Use `--data_pipeline: alphafold3` and switch `prediction_container` for AF3 inputs/outputs.
+* Set `only_generate_features: True` to stop after feature generation.
+* Bind extra paths in `--singularity-args` if your data lives outside the default mount points.
