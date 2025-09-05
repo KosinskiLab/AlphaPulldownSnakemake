@@ -9,7 +9,7 @@ A Snakemake pipeline for automated structure prediction using various backends (
 ```bash
 # Create environment and activate
 mamba create -n AlphaPulldownSnakemake -c conda-forge python=3.12 \
-  snakemake snakemake-executor-plugin-slurm snakedeploy pulp click
+  snakemake snakemake-executor-plugin-slurm snakedeploy pulp click coincbc
 mamba activate AlphaPulldownSnakemake
 ```
 
