@@ -68,7 +68,7 @@ input_files:
   - config/sample_sheet.csv
 
 # Delimiter used in protein names
-protein_delimiter: "_"
+protein_delimiter: "+"
 
 # Directory where all output files will be stored
 output_directory: /path/to/output/directory
@@ -143,23 +143,23 @@ analysis_container: "docker://kosinskilab/fold_analysis:2.1.2"
 This variable holds the path to your sample sheet, where each line corresponds to a folding job. For this pipeline we use the following format specification:
 
 ```
-protein:N:start-stop[_protein:N:start-stop]*
+protein:N:start-stop[+protein:N:start-stop]*
 ```
 
 where protein is a path to a file with '.fasta' extension or uniprot ID, N is the number of monomers for this particular protein and start and stop are the residues that should be predicted. However, only protein is required, N, start and stop can be omitted. Hence the following folding jobs for the protein example containing residues 1-50 are equivalent:
 
 ```
 example:2
-example_example
+example+example
 example:2:1-50
-example:1-50_example:1-50
-example:1:1-50_example:1:1-50
+example:1-50+example:1-50
+example:1:1-50+example:1:1-50
 ```
 
 This format similarly extends for the folding of heteromers:
 
 ```
-example1_example2
+example1+example2
 ```
 
 Assuming you have two sample sheets config/sample_sheet1.csv and config/sample_sheet2.csv. The following would be equivalent to computing all versus all in sample_sheet1.csv:
