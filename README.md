@@ -121,10 +121,11 @@ input_files :
 ## Run
 
 ```bash
-snakemake --executor slurm --use-singularity \
+snakemake --executor slurm --use-singularity --rerun-incomplete --rerun-triggers mtime --latency-wait 600 --keep-going --workflow-profile workflow/profiles/default \
   --singularity-args "--bind /scratch:/scratch --bind /my/disk:/my/disk --nv" \
-  --jobs 10 --restart-times 2 --rerun-incomplete --rerun-triggers mtime \
-  --latency-wait 600 --keep-going -n
+  --jobs 10 \
+  --restart-times 5 \
+  -n
 ```
 
 Remove `-n` to actually execute.
