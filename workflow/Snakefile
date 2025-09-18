@@ -268,7 +268,6 @@ rule structure_inference:
         mem_mb=lambda wildcards, attempt: config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
         runtime=lambda wildcards, attempt: 1440 * attempt,
         attempt=lambda wildcards, attempt: attempt,
-        slurm=config.get("alphafold_inference", ""),
     threads:
         config["alphafold_inference_threads"],
     container:
