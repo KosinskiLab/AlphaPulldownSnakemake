@@ -53,8 +53,6 @@ structure_inference_arguments:
   --fold_backend: alphafold     # or alphafold3 or alphalink
 
 alphafold_inference_threads: 8
-alphafold_inference: >
-  gres=gpu:1 partition=gpu-el8 qos=normal constraint=gpu=3090
 
 # Choose backend container (or a local .sif path)
 prediction_container: "docker://kosinskilab/fold:2.1.2"        # AF2
