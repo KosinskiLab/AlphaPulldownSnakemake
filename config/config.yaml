@@ -38,6 +38,7 @@ feature_create_ram_scaling : 1.1
 structure_inference_ram_bytes: 32000
 
 alphafold_inference_threads : 8
+alphafold_inference : "--gres=gpu:3090:1 --partition=gpu --qos=normal"
 
 prediction_container : "docker://kosinskilab/fold:2.1.2"
 analysis_container : "docker://kosinskilab/fold_analysis:2.1.2"

@@ -265,7 +265,10 @@ rule structure_inference:
         ),
         clustering_format=format_clustering,
     resources:
-        slurm_extra="--partition=gpu-el8 --gres=gpu:1",
+        slurm_extra=config.get(
+                "alphafold_inference",
+                        config.get("slurm_extra", "--partition=gpu --gres=gpu:1")
+                            ),
         mem_mb=lambda wildcards, attempt: config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
         runtime=lambda wildcards, attempt: 1440 * attempt,
         attempt=lambda wildcards, attempt: attempt,
