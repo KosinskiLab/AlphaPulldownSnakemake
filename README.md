@@ -1,10 +1,10 @@
 # AlphaPulldownSnakemake
 
-A Snakemake pipeline for automated structure prediction using various backends (AlphaFold2, AlphaFold3, AlphaLink2).
+AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Snakemake pipeline. This lets you focus entirely on **what** you want to compute, rather than **how** to manage dependencies, versioning, and cluster execution.
 
----
+## 1. Installation
 
-## Installation
+Install required dependencies:
 
 ```bash
 mamba create -n AlphaPulldownSnakemake -c conda-forge -c bioconda python=3.12 \
@@ -12,208 +12,184 @@ mamba create -n AlphaPulldownSnakemake -c conda-forge -c bioconda python=3.12 \
 mamba activate AlphaPulldownSnakemake
 ```
 
-### Singularity
+That's it, you're done!
 
-Ensure Singularity is installed and available on your system.
-See the [official installation guide](https://docs.sylabs.io/guides/latest/user-guide/quick_start.html#quick-installation-steps).
+## 2. Configuration
 
----
+### Create a working directory
 
-## Deploy workflow
+Create a new processing directory for your project:
 
 ```bash
-snakedeploy deploy-workflow https://github.com/KosinskiLab/AlphaPulldownSnakemake \
-  AlphaPulldownSnakemake --tag 2.1.3
+snakedeploy deploy-workflow \
+  https://github.com/KosinskiLab/AlphaPulldownSnakemake \
+  AlphaPulldownSnakemake \
+  --tag 2.1.3
 cd AlphaPulldownSnakemake
 ```
 
----
+### Setup protein folding jobs
 
-## Configuration
+Create a sample sheet `folds.txt` listing the proteins you want to fold. The simplest format uses UniProt IDs:
 
-Adjust `config/config.yaml` for your particular use case:
+```
+P01258+P01579
+P01258
+P01579
+```
+
+Each line represents one folding job:
+- `P01258+P01579` - fold these two proteins together as a complex
+- `P01258` - fold this protein as a monomer
+- `P01579` - fold this protein as a monomer
+
+<details>
+<summary>Advanced protein specification options</summary>
+
+You can also specify:
+- **FASTA file paths** instead of UniProt IDs: `/path/to/protein.fasta`
+- **Specific residue regions**: `Q8I2G6:1-100` (residues 1-100 only)
+- **Multiple copies**: `Q8I2G6:2` (dimer of the same protein)
+- **Combinations**: `Q8I2G6:2:1-100+Q8I5K4` (dimer of residues 1-100 plus another protein)
+
+</details>
+
+### Configure input files
+
+Edit `config/config.yaml` and set the path to your sample sheet:
+
 ```yaml
-# List of input sample sheets
 input_files:
-  - config/sample_sheet.csv
-
-# Delimiter used in protein names
-protein_delimiter: "+"
-
-# Directory where all output files will be stored
-output_directory: /path/to/output/directory
-
-# Path to AlphaFold database containing required (backend) weights and files
-# Note prior to version 2.0.4 this was called alphafold_data_directory
-databases_directory: /scratch/AlphaFold_DBs/2.3.2
-backend_weights_directory : /scratch/AlphaFold_DBs/2.3.2
-
-# Directories containing precomputed features
-feature_directory:
-  - "/path/to/directory/with/features1"
-  - "/path/to/directory/with/features2"
-
-# If True, only generate features without running structure prediction
-only_generate_features: False
-
-# Whether to enable job clustering
-cluster_jobs: False
-
-# Bin size for clustering
-clustering_bin_size: 150
-
-# Arguments for feature generation
-create_feature_arguments:
-  --save_msa_files: False  # Save multiple sequence alignment (MSA) files
-  --use_precomputed_msas: True  # Use precomputed MSA files if available
-  --max_template_date: 2050-01-01  # Set maximum template date to include all templates
-  --compress_features: False  # Do not compress generated features
-  --data_pipeline: alphafold2 # Use alphafold2 or alphafold3 data pipeline for generating fatures
-
-# Arguments for structure inference
-structure_inference_arguments:
-  --num_predictions_per_model: 5  # Number of predictions per model
-  --num_cycle: 24  # Number of recycles during structure prediction
-  --fold_backend: alphafold # Use alphafold2 for predictions
-
-# Arguments for structure analysis
-analyze_structure_arguments:
-  --cutoff: 100.0  # Cutoff for structure analysis
-
-# Arguments for report generation
-generate_report_arguments:
-  --cutoff: 100.0  # Cutoff for structure report generation
-
-# Memory allocation settings for feature creation and structure inference
-feature_create_ram_bytes: 64000
-feature_create_ram_scaling: 1.1
-structure_inference_ram_bytes: 32000
-
-# Number of threads for AlphaFold inference
-alphafold_inference_threads: 8
-
-# SLURM parameters for inference execution
-alphafold_inference: >
-  gres=gpu:1 partition=gpu-el8
-  qos=normal constraint=gpu=3090
-
-# Specify the backend by changing the prediction container
-# (you can also use local singularity .sif files)
-# - "docker://kosinskilab/fold:2.1.2" for AlphaFold2
-# - "docker://kosinskilab/alphafold3:2.1.2" for AlphaFold3
-# - "docker://kosinskilab/alphalink:2.1.2" for AlphaLink2
-# - "/path/to/my/container.sif"
-prediction_container: "docker://kosinskilab/fold:2.1.2"
-
-# Container for structure analysis
-analysis_container: "docker://kosinskilab/fold_analysis:2.1.2"
+  - "folds.txt"
 ```
 
-### input_files
-This variable holds the path to your sample sheet, where each line corresponds to a folding job. For this pipeline we use the following format specification:
+### Setup pulldown experiments
+
+If you want to test which proteins from one group interact with proteins from another group, create a second file `baits.txt`:
 
 ```
-protein:N:start-stop[+protein:N:start-stop]*
+Q8I2G6
 ```
 
-where protein is a path to a file with '.fasta' extension or uniprot ID, N is the number of monomers for this particular protein and start and stop are the residues that should be predicted. However, only protein is required, N, start and stop can be omitted. Hence the following folding jobs for the protein example containing residues 1-50 are equivalent:
+And update your config:
 
-```
-example:2
-example+example
-example:2:1-50
-example:1-50+example:1-50
-example:1:1-50+example:1:1-50
+```yaml
+input_files:
+  - "folds.txt"
+  - "baits.txt"
 ```
 
-This format similarly extends for the folding of heteromers:
+This will test all combinations: every protein in `folds.txt` paired with every protein in `baits.txt`.
 
-```
-example1+example2
-```
+<details>
+<summary>Multi-file pulldown experiments</summary>
 
-Assuming you have two sample sheets config/sample_sheet1.csv and config/sample_sheet2.csv. The following would be equivalent to computing all versus all in sample_sheet1.csv:
+You can extend this logic to create complex multi-partner interaction screens by adding more input files. For example, with three files:
 
-```
-input_files :
-  - config/sample_sheet1.csv
-  - config/sample_sheet1.csv
-```
-
-while the snippet below would be equivalent to computing the pulldown between sample_sheet1.csv and sample_sheet2.csv
-
-```
-input_files :
-  - config/sample_sheet1.csv
-  - config/sample_sheet2.csv
+```yaml
+input_files:
+  - "proteins_A.txt"  # 5 proteins
+  - "proteins_B.txt"  # 3 proteins
+  - "proteins_C.txt"  # 2 proteins
 ```
 
-This format can be extended to as many files as you would like, but keep in mind the number of folds will increase dramatically.
+This will generate all possible combinations across the three groups, creating 5×3×2 = 30 different folding jobs. Each job will contain one protein from each file, allowing you to systematically explore higher-order protein complex formation.
 
-```
-input_files :
-  - config/sample_sheet1.csv
-  - config/sample_sheet2.csv
-  - ...
-```
+**Note**: The number of combinations grows multiplicatively, so be mindful of computational costs with many files.
 
-### alphafold_data_directory
-This is the path to your alphafold database.
+</details>
 
-### output_directory
-Snakemake will write the pipeline output to this directory. If it does not exist, it will be created.
+## 3. Execution
 
-### save_msa, use_precomputed_msa, predictions_per_model, number_of_recycles, report_cutoff
-Command line arguments that were previously passed to AlphaPulldown's run_multimer_jobs.py and create_notebook.py (report_cutoff).
-
-### alphafold_inference_threads, alphafold_inference
-Slurm specific parameters that do not need to be modified by non-expert users.
-
-### only_generate_features
-If set to True, stops after generating features and does not perform structure prediction and reporting.
-
----
-
-## Run
+Run the pipeline locally:
 
 ```bash
-snakemake --executor slurm --use-singularity --rerun-incomplete --rerun-triggers mtime --latency-wait 600 --keep-going \
-  --singularity-args "--bind /scratch:/scratch --bind /my/disk:/my/disk --nv" \
-  --jobs 10 \
-  --restart-times 5 \
-  -n
+snakemake --use-singularity --cores 4
 ```
 
-Remove `-n` to actually execute.
-Adjust `--jobs` and `--latency-wait` depending on your cluster/filesystem.
+<details>
+<summary>Cluster execution</summary>
+
+For running on a SLURM cluster, use the executor plugin:
+
+```bash
+screen -S snakemake_session
+snakemake \
+  --executor slurm \
+  --use-singularity \
+  --jobs 200 \
+  --restart-times 5 \
+  --rerun-incomplete \
+  --rerun-triggers mtime \
+  --latency-wait 30
+```
+
+Detach with `Ctrl + A` then `D`. Reattach later with `screen -r snakemake_session`.
+
+</details>
+
+## 4. Results
+
+After completion, you'll find:
+- **Predicted structures** in PDB/CIF format in the output directory
+- **Interactive Jupyter notebook** with 3D visualizations and quality plots
+- **Results table** with confidence scores and interaction metrics
+
+Open the Jupyter notebook with:
+```bash
+jupyter-lab output/reports/output.ipynb
+```
 
 ---
-Here's a breakdown of what each argument does:
-- `--executor slurm`: Use [Snakemake executor plugin](https://snakemake.github.io/snakemake-plugin-catalog/plugins/executor/slurm.html) for submitting jobs to a SLURM cluster.
 
-- `--use-singularity`: Enables the use of Singularity containers. This allows for reproducibility and isolation of the pipeline environment.
+## Advanced Configuration
 
-- `--singularity-args`: Specifies arguments passed directly to Singularity. In the provided example:
-  - `--bind /scratch:/scratch` and `--bind /my/disk:/my/disk`: These are bind mount points. They make directories from your host system accessible within the Singularity container. `--nv` ensures the container can make use of the hosts GPUs.
+### Using precomputed features
 
-- `--rerun-triggers mtime`: Reruns a job if a specific file (trigger) has been modified more recently than the job's output. Here, `mtime` checks for file modification time.
+If you have precomputed protein features, specify the directory:
 
-- `--jobs 10`: Allows up to 10 jobs to be submitted to the cluster simultaneously. For the averaged sized protein complexes on the EMBL cluster (within not too busy periods) you can use up to 400 jobs simultaneously.
+```yaml
+feature_directory:
+  - "/path/to/directory/with/features/"
+```
 
-- `--restart-times 5`: Specifies that jobs can be automatically restarted up to 5 times if they fail.
+> **Note**: If your features are compressed, set `compress-features: True` in the config.
 
-- `--rerun-incomplete`: Forces the rerun of any jobs that were left incomplete in previous Snakemake runs.
+### Using CCP4 for analysis
 
-- `--latency-wait 600`: Waits for 600 seconds after a step finishes to check for the existence of expected output files. This can be useful in file-systems with high latencies.
+Download and install CCP4, then update your config:
 
-- `-n`: Dry-run flag. This makes Snakemake display the commands it would run without actually executing them. It's useful for testing. To run the pipeline for real, simply remove this flag.
+```yaml
+analysis_container: "/path/to/fold_analysis_2.1.2_withCCP4.sif"
+```
 
-Executing the command above will submit the following jobs to the cluster:
+### Changing folding backends
 
-![Snakemake rulegraph](static/dag.png)
+To use AlphaFold3 or other backends:
 
-## Tips
+```yaml
+structure_inference_arguments:
+  --fold_backend: alphafold3
+  --<other-flags>
+```
 
-* Use `--data_pipeline: alphafold3` and switch `prediction_container` for AF3 inputs/outputs.
-* Set `only_generate_features: True` to stop after feature generation.
-* Bind extra paths in `--singularity-args` if your data lives outside the default mount points.
+> **Note**: AlphaPulldown supports: alphafold, alphafold3, alphalink, and unifold backends.
+
+### Database configuration
+
+Set the path to your AlphaFold databases:
+
+```yaml
+databases_directory: "/path/to/alphafold/databases"
+```
+
+### Performance tuning
+
+Adjust computational parameters:
+
+```yaml
+save_msa: False
+use_precomputed_msa: False
+predictions_per_model: 1
+number_of_recycles: 3
+```
