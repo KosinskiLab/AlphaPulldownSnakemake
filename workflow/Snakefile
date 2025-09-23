@@ -5,7 +5,8 @@
     Authors: Valentin Maurer, Dingquan Yu <name.surname@embl-hamburg.de>
 """
 import tempfile
-
+import os
+from pathlib import Path
 from sys import exit
 from os import makedirs, listdir, symlink, remove
 from os.path import abspath, join, splitext, basename, exists
@@ -15,6 +16,53 @@ include: "rules/common.smk"
 configfile: "config/config.yaml"
 config["output_directory"] = abspath(config["output_directory"])
 makedirs(config["output_directory"], exist_ok=True)
+
+def _add(p, acc):
+    try:
+        rp = Path(p).expanduser().resolve()
+        if rp.exists():
+            acc.add(str(rp))
+            # also bind the parent so relative paths/symlinks remain valid
+            acc.add(str(rp.parent))
+    except Exception:
+        pass
+
+bind_paths = set()
+
+# always bind the project root and current workdir
+_add(Path(__file__).parent, bind_paths)
+_add(Path.cwd(), bind_paths)
+
+# output dir and parent
+_add(config["output_directory"], bind_paths)
+_add(Path(config["output_directory"]).parent, bind_paths)
+
+# common config paths if present
+for key in ("databases_directory", "backend_weights_directory", "features_directory"):
+    if key in config:
+        _add(config[key], bind_paths)
+
+# optional list of external feature directories
+for p in config.get("feature_directory", []):
+    _add(p, bind_paths)
+
+# input files (CSV/FASTA etc.). If it's a list, include each file's dir
+_input_files = config.get("input_files", [])
+if isinstance(_input_files, (str, Path)):
+    _input_files = [_input_files]
+for p in _input_files:
+    _add(Path(p).parent, bind_paths)
+
+# Make a sorted, unique bind string like /x:/x,/y:/y
+bind_spec = ",".join(f"{p}:{p}" for p in sorted(bind_paths))
+
+# Only set if not already provided by user
+os.environ.setdefault("SINGULARITY_BIND", bind_spec)
+os.environ.setdefault("APPTAINER_BIND", bind_spec)
+
+# Enable GPU access by default; user can override
+os.environ.setdefault("SINGULARITY_ARGS", "--nv")
+os.environ.setdefault("APPTAINER_NV", "1")
 
 # decide AF2 vs AF3 outputs
 DATA_PIPELINE = config["create_feature_arguments"].get("--data_pipeline", "alphafold2").lower()
