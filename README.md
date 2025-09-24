@@ -7,9 +7,9 @@ AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Sn
 Install required dependencies:
 
 ```bash
-mamba create -n AlphaPulldownSnakemake -c conda-forge -c bioconda python=3.12 \
+mamba create -n snake -c conda-forge -c bioconda python=3.12 \
   snakemake snakemake-executor-plugin-slurm snakedeploy pulp click coincbc
-mamba activate AlphaPulldownSnakemake
+mamba activate snake
 ```
 
 That's it, you're done!
@@ -116,12 +116,9 @@ For running on a SLURM cluster, use the executor plugin:
 screen -S snakemake_session
 snakemake \
   --executor slurm \
-  --use-singularity \
+  --profile config/profiles/slurm \
   --jobs 200 \
-  --restart-times 5 \
-  --rerun-incomplete \
-  --rerun-triggers mtime \
-  --latency-wait 30
+  --restart-times 5
 ```
 
 Detach with `Ctrl + A` then `D`. Reattach later with `screen -r snakemake_session`.
