@@ -1,0 +1,18 @@
+executor: slurm
+
+use-singularity: true
+
+# forward the binds/NV flags your Snakefile computes
+envvars:
+  - APPTAINER_BINDPATH
+  - SINGULARITY_BINDPATH
+  - APPTAINER_NV
+  - SINGULARITY_NV
+
+
+printshellcmds: true
+rerun-incomplete: true
+rerun-triggers: mtime
+latency-wait: 600
+slurm-logdir: "slurm-logs"
+

@@ -6,7 +6,7 @@ input_files:
 protein_delimiter: "+"
 
 # Directory where all output files will be stored
-output_directory: ./temp_fold/
+output_directory: ./temp_fold2/
 
 # Path to AlphaFold databases and to backend weights
 # Note prior to version 2.0.4 these were called alphafold_data_directory
