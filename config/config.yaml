@@ -1,46 +1,72 @@
-input_files :
+# List of input sample sheets
+input_files:
   - config/sample_sheet.csv
-protein_delimiter : "+"
 
-output_directory : /scratch/vmaurer/fold_temp
-databases_directory : /scratch/AlphaFold_DBs/2.3.2
+# Delimiter used in protein names
+protein_delimiter: "+"
+
+# Directory where all output files will be stored
+output_directory: ./temp_fold2/
+
+# Path to AlphaFold databases and to backend weights
+# Note prior to version 2.0.4 these were called alphafold_data_directory
+databases_directory: /scratch/AlphaFold_DBs/2.3.2
 backend_weights_directory : /scratch/AlphaFold_DBs/2.3.2
 
-feature_directory :
-  - "abc"
-  - "def"
+# Directories containing precomputed features
+feature_directory:
+  - "/path/to/directory/with/features1"
+  - "/path/to/directory/with/features2"
 
+# If True, only generate features without running structure prediction
 only_generate_features: False
+
+# Whether to enable job clustering
 cluster_jobs: False
+
+# Bin size for clustering
 clustering_bin_size: 150
 
-
+# Arguments for feature generation
 create_feature_arguments:
-  --save_msa_files: False
-  --use_precomputed_msas: True
-  --max_template_date: 2050-01-01
-  --compress_features: True
-  --data_pipeline: alphafold2
+  --save_msa_files: False  # Do not save multiple sequence alignment (MSA) files
+  --use_precomputed_msas: True  # Use precomputed MSA files if available
+  --max_template_date: 2050-01-01  # Set maximum template date to include all templates
+  --compress_features: True  # Compress generated features
+  --data_pipeline: alphafold2 # Use alphafold2 or alphafold3 data pipeline for generating features
 
+# Arguments for structure inference
 structure_inference_arguments:
-  --num_predictions_per_model : 1
-  --num_cycle: 3
-  --fold_backend: alphafold
+  --num_predictions_per_model: 1  # Number of predictions per model
+  --num_cycle: 3  # Number of recycles during structure prediction
+  --fold_backend: alphafold # Use alphafold2 for predictions. Other options are 'alphafold3' and 'alphalink'
 
+# Arguments for structure analysis
 analyze_structure_arguments:
-  --cutoff: 100.0
+  --cutoff: 100.0  # Cutoff for structure analysis
 
+# Arguments for report generation
 generate_report_arguments:
-  --cutoff: 100.0
+  --cutoff: 100.0  # Cutoff for structure report generation
 
-feature_create_ram_bytes : 64000
-feature_create_ram_scaling : 1.1
+# Memory allocation settings for feature creation and structure inference
+feature_create_ram_bytes: 64000
+feature_create_ram_scaling: 1.1
 structure_inference_ram_bytes: 32000
 
-alphafold_inference_threads : 8
-alphafold_inference : >
-  gres=gpu:1 partition=gpu-el8
-  qos=normal constraint=gpu=3090
+# Number of threads for AlphaFold inference
+alphafold_inference_threads: 8
 
-prediction_container : "docker://kosinskilab/fold:2.1.2"
-analysis_container : "docker://kosinskilab/fold_analysis:2.1.2"
+# extra SLURM parameters for inference execution
+alphafold_inference : "--gres=gpu:3090:1 --partition=gpu --qos=normal"
+
+# Specify the backend by changing the prediction container
+# (you can also use local singularity .sif files)
+# - "docker://kosinskilab/fold:2.1.2" for AlphaFold2
+# - "docker://kosinskilab/alphafold3:2.1.2" for AlphaFold3
+# - "docker://kosinskilab/alphalink:2.1.2" for AlphaLink2
+# - "/path/to/my/container.sif"
+prediction_container: "docker://kosinskilab/fold:2.1.2"
+
+# Container for structure analysis
+analysis_container: "docker://kosinskilab/fold_analysis:2.1.2"

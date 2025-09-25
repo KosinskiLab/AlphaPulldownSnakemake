@@ -4,17 +4,90 @@
 
     Authors: Valentin Maurer, Dingquan Yu <name.surname@embl-hamburg.de>
 """
-import tempfile
 
+configfile: "config/config.yaml"
+include: "rules/common.smk"
+
+import tempfile, os
+from pathlib import Path
 from sys import exit
 from os import makedirs, listdir, symlink, remove
 from os.path import abspath, join, splitext, basename, exists
 
-include: "rules/common.smk"
-
-configfile: "config/config.yaml"
 config["output_directory"] = abspath(config["output_directory"])
 makedirs(config["output_directory"], exist_ok=True)
+
+
+def _first_level_root(p: Path) -> Path | None:
+    try:
+        p = p.expanduser()
+        if not p.is_absolute():
+            p = p.resolve()  # make absolute
+        parts = p.parts  # e.g. ('/', 'scratch', 'AlphaFold_DBs', ...)
+        if len(parts) >= 2:
+            root = Path("/" + parts[1])
+            if root.exists():
+                return root
+    except Exception:
+        pass
+    return None
+
+def _collect_roots(paths) -> set[str]:
+    roots: set[str] = set()
+    for raw in paths:
+        try:
+            p = Path(raw)
+            r1 = _first_level_root(p)
+            if r1:
+                roots.add(str(r1))
+            # also consider the realpath's first-level root (to catch /scratch -> /g symlinks)
+            try:
+                rp = p.expanduser().resolve()
+                r2 = _first_level_root(rp)
+                if r2:
+                    roots.add(str(r2))
+            except Exception:
+                pass
+        except Exception:
+            pass
+    return roots
+
+# gather all relevant paths
+_interest = set()
+_interest.add(Path(__file__).parent)
+_interest.add(Path.cwd())
+_interest.add(Path(config["output_directory"]))
+
+for key in ("databases_directory", "backend_weights_directory", "features_directory"):
+    if key in config and config[key]:
+        _interest.add(Path(config[key]))
+
+feat_dirs = config.get("feature_directory", [])
+if isinstance(feat_dirs, (str, Path)):
+    feat_dirs = [feat_dirs]
+for p in feat_dirs:
+    _interest.add(Path(p))
+
+_input_files = config.get("input_files", [])
+if isinstance(_input_files, (str, Path)):
+    _input_files = [_input_files]
+for p in _input_files:
+    try:
+        _interest.add(Path(p).expanduser().resolve().parent)
+    except Exception:
+        pass
+
+# compute first-level roots and bind each root to itself
+roots = sorted(_collect_roots(_interest))
+bind_spec = ",".join(f"{r}:{r}" for r in roots)
+
+os.environ.setdefault("APPTAINER_BINDPATH", bind_spec)
+os.environ.setdefault("SINGULARITY_BINDPATH", bind_spec)
+os.environ.setdefault("APPTAINER_NV", "1")
+os.environ.setdefault("SINGULARITY_NV", "1")
+
+#print("[bind debug] roots:", roots)
+#print("[bind debug] APPTAINER_BINDPATH:", os.environ.get("APPTAINER_BINDPATH"))
 
 # decide AF2 vs AF3 outputs
 DATA_PIPELINE = config["create_feature_arguments"].get("--data_pipeline", "alphafold2").lower()
@@ -110,7 +183,7 @@ rule symlink_local_files:
     resources:
         avg_mem=lambda wildcards, attempt: 600 * attempt,
         mem_mb=lambda wildcards, attempt: 800 * attempt,
-        walltime=lambda wildcards, attempt: 10 * attempt,
+        runtime=lambda wildcards, attempt: 10 * attempt,
         attempt=lambda wildcards, attempt: attempt,
     run:
         dataset.symlink_local_files(
@@ -123,7 +196,7 @@ rule download_uniprot:
     resources:
         avg_mem=lambda wildcards, attempt: 600 * attempt,
         mem_mb=lambda wildcards, attempt: 800 * attempt,
-        walltime=lambda wildcards, attempt: 10 * attempt,
+        runtime=lambda wildcards, attempt: 10 * attempt,
         attempt=lambda wildcards, attempt: attempt,
     shell:r"""
         set -euo pipefail
@@ -147,7 +220,7 @@ rule symlink_features:
     resources:
         avg_mem=lambda wildcards, attempt: 600 * attempt,
         mem_mb=lambda wildcards, attempt: 800 * attempt,
-        walltime=lambda wildcards, attempt: 10 * attempt,
+        runtime=lambda wildcards, attempt: 10 * attempt,
         attempt=lambda wildcards, attempt: attempt,
     run:
         for in_file, out_file in zip(input, output):
@@ -172,7 +245,7 @@ rule create_features:
         ),
     resources:
         mem_mb=lambda wildcards, attempt: base_feature_ram * (feature_scaling ** attempt),
-        walltime=lambda wildcards, attempt: 1440 * attempt,
+        runtime=lambda wildcards, attempt: 1440 * attempt,
         attempt=lambda wildcards, attempt: attempt,
     threads: 8,  # everything is hardcoded anyways ...
     container:
@@ -197,7 +270,7 @@ checkpoint cluster_sequence_length:
     resources:
         avg_mem=lambda wildcards, attempt: 600 * attempt,
         mem_mb=lambda wildcards, attempt: 800 * attempt,
-        walltime=lambda wildcards, attempt: 10 * attempt,
+        runtime=lambda wildcards, attempt: 10 * attempt,
         attempt=lambda wildcards, attempt: attempt,
     params:
         folds=dataset.fold_specifications,
@@ -265,10 +338,13 @@ rule structure_inference:
         ),
         clustering_format=format_clustering,
     resources:
+        slurm_extra=config.get(
+                "alphafold_inference",
+                        config.get("slurm_extra", "--partition=gpu --gres=gpu:1")
+                            ),
         mem_mb=lambda wildcards, attempt: config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
-        walltime=lambda wildcards, attempt: 1440 * attempt,
+        runtime=lambda wildcards, attempt: 1440 * attempt,
         attempt=lambda wildcards, attempt: attempt,
-        slurm=config.get("alphafold_inference", ""),
     threads:
         config["alphafold_inference_threads"],
     container:
@@ -307,7 +383,7 @@ rule analyze_structure:
         join(config["output_directory"], "predictions", "{fold}", "analysis.csv"),
     resources:
         mem_mb=lambda wildcards, attempt: 8000 * attempt,
-        walltime=lambda wildcards, attempt: 1440 * attempt,
+        runtime=lambda wildcards, attempt: 1440 * attempt,
         attempt=lambda wildcards, attempt: attempt,
     params:
         prediction_dir=lambda wildcards: join(
@@ -346,7 +422,7 @@ rule merge_analyses:
         join(config["output_directory"], "reports", "analysis.csv"),
     resources:
         mem_mb=lambda wildcards, attempt: 2000 * attempt,
-        walltime=lambda wildcards, attempt: 1440 * attempt,
+        runtime=lambda wildcards, attempt: 1440 * attempt,
         attempt=lambda wildcards, attempt: attempt,
     params:
         prediction_dir=join(config["output_directory"], "predictions"),
@@ -367,7 +443,7 @@ rule generate_report:
         join(config["output_directory"], "reports", "report.html"),
     resources:
         mem_mb=lambda wildcards, attempt: 32000 * attempt,
-        walltime=lambda wildcards, attempt: 1440 * attempt,
+        runtime=lambda wildcards, attempt: 1440 * attempt,
         attempt=lambda wildcards, attempt: attempt,
     params:
         prediction_dir=join(config["output_directory"], "predictions"),
