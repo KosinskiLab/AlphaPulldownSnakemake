@@ -104,7 +104,7 @@ This will generate all possible combinations across the three groups, creating 5
 Run the pipeline locally:
 
 ```bash
-snakemake --use-singularity --cores 4
+snakemake --profile config/profiles/desktop --cores 8
 ```
 
 <details>

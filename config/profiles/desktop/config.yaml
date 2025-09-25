@@ -1,0 +1,11 @@
+executor: local
+cores: 8
+use-singularity: true
+singularity-args: "--nv"
+printshellcmds: true
+keep-going: true
+rerun-incomplete: true
+rerun-triggers: mtime
+latency-wait: 60
+envvars: [APPTAINER_BINDPATH, SINGULARITY_BINDPATH, APPTAINER_NV, SINGULARITY_NV]
+
