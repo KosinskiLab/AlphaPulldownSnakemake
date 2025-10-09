@@ -12,7 +12,7 @@ envvars:
 
 printshellcmds: true
 rerun-incomplete: true
+keep-going: true
 rerun-triggers: mtime
 latency-wait: 600
 slurm-logdir: "slurm-logs"
-
