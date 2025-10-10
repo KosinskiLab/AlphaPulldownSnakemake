@@ -430,10 +430,9 @@ rule merge_analyses:
         config["analysis_container"],
     shell:
         r"""
-        head -n 1 {input[0]} > {output}
-        for f in {input}; do
-            tail -n +2 "$f" >> {output}
-        done
+        set -euo pipefail
+        mkdir -p "$(dirname {output:q})"
+        awk 'FNR==1 && NR==1 {{print; next}} FNR>1 {{print}}' {input:q} > {output:q}
         """
 
 rule generate_report:
