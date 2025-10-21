@@ -16,3 +16,4 @@ keep-going: true
 rerun-triggers: mtime
 latency-wait: 600
 slurm-logdir: "slurm-logs"
+slurm-delete-logfiles-older-than: 0 # do not delete old log files
