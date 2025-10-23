@@ -109,7 +109,7 @@ FEATURE_OUTPUT_PATTERN = (
     "{fasta_basename}_af3_input.json" if IS_AF3 else "{fasta_basename}." + FEATURE_SUFFIX
 )
 
-protein_delimiter = config.get("protein_delimiter", ";")
+protein_delimiter = config.get("protein_delimiter", "+")
 
 with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp_input:
     input_files = config["input_files"]
@@ -309,13 +309,6 @@ def format_clustering(wildcards):
                 parameter_string += f"--desired_num_msa={depth} "
     return parameter_string
 
-def requested_input(wildcards):
-    # AF3: pass filenames (relative to --features_directory)
-    if IS_AF3:
-        names = [feature_name(f) for f in dataset.sequences_by_fold[wildcards.fold]]
-        return ",".join(names)
-    # AF2: pass bare IDs
-    return wildcards.fold.replace(" ", ",")
 
 rule structure_inference:
     input:
@@ -331,7 +324,11 @@ rule structure_inference:
             join(config["output_directory"], "predictions", individual_fold)
             for individual_fold in wildcards.fold.split(" ")
         ],
-        requested_input=requested_input,
+        requested_fold = lambda wc: (
+                '+'.join(f"{p}_af3_input.json" for p in wc.fold.split('+'))
+                if IS_AF3 else wc.fold
+                ),
+        #requested_fold = lambda wildcards: wildcards.fold if not IS_AF3 else lambda wildcards: f"{wildcards.fold}_aaa.json",
         protein_delimiter=protein_delimiter,
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
@@ -352,7 +349,7 @@ rule structure_inference:
     shell:
         r"""
         run_structure_prediction.py \
-            --input {params.requested_input} \
+            --input {params.requested_fold} \
             --output_directory={params.output_directory} \
             --protein_delimiter={params.protein_delimiter} \
             --data_directory={params.data_directory} \
