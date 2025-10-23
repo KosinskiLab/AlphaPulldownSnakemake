@@ -325,10 +325,9 @@ rule structure_inference:
             for individual_fold in wildcards.fold.split(" ")
         ],
         requested_fold = lambda wc: (
-                '+'.join(f"{p}_af3_input.json" for p in wc.fold.split('+'))
+                protein_delimiter.join(f"{p}_af3_input.json" for p in wc.fold.split(protein_delimiter))
                 if IS_AF3 else wc.fold
                 ),
-        #requested_fold = lambda wildcards: wildcards.fold if not IS_AF3 else lambda wildcards: f"{wildcards.fold}_aaa.json",
         protein_delimiter=protein_delimiter,
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
