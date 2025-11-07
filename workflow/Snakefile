@@ -135,7 +135,7 @@ required_folds = [
     for fold in dataset.fold_specifications
 ]
 required_reports = [
-    join(config["output_directory"], "reports", "analysis.csv"),
+    join(config["output_directory"], "reports", "interfaces.csv"),
     join(config["output_directory"], "reports", "report.html"),
 ]
 total_required_files = [*required_reports]
@@ -376,7 +376,7 @@ rule analyze_structure:
     input:
         rules.structure_inference.output,
     output:
-        join(config["output_directory"], "predictions", "{fold}", "analysis.csv"),
+        join(config["output_directory"], "predictions", "{fold}", "interfaces.csv"),
     resources:
         mem_mb=lambda wildcards, attempt: 8000 * attempt,
         runtime=lambda wildcards, attempt: 1440 * attempt,
@@ -386,7 +386,7 @@ rule analyze_structure:
             config["output_directory"], "predictions", wildcards.fold
         ),
         fold=lambda wildcards: wildcards.fold,
-        report_dir=join(config["output_directory"], "reports"),
+        #report_dir=join(config["output_directory"], "reports"),
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
         ),
@@ -394,20 +394,47 @@ rule analyze_structure:
         config["analysis_container"],
     shell:
         r"""
-        tmpdir=$(mktemp -d)
-        cd "$tmpdir"
-        ln -s {params.prediction_dir} "$tmpdir/{params.fold}"
-        get_good_inter_pae.py \
-            --output_dir="$tmpdir" \
-            {params.cli_parameters}
-        touch predictions_with_good_interpae.csv
-        mv predictions_with_good_interpae.csv {output}
-        rm -rf "$tmpdir"
+        alphajudge \
+        --path_to_dir={params.prediction_dir} \
+        {params.cli_parameters}
         """
+
+# rule analyze_structure:
+#     input:
+#         rules.structure_inference.output,
+#     output:
+#         join(config["output_directory"], "predictions", "{fold}", "analysis.csv"),
+#     resources:
+#         mem_mb=lambda wildcards, attempt: 8000 * attempt,
+#         runtime=lambda wildcards, attempt: 1440 * attempt,
+#         attempt=lambda wildcards, attempt: attempt,
+#     params:
+#         prediction_dir=lambda wildcards: join(
+#             config["output_directory"], "predictions", wildcards.fold
+#         ),
+#         fold=lambda wildcards: wildcards.fold,
+#         report_dir=join(config["output_directory"], "reports"),
+#         cli_parameters=" ".join(
+#             [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
+#         ),
+#     container:
+#         config["analysis_container"],
+#     shell:
+#         r"""
+#         tmpdir=$(mktemp -d)
+#         cd "$tmpdir"
+#         ln -s {params.prediction_dir} "$tmpdir/{params.fold}"
+#         get_good_inter_pae.py \
+#             --output_dir="$tmpdir" \
+#             {params.cli_parameters}
+#         touch predictions_with_good_interpae.csv
+#         mv predictions_with_good_interpae.csv {output}
+#         rm -rf "$tmpdir"
+#         """
 
 def update_statistics(wildcards):
     return [
-        join(config["output_directory"], "predictions", fold, "analysis.csv")
+        join(config["output_directory"], "predictions", fold, "interfaces.csv")
         for fold in dataset.fold_specifications
     ]
 
@@ -415,7 +442,7 @@ rule merge_analyses:
     input:
         update_statistics,
     output:
-        join(config["output_directory"], "reports", "analysis.csv"),
+        join(config["output_directory"], "reports", "interfaces.csv"),
     resources:
         mem_mb=lambda wildcards, attempt: 2000 * attempt,
         runtime=lambda wildcards, attempt: 1440 * attempt,
