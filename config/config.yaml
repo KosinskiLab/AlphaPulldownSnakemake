@@ -6,7 +6,7 @@ input_files:
 protein_delimiter: "+"
 
 # Directory where all output files will be stored
-output_directory: ./temp_fold2/
+output_directory: ./alphajudge/af2/
 
 # Path to AlphaFold databases and to backend weights
 # Note prior to version 2.0.4 these were called alphafold_data_directory
@@ -43,7 +43,9 @@ structure_inference_arguments:
 
 # Arguments for structure analysis
 analyze_structure_arguments:
-  --cutoff: 100.0  # Cutoff for structure analysis
+  --contact_thresh: 8.0 # Contact threshold for structure analysis 
+  --pae_filter: 100.0 # PAE filter for structure analysis
+  --models_to_analyse: "best"  # Models to analyze
 
 # Arguments for report generation
 generate_report_arguments:
@@ -52,13 +54,13 @@ generate_report_arguments:
 # Memory allocation settings for feature creation and structure inference
 feature_create_ram_bytes: 64000
 feature_create_ram_scaling: 1.1
-structure_inference_ram_bytes: 32000
+structure_inference_ram_bytes: 64000
 
 # Number of threads for AlphaFold inference
 alphafold_inference_threads: 8
 
 # extra SLURM parameters for inference execution
-alphafold_inference : "--gres=gpu:3090:1 --partition=gpu --qos=normal"
+alphafold_inference : "--gres=gpu:1 --partition=gpu --qos=high"
 
 # Specify the backend by changing the prediction container
 # (you can also use local singularity .sif files)
@@ -66,7 +68,7 @@ alphafold_inference : "--gres=gpu:3090:1 --partition=gpu --qos=normal"
 # - "docker://kosinskilab/alphafold3:2.1.2" for AlphaFold3
 # - "docker://kosinskilab/alphalink:2.1.2" for AlphaLink2
 # - "/path/to/my/container.sif"
-prediction_container: "docker://kosinskilab/fold:2.1.2"
+prediction_container: "docker://kosinskilab/alphafold2:latest"
 
 # Container for structure analysis
-analysis_container: "docker://kosinskilab/fold_analysis:2.1.2"
+analysis_container: "docker://kosinskilab/alphajudge:latest"
