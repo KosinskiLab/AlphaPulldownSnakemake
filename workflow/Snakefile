@@ -395,7 +395,7 @@ rule analyze_structure:
     shell:
         r"""
         alphajudge \
-        --path_to_dir={params.prediction_dir} \
+        {params.prediction_dir} \
         {params.cli_parameters}
         """
 
