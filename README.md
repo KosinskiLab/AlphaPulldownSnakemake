@@ -4,13 +4,14 @@ AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Sn
 
 ## 1. Installation
 
-Install required dependencies:
+Create and activate the conda environment:
 
 ```bash
-mamba create -n snake -c conda-forge -c bioconda python=3.12 \
-  snakemake snakemake-executor-plugin-slurm snakedeploy pulp click coincbc
+mamba env create -f workflow/envs/alphapulldown.yaml
 mamba activate snake
 ```
+
+This environment file installs Snakemake and all required plugins via conda and pulls in `alphapulldown-input-parser` from PyPI in a single step.
 
 That's it, you're done!
 
