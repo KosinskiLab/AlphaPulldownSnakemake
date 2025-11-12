@@ -9,8 +9,7 @@ protein_delimiter: "+"
 exclude_permutations: true
 
 # Directory where all output files will be stored
-output_directory: ./alphajudge/af2/
-
+output_directory: ./temp_fold/
 # Path to AlphaFold databases and to backend weights
 # Note prior to version 2.0.4 these were called alphafold_data_directory
 databases_directory: /scratch/AlphaFold_DBs/2.3.2
@@ -63,7 +62,7 @@ structure_inference_ram_bytes: 64000
 alphafold_inference_threads: 8
 
 # extra SLURM parameters for inference execution
-alphafold_inference : "--gres=gpu:1 --partition=gpu --qos=high"
+alphafold_inference : "--gres=gpu:1 --partition=gpu --qos=normal"
 
 # Specify the backend by changing the prediction container
 # (you can also use local singularity .sif files)
