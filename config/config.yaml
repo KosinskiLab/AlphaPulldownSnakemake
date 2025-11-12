@@ -5,6 +5,9 @@ input_files:
 # Delimiter used in protein names
 protein_delimiter: "+"
 
+# Whether to drop equivalent permutations (AB and BA are the same) when generating fold specs
+exclude_permutations: true
+
 # Directory where all output files will be stored
 output_directory: ./alphajudge/af2/
 

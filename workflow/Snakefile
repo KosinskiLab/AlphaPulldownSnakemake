@@ -8,11 +8,13 @@
 configfile: "config/config.yaml"
 include: "rules/common.smk"
 
-import tempfile, os
+import os
 from pathlib import Path
 from sys import exit
 from os import makedirs, listdir, symlink, remove
 from os.path import abspath, join, splitext, basename, exists
+
+from alphapulldown_input_parser.parser import FoldDataset, generate_fold_specifications
 
 config["output_directory"] = abspath(config["output_directory"])
 makedirs(config["output_directory"], exist_ok=True)
@@ -110,23 +112,22 @@ FEATURE_OUTPUT_PATTERN = (
 )
 
 protein_delimiter = config.get("protein_delimiter", "+")
+exclude_permutations = config.get("exclude_permutations", True)
 
-with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp_input:
-    input_files = config["input_files"]
-    if isinstance(input_files, str):
-        input_files = [input_files]
+input_files = config.get("input_files", [])
+if isinstance(input_files, (str, Path)):
+    input_files = [input_files]
 
-    process_files(
-        input_files=input_files,
-        output_path=tmp_input.name,
-        delimiter=protein_delimiter,
-    )
+fold_specifications = generate_fold_specifications(
+    input_files=input_files,
+    delimiter=protein_delimiter,
+    exclude_permutations=exclude_permutations,
+)
 
-    dataset = InputParser.from_file(
-        filepath=tmp_input.name,
-        file_format="alphaabriss",
-        protein_delimiter=protein_delimiter,
-    )
+dataset = FoldDataset.from_fold_specifications(
+    fold_specifications=fold_specifications,
+    protein_delimiter=protein_delimiter,
+)
 
 ruleorder: symlink_local_files > download_uniprot > symlink_features > create_features
 
@@ -146,11 +147,6 @@ required_features = [
 ]
 if config.get("only_generate_features", False):
     total_required_files = required_features
-
-if config.get("cluster_jobs", False):
-    total_required_files.append(
-        join(config["output_directory"], "resources", "sequence_clusters.txt")
-    )
 
 precomputed_features = []
 required_features = set(basename(x) for x in required_features)
@@ -259,62 +255,16 @@ rule create_features:
             {params.cli_parameters}
         """
 
-checkpoint cluster_sequence_length:
-    input:
-        [
-            join(config["output_directory"], "features", feature_name(feature))
-            for feature in dataset.unique_sequences
-        ],
-    output:
-        join(config["output_directory"], "resources", "sequence_clusters.txt"),
-    resources:
-        avg_mem=lambda wildcards, attempt: 600 * attempt,
-        mem_mb=lambda wildcards, attempt: 800 * attempt,
-        runtime=lambda wildcards, attempt: 10 * attempt,
-        attempt=lambda wildcards, attempt: attempt,
-    params:
-        folds=dataset.fold_specifications,
-        protein_delimiter=protein_delimiter,
-        feature_directory=join(config["output_directory"], "features"),
-        cluster_bin_size=config.get("clustering_bin_size", 150),
-    container:
-        config["prediction_container"],
-    script:
-        "scripts/cluster_sequence_length.py"
-
 def lookup_features(wildcards):
-    if config.get("cluster_jobs", False):
-        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
-            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
-        headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
-        dataset.update_clustering(data=ret)
-
     return [
         join(config["output_directory"], "features", feature_name(feature))
         for feature in dataset.sequences_by_fold[wildcards.fold]
     ]
 
-def format_clustering(wildcards):
-    parameter_string = ""
-    if config.get("cluster_jobs", False):
-        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
-            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
-        headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
-        fold = wildcards.fold.split(" ")[0]
-        for name, length, depth in zip(ret["name"], ret["max_seq_length"], ret["max_msa_depth"]):
-            if name == fold:
-                parameter_string += f"--desired_num_res={length} "
-                parameter_string += f"--desired_num_msa={depth} "
-    return parameter_string
-
 
 rule structure_inference:
     input:
         features=lookup_features,
-        cluster=join(config["output_directory"], "resources", "sequence_clusters.txt")
-        if config.get("cluster_jobs", False) else "/dev/null",
     output:
         join(config["output_directory"], "predictions", "{fold}", "completed_fold.txt"),
     params:
@@ -332,7 +282,6 @@ rule structure_inference:
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
         ),
-        clustering_format=format_clustering,
     resources:
         slurm_extra=config.get(
                 "alphafold_inference",
@@ -353,24 +302,10 @@ rule structure_inference:
             --protein_delimiter={params.protein_delimiter} \
             --data_directory={params.data_directory} \
             --features_directory={params.feature_directory} \
-            {params.clustering_format} \
             {params.cli_parameters}
 
         echo "Completed" > "{output}"
         """
-
-def update_clustering(wildcards):
-    if config.get("cluster_jobs", False):
-        with checkpoints.cluster_sequence_length.get().output[0].open() as f:
-            data = [x.strip().split(",") for x in f.read().split("\n") if len(x.strip())]
-        headers = data.pop(0)
-        ret = {header: list(column) for header, column in zip(headers, zip(*data))}
-        dataset.update_clustering(data=ret)
-
-    return [
-        join(config["output_directory"], "predictions", fold, "completed_fold.txt")
-        for fold in dataset.fold_specifications
-    ]
 
 rule analyze_structure:
     input:
@@ -460,7 +395,10 @@ rule merge_analyses:
 
 rule generate_report:
     input:
-        update_clustering,
+        [
+            join(config["output_directory"], "predictions", fold, "completed_fold.txt")
+            for fold in dataset.fold_specifications
+        ],
     output:
         join(config["output_directory"], "reports", "report.html"),
     resources:
