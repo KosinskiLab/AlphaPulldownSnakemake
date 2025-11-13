@@ -1,16 +1,16 @@
 """ Snakemake pipeline for automated structure prediction using various backends.
 
-    Copyright (c) 2024 European Molecular Biology Laboratory
+    Copyright (c) 2025 European Molecular Biology Laboratory
 
-    Authors: Valentin Maurer, Dingquan Yu <name.surname@embl-hamburg.de>
+    Authors: Kosinski Lab <alphapulldown@embl-hamburg.de>
 """
+
+from __future__ import annotations
 
 configfile: "config/config.yaml"
 include: "rules/common.smk"
 
-import os
 from pathlib import Path
-from sys import exit
 from os import makedirs, listdir, symlink, remove
 from os.path import abspath, join, splitext, basename, exists
 
@@ -19,97 +19,28 @@ from alphapulldown_input_parser.parser import FoldDataset, generate_fold_specifi
 config["output_directory"] = abspath(config["output_directory"])
 makedirs(config["output_directory"], exist_ok=True)
 
-
-def _first_level_root(p: Path) -> Path | None:
-    try:
-        p = p.expanduser()
-        if not p.is_absolute():
-            p = p.resolve()  # make absolute
-        parts = p.parts  # e.g. ('/', 'scratch', 'AlphaFold_DBs', ...)
-        if len(parts) >= 2:
-            root = Path("/" + parts[1])
-            if root.exists():
-                return root
-    except Exception:
-        pass
-    return None
-
-def _collect_roots(paths) -> set[str]:
-    roots: set[str] = set()
-    for raw in paths:
-        try:
-            p = Path(raw)
-            r1 = _first_level_root(p)
-            if r1:
-                roots.add(str(r1))
-            # also consider the realpath's first-level root (to catch /scratch -> /g symlinks)
-            try:
-                rp = p.expanduser().resolve()
-                r2 = _first_level_root(rp)
-                if r2:
-                    roots.add(str(r2))
-            except Exception:
-                pass
-        except Exception:
-            pass
-    return roots
-
-# gather all relevant paths
-_interest = set()
-_interest.add(Path(__file__).parent)
-_interest.add(Path.cwd())
-_interest.add(Path(config["output_directory"]))
-
-for key in ("databases_directory", "backend_weights_directory", "features_directory"):
-    if key in config and config[key]:
-        _interest.add(Path(config[key]))
-
-feat_dirs = config.get("feature_directory", [])
-if isinstance(feat_dirs, (str, Path)):
-    feat_dirs = [feat_dirs]
-for p in feat_dirs:
-    _interest.add(Path(p))
-
-_input_files = config.get("input_files", [])
-if isinstance(_input_files, (str, Path)):
-    _input_files = [_input_files]
-for p in _input_files:
-    try:
-        _interest.add(Path(p).expanduser().resolve().parent)
-    except Exception:
-        pass
-
-# compute first-level roots and bind each root to itself
-roots = sorted(_collect_roots(_interest))
-bind_spec = ",".join(f"{r}:{r}" for r in roots)
-
-os.environ.setdefault("APPTAINER_BINDPATH", bind_spec)
-os.environ.setdefault("SINGULARITY_BINDPATH", bind_spec)
-os.environ.setdefault("APPTAINER_NV", "1")
-os.environ.setdefault("SINGULARITY_NV", "1")
-
-#print("[bind debug] roots:", roots)
-#print("[bind debug] APPTAINER_BINDPATH:", os.environ.get("APPTAINER_BINDPATH"))
+feature_directories = config.get("feature_directory", [])
+if isinstance(feature_directories, (str, Path)):
+    feature_directories = [feature_directories]
 
 # decide AF2 vs AF3 outputs
 DATA_PIPELINE = config["create_feature_arguments"].get("--data_pipeline", "alphafold2").lower()
 IS_AF3 = DATA_PIPELINE in ("alphafold3", "af3")
 
-# AF2 keeps optional compression; AF3 forces plain JSON filenames
-FEATURE_COMPRESSION = None
-if (not IS_AF3) and config["create_feature_arguments"].get("--compress_features", False):
-    FEATURE_COMPRESSION = "lzma"
+if IS_AF3:
+    FEATURE_COMPRESSION = None
+    FEATURE_SUFFIX = None
+    FEATURE_OUTPUT_PATTERN = "{fasta_basename}_af3_input.json"
+else:
+    FEATURE_COMPRESSION = (
+        "lzma" if config["create_feature_arguments"].get("--compress_features", False) else None
+    )
+    FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION)
+    FEATURE_OUTPUT_PATTERN = "{fasta_basename}." + FEATURE_SUFFIX
 
-# feature_suffix() comes from rules/common.smk
-FEATURE_SUFFIX = feature_suffix(FEATURE_COMPRESSION) if not IS_AF3 else None
 
 def feature_name(base: str) -> str:
     return f"{base}_af3_input.json" if IS_AF3 else f"{base}.{FEATURE_SUFFIX}"
-
-# IMPORTANT: output patterns must be static strings (no lambdas)
-FEATURE_OUTPUT_PATTERN = (
-    "{fasta_basename}_af3_input.json" if IS_AF3 else "{fasta_basename}." + FEATURE_SUFFIX
-)
 
 protein_delimiter = config.get("protein_delimiter", "+")
 exclude_permutations = config.get("exclude_permutations", True)
@@ -117,6 +48,18 @@ exclude_permutations = config.get("exclude_permutations", True)
 input_files = config.get("input_files", [])
 if isinstance(input_files, (str, Path)):
     input_files = [input_files]
+
+DEFAULT_SLURM_PARTITION = config.get("slurm_partition")
+DEFAULT_SLURM_GRES = config.get("slurm_gres")
+DEFAULT_SLURM_QOS = config.get("slurm_qos")
+STRUCTURE_INFERENCE_GPUS = int(config.get("structure_inference_gpus_per_task", 1))
+
+prepare_container_binds(
+    output_directory=config["output_directory"],
+    config=config,
+    feature_directories=feature_directories,
+    input_files=input_files,
+)
 
 fold_specifications = generate_fold_specifications(
     input_files=input_files,
@@ -129,44 +72,59 @@ dataset = FoldDataset.from_fold_specifications(
     protein_delimiter=protein_delimiter,
 )
 
+local_sequences = tuple(dataset.sequences_by_origin.get("local", ()))
+
 ruleorder: symlink_local_files > download_uniprot > symlink_features > create_features
 
 required_folds = [
     join(config["output_directory"], "predictions", fold, "completed_fold.txt")
     for fold in dataset.fold_specifications
 ]
-required_reports = [
-    join(config["output_directory"], "reports", "interfaces.csv"),
-    join(config["output_directory"], "reports", "report.html"),
-]
-total_required_files = [*required_reports]
+ENABLE_STRUCTURE_ANALYSIS = config.get("enable_structure_analysis", True)
+GENERATE_RECURSIVE_REPORT = config.get("generate_recursive_report", False)
+RECURSIVE_REPORT_ARGUMENTS = config.get("recursive_report_arguments", {})
+RECURSIVE_REPORT = (
+    join(config["output_directory"], "reports", "all_interfaces.csv")
+    if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT
+    else None
+)
 
-required_features = [
+required_feature_paths = [
     join(config["output_directory"], "features", feature_name(fasta_basename))
     for fasta_basename in dataset.unique_sequences
 ]
 if config.get("only_generate_features", False):
-    total_required_files = required_features
+    required_targets = required_feature_paths
+else:
+    if ENABLE_STRUCTURE_ANALYSIS:
+        if GENERATE_RECURSIVE_REPORT and RECURSIVE_REPORT:
+            required_targets = [RECURSIVE_REPORT]
+        else:
+            required_targets = [
+                join(config["output_directory"], "predictions", fold, "interfaces.csv")
+                for fold in dataset.fold_specifications
+            ]
+    else:
+        required_targets = required_folds
 
 precomputed_features = []
-required_features = set(basename(x) for x in required_features)
-feature_directories = config.get("feature_directory", [])
+required_feature_basenames = {basename(x) for x in required_feature_paths}
 for feature_directory in feature_directories:
     if not exists(feature_directory):
         continue
     available_features = listdir(feature_directory)
     for available_feature in available_features:
-        if available_feature not in required_features:
+        if available_feature not in required_feature_basenames:
             continue
         precomputed_features.append(join(feature_directory, available_feature))
 
 rule all:
     input:
-        total_required_files,
+        required_targets,
 
 rule symlink_local_files:
     input:
-        dataset.sequences_by_origin["local"],
+        local_sequences,
     output:
         [
             join(
@@ -174,13 +132,11 @@ rule symlink_local_files:
                 "data",
                 f"{splitext(basename(x))[0]}.fasta",
             )
-            for x in dataset.sequences_by_origin["local"]
+            for x in local_sequences
         ],
     resources:
-        avg_mem=lambda wildcards, attempt: 600 * attempt,
-        mem_mb=lambda wildcards, attempt: 800 * attempt,
-        runtime=lambda wildcards, attempt: 10 * attempt,
-        attempt=lambda wildcards, attempt: attempt,
+        slurm_qos=DEFAULT_SLURM_QOS,
+        **linear_resources(mem=800, runtime=10),
     run:
         dataset.symlink_local_files(
             output_directory=join(config["output_directory"], "data")
@@ -190,10 +146,8 @@ rule download_uniprot:
     output:
         join(config["output_directory"], "data", "{uniprot_id}.fasta"),
     resources:
-        avg_mem=lambda wildcards, attempt: 600 * attempt,
-        mem_mb=lambda wildcards, attempt: 800 * attempt,
-        runtime=lambda wildcards, attempt: 10 * attempt,
-        attempt=lambda wildcards, attempt: attempt,
+        slurm_qos=DEFAULT_SLURM_QOS,
+        **linear_resources(mem=800, runtime=10),
     shell:r"""
         set -euo pipefail
         temp_file=$(mktemp)
@@ -204,6 +158,7 @@ rule download_uniprot:
 
 feature_scaling = config.get("feature_create_ram_scaling", 1.1)
 base_feature_ram = config.get("feature_create_ram_bytes", 64000)
+feature_threads = config.get("feature_threads", 8)
 
 rule symlink_features:
     input:
@@ -214,10 +169,8 @@ rule symlink_features:
             feature=[basename(x) for x in precomputed_features],
         ),
     resources:
-        avg_mem=lambda wildcards, attempt: 600 * attempt,
-        mem_mb=lambda wildcards, attempt: 800 * attempt,
-        runtime=lambda wildcards, attempt: 10 * attempt,
-        attempt=lambda wildcards, attempt: attempt,
+        slurm_qos=DEFAULT_SLURM_QOS,
+        **linear_resources(mem=800, runtime=10),
     run:
         for in_file, out_file in zip(input, output):
             if exists(out_file):
@@ -240,10 +193,12 @@ rule create_features:
             [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
         ),
     resources:
-        mem_mb=lambda wildcards, attempt: base_feature_ram * (feature_scaling ** attempt),
-        runtime=lambda wildcards, attempt: 1440 * attempt,
-        attempt=lambda wildcards, attempt: attempt,
-    threads: 8,  # everything is hardcoded anyways ...
+        slurm_qos=DEFAULT_SLURM_QOS,
+        **linear_resources(
+            mem_fn=lambda wc, attempt: base_feature_ram * (feature_scaling ** attempt),
+            runtime_fn=lambda wc, attempt: 1440 * attempt,
+        ),
+    threads: feature_threads,
     container:
         config["prediction_container"],
     shell:
@@ -260,7 +215,6 @@ def lookup_features(wildcards):
         join(config["output_directory"], "features", feature_name(feature))
         for feature in dataset.sequences_by_fold[wildcards.fold]
     ]
-
 
 rule structure_inference:
     input:
@@ -283,13 +237,15 @@ rule structure_inference:
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
         ),
     resources:
-        slurm_extra=config.get(
-                "alphafold_inference",
-                        config.get("slurm_extra", "--partition=gpu --gres=gpu:1")
-                            ),
-        mem_mb=lambda wildcards, attempt: config.get("structure_inference_ram_bytes", 32000) * (1.1 ** attempt),
-        runtime=lambda wildcards, attempt: 1440 * attempt,
-        attempt=lambda wildcards, attempt: attempt,
+        slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
+        slurm_gres=(DEFAULT_SLURM_GRES or f"gpu:{STRUCTURE_INFERENCE_GPUS}"),
+        slurm_qos=DEFAULT_SLURM_QOS,
+        gpus_per_task=STRUCTURE_INFERENCE_GPUS,
+        **linear_resources(
+            mem_fn=lambda wc, attempt: config.get("structure_inference_ram_bytes", 32000)
+            * (1.1 ** attempt),
+            runtime_fn=lambda wc, attempt: 1440 * attempt,
+        ),
     threads:
         config["alphafold_inference_threads"],
     container:
@@ -307,119 +263,85 @@ rule structure_inference:
         echo "Completed" > "{output}"
         """
 
-rule analyze_structure:
-    input:
-        rules.structure_inference.output,
-    output:
-        join(config["output_directory"], "predictions", "{fold}", "interfaces.csv"),
-    resources:
-        mem_mb=lambda wildcards, attempt: 8000 * attempt,
-        runtime=lambda wildcards, attempt: 1440 * attempt,
-        attempt=lambda wildcards, attempt: attempt,
-    params:
-        prediction_dir=lambda wildcards: join(
-            config["output_directory"], "predictions", wildcards.fold
-        ),
-        fold=lambda wildcards: wildcards.fold,
-        #report_dir=join(config["output_directory"], "reports"),
-        cli_parameters=" ".join(
-            [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
-        ),
-    container:
-        config["analysis_container"],
-    shell:
-        r"""
-        alphajudge \
-        {params.prediction_dir} \
-        {params.cli_parameters}
-        """
-
-# rule analyze_structure:
-#     input:
-#         rules.structure_inference.output,
-#     output:
-#         join(config["output_directory"], "predictions", "{fold}", "analysis.csv"),
-#     resources:
-#         mem_mb=lambda wildcards, attempt: 8000 * attempt,
-#         runtime=lambda wildcards, attempt: 1440 * attempt,
-#         attempt=lambda wildcards, attempt: attempt,
-#     params:
-#         prediction_dir=lambda wildcards: join(
-#             config["output_directory"], "predictions", wildcards.fold
-#         ),
-#         fold=lambda wildcards: wildcards.fold,
-#         report_dir=join(config["output_directory"], "reports"),
-#         cli_parameters=" ".join(
-#             [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
-#         ),
-#     container:
-#         config["analysis_container"],
-#     shell:
-#         r"""
-#         tmpdir=$(mktemp -d)
-#         cd "$tmpdir"
-#         ln -s {params.prediction_dir} "$tmpdir/{params.fold}"
-#         get_good_inter_pae.py \
-#             --output_dir="$tmpdir" \
-#             {params.cli_parameters}
-#         touch predictions_with_good_interpae.csv
-#         mv predictions_with_good_interpae.csv {output}
-#         rm -rf "$tmpdir"
-#         """
-
-def update_statistics(wildcards):
-    return [
-        join(config["output_directory"], "predictions", fold, "interfaces.csv")
-        for fold in dataset.fold_specifications
-    ]
-
-rule merge_analyses:
-    input:
-        update_statistics,
-    output:
-        join(config["output_directory"], "reports", "interfaces.csv"),
-    resources:
-        mem_mb=lambda wildcards, attempt: 2000 * attempt,
-        runtime=lambda wildcards, attempt: 1440 * attempt,
-        attempt=lambda wildcards, attempt: attempt,
-    params:
-        prediction_dir=join(config["output_directory"], "predictions"),
-    container:
-        config["analysis_container"],
-    shell:
-        r"""
-        set -euo pipefail
-        mkdir -p "$(dirname {output:q})"
-        awk 'FNR==1 && NR==1 {{print; next}} FNR>1 {{print}}' {input:q} > {output:q}
-        """
-
-rule generate_report:
-    input:
-        [
-            join(config["output_directory"], "predictions", fold, "completed_fold.txt")
-            for fold in dataset.fold_specifications
-        ],
-    output:
-        join(config["output_directory"], "reports", "report.html"),
-    resources:
-        mem_mb=lambda wildcards, attempt: 32000 * attempt,
-        runtime=lambda wildcards, attempt: 1440 * attempt,
-        attempt=lambda wildcards, attempt: attempt,
-    params:
-        prediction_dir=join(config["output_directory"], "predictions"),
-        report_dir=join(config["output_directory"], "reports"),
-        cli_parameters=" ".join(
-            [f"{k}={v}" for k, v in config["generate_report_arguments"].items()]
-        ),
-    container:
-        config["prediction_container"],
-    shell:
-        r"""
-        cd {params.prediction_dir}
-        create_notebook.py \
-            --output_dir={params.prediction_dir} \
+if ENABLE_STRUCTURE_ANALYSIS:
+    rule analyze_structure:
+        input:
+            rules.structure_inference.output,
+        output:
+            join(config["output_directory"], "predictions", "{fold}", "interfaces.csv"),
+        resources:
+            slurm_qos=DEFAULT_SLURM_QOS,
+            **linear_resources(mem=8000, runtime=1440),
+        params:
+            prediction_dir=lambda wildcards: join(
+                config["output_directory"], "predictions", wildcards.fold
+            ),
+            fold=lambda wildcards: wildcards.fold,
+            cli_parameters=" ".join(
+                [f"{k}={v}" for k, v in config["analyze_structure_arguments"].items()]
+            ),
+        container:
+            config["analysis_container"],
+        shell:
+            r"""
+            alphajudge \
+            {params.prediction_dir} \
             {params.cli_parameters}
-        jupyter nbconvert --to html --execute output.ipynb
-        mv output.ipynb {params.report_dir}
-        mv output.html {output}
-        """
+            """
+
+
+def _format_recursive_arguments(arguments) -> list[str]:
+    if isinstance(arguments, dict):
+        formatted = []
+        for key, value in arguments.items():
+            if isinstance(value, bool):
+                if value:
+                    formatted.append(str(key))
+            elif value is None:
+                formatted.append(str(key))
+            else:
+                formatted.append(f"{key}={value}")
+        return formatted
+    if isinstance(arguments, (list, tuple, set)):
+        return [str(item) for item in arguments]
+    if isinstance(arguments, str):
+        return [arguments]
+    return []
+
+
+if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT:
+
+    rule recursive_report:
+        input:
+                [
+                    join(
+                        config["output_directory"],
+                        "predictions",
+                        fold,
+                        "interfaces.csv",
+                    )
+                    for fold in dataset.fold_specifications
+                ],
+        output:
+                RECURSIVE_REPORT,
+        params:
+            prediction_dir=lambda wildcards: join(config["output_directory"], "predictions"),
+            report_dir=join(config["output_directory"], "reports"),
+            extra_args=lambda wildcards: " ".join(
+                _format_recursive_arguments(RECURSIVE_REPORT_ARGUMENTS)
+            ),
+        resources:
+            slurm_qos=DEFAULT_SLURM_QOS,
+            **linear_resources(mem=2000, runtime=1440),
+        container:
+            config["analysis_container"],
+        shell:
+            r"""
+                mkdir -p {params.report_dir}
+                alphajudge \
+                    {params.prediction_dir} \
+                    --recursive \
+                    --summary {output} \
+                    {params.extra_args}
+            """
+

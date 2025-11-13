@@ -130,6 +130,8 @@ Detach with `Ctrl + A` then `D`. Reattach later with `screen -r snakemake_sessio
 
 After completion, you'll find:
 - **Predicted structures** in PDB/CIF format in the output directory
+- **Per-fold interface scores** in `output/predictions/<fold>/interfaces.csv`
+- **Aggregated interface summary** in `output/reports/all_interfaces.csv` when `generate_recursive_report: true`
 - **Interactive Jupyter notebook** with 3D visualizations and quality plots
 - **Results table** with confidence scores and interaction metrics
 
@@ -152,6 +154,22 @@ feature_directory:
 ```
 
 > **Note**: If your features are compressed, set `compress-features: True` in the config.
+
+### Structure analysis & reporting
+
+Post-inference analysis is enabled by default. You can disable it or add a project-wide summary in `config/config.yaml`:
+
+```yaml
+enable_structure_analysis: true          # skip alphaJudge if set to false
+generate_recursive_report: true          # set to false if you do not need all_interfaces.csv
+recursive_report_arguments:              # optional extra CLI flags for alphajudge
+  --models_to_analyse: best
+
+# SLURM defaults (override to match your cluster)
+slurm_partition: "gpu"
+slurm_gres: "gpu:1"
+slurm_qos: "normal"
+```
 
 ### Using CCP4 for analysis
 
