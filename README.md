@@ -25,7 +25,7 @@ Create a new processing directory for your project:
 snakedeploy deploy-workflow \
   https://github.com/KosinskiLab/AlphaPulldownSnakemake \
   AlphaPulldownSnakemake \
-  --tag 2.1.4
+  --tag 2.1.5
 cd AlphaPulldownSnakemake
 ```
 
