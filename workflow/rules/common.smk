@@ -5,38 +5,17 @@
     Authors: Valentin Maurer <valentin.maurer@embl-hamburg.de>
 """
 
-import itertools
-from contextlib import nullcontext
-from os import makedirs, symlink
-from os.path import join, splitext, basename, exists
-from typing import Tuple, Dict, List, Set, Union, TextIO
+from __future__ import annotations
+
+import os
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any, Callable
 
 
-def read_file(filepath : str):
-    with open(filepath, mode = "r", encoding = "utf-8") as file:
-        lines = file.read().splitlines()
-    return list(line.lstrip().rstrip() for line in lines if line)
-
-def process_files(input_files : List[str],
-                  output_path : Union[str, TextIO] = None,
-                  delimiter : str = '+'):
-    """Process the input files to compute the Cartesian product and write to the output file."""
-    lists_of_lines = [read_file(filepath) for filepath in input_files]
-    cartesian_product = list(itertools.product(*lists_of_lines))
-    if output_path is None:
-        return itertools.product(*lists_of_lines)
-    else:
-        context_manager = nullcontext(output_path)
-        if isinstance(output_path, str):
-            context_manager = open(output_path, mode = "w", encoding = "utf-8")
-
-        with context_manager as output_file:
-            for combination in cartesian_product:
-                output_file.write(delimiter.join(combination) + '\n')
-
-def feature_suffix(compression : str = "lzma") -> str:
+def feature_suffix(compression: str = "lzma") -> str:
     _compression = {
-        "lzma" : "xz",
+        "lzma": "xz",
     }
     suffix = _compression.get(compression, None)
     ret = "pkl"
@@ -45,107 +24,116 @@ def feature_suffix(compression : str = "lzma") -> str:
     return ret
 
 
-class InputParser:
-    def __init__(
-        self,
-        fold_specifications: Tuple[str],
-        sequences_by_origin: Dict[str, List[str]],
-        sequences_by_fold: Dict[str, Set],
-    ):
-        self.fold_specifications = fold_specifications
-        self.sequences_by_origin = sequences_by_origin
-        self.sequences_by_fold = sequences_by_fold
+def _first_level_root(p: Path) -> Path | None:
+    try:
+        p = p.expanduser()
+        if not p.is_absolute():
+            p = p.resolve()
+        parts = p.parts
+        if len(parts) >= 2:
+            root = Path("/" + parts[1])
+            if root.exists():
+                return root
+    except (OSError, RuntimeError):
+        pass
+    return None
 
-        unique_sequences = set()
-        for value in self.sequences_by_origin.values():
-            unique_sequences.update(
-                set([splitext(basename(x))[0] for x in value])
-            )
-        self.unique_sequences = unique_sequences
 
-    @staticmethod
-    def _strip_path_and_extension(filepath : str) -> str:
-        return splitext(basename(filepath))[0]
+def _collect_roots(paths: Iterable[str | Path]) -> set[str]:
+    roots: set[str] = set()
+    for raw in paths:
+        try:
+            p = Path(raw)
+            r1 = _first_level_root(p)
+            if r1:
+                roots.add(str(r1))
+            try:
+                rp = p.expanduser().resolve()
+                r2 = _first_level_root(rp)
+                if r2:
+                    roots.add(str(r2))
+            except (OSError, RuntimeError):
+                pass
+        except (TypeError, OSError, RuntimeError):
+            pass
+    return roots
 
-    @staticmethod
-    def _parse_alphaabriss_format(
-        fold_specifications: List[str],
-        protein_delimiter : str = "_"
-    ) -> Tuple[Dict[str, List[str]], Dict[str, Set]]:
-        unique_sequences, sequences_by_fold = set(), {}
 
-        for fold_specification in fold_specifications:
-            sequences = set()
-            clean_fold_specification = []
-            for fold in fold_specification.split(protein_delimiter):
-                fold = fold.split(":")
-                sequences.add(fold[0])
+def prepare_container_binds(
+    *,
+    output_directory: str,
+    config: dict[str, Any],
+    feature_directories: Iterable[str | Path] = (),
+    input_files: Iterable[str | Path] = (),
+) -> None:
+    """Populate Singularity/Apptainer bind paths based on config."""
+    interest: set[Path] = {
+        Path(__file__).parent,
+        Path.cwd(),
+        Path(output_directory),
+    }
 
-                protein_name = splitext(basename(fold[0]))[0]
-                clean_fold_specification.append(":".join([protein_name, *fold[1:]]))
+    for key in ("databases_directory", "backend_weights_directory", "features_directory"):
+        value = config.get(key)
+        if value:
+            interest.add(Path(value))
 
-            clean_fold_specification = protein_delimiter.join([str(x) for x in clean_fold_specification])
+    for path in feature_directories:
+        interest.add(Path(path))
 
-            unique_sequences.update(sequences)
-            sequences_by_fold[clean_fold_specification] = {splitext(basename(x))[0] for x in sequences}
+    for path in input_files:
+        try:
+            interest.add(Path(path).expanduser().resolve().parent)
+        except (TypeError, OSError, RuntimeError):
+            continue
 
-        sequences_by_origin = {
-            "uniprot" : [],
-            "local" : []
-        }
-        for sequence in unique_sequences:
-            if not exists(sequence):
-                sequences_by_origin["uniprot"].append(sequence)
-                continue
-            sequences_by_origin["local"].append(sequence)
+    roots = sorted(_collect_roots(interest))
+    bind_spec = ",".join(f"{r}:{r}" for r in roots)
 
-        return sequences_by_origin, sequences_by_fold
+    for var in ("APPTAINER_BINDPATH", "SINGULARITY_BINDPATH"):
+        os.environ.setdefault(var, bind_spec)
+    for var in ("APPTAINER_NV", "SINGULARITY_NV"):
+        os.environ.setdefault(var, "1")
 
-    def symlink_local_files(self, output_directory : str) -> None:
-        makedirs(output_directory, exist_ok = True)
-        for file in self.sequences_by_origin["local"]:
-            symlink(file, join(output_directory, basename(file)))
-        return None
 
-    @classmethod
-    def from_file(cls, filepath: str, file_format: str = "alphaabriss", protein_delimiter : str = "_"):
-        with open(filepath, mode="r") as infile:
-            data = [line.strip() for line in infile.readlines() if len(line.strip())]
-            data = tuple(set(data))
+def linear_resources(
+    *,
+    mem: int = 800,
+    runtime: int = 10,
+    avg_factor: float = 0.75,
+    mem_fn: Callable[[Any, int], float] | None = None,
+    runtime_fn: Callable[[Any, int], float] | None = None,
+    attempt_fn: Callable[[Any, int], int] | None = None,
+) -> dict[str, Any]:
+    """Return a Snakemake resources dictionary scaling with retry attempts."""
 
-        match file_format:
-            case "alphaabriss":
-                ret = cls._parse_alphaabriss_format(
-                    fold_specifications = data, protein_delimiter=protein_delimiter
-                )
-                sequences_by_origin, sequences_by_fold = ret
+    def _mem_value(wc, attempt: int) -> float:
+        if mem_fn:
+            return float(mem_fn(wc, attempt))
+        return float(mem * attempt)
 
-            case _:
-                raise ValueError(f"Format {file_format} is not supported.")
+    def _runtime_value(wc, attempt: int) -> float:
+        if runtime_fn:
+            return float(runtime_fn(wc, attempt))
+        return float(runtime * attempt)
 
-        fold_specifications = list(sequences_by_fold.keys())
-        return cls(
-            fold_specifications=fold_specifications,
-            sequences_by_origin=sequences_by_origin,
-            sequences_by_fold=sequences_by_fold,
-        )
+    def _avg_mem(wc, attempt: int) -> int:
+        return int(_mem_value(wc, attempt) * avg_factor)
 
-    def update_clustering(self, data : Dict[str, List]) -> None:
-        folds_by_cluster = {}
-        for fold, cluster in zip(data["name"], data["cluster"]):
-            if cluster not in folds_by_cluster:
-                folds_by_cluster[cluster] = []
-            folds_by_cluster[cluster].append(fold)
+    def _mem_mb(wc, attempt: int) -> int:
+        return int(_mem_value(wc, attempt))
 
-        sequences_by_fold, new_folds = {}, []
-        for cluster, folds in folds_by_cluster.items():
-            new_fold = " ".join([str(x) for x in folds])
-            total_sequences = []
-            for fold in folds:
-                total_sequences.extend(self.sequences_by_fold[fold])
-            sequences_by_fold[new_fold] = list(set(total_sequences))
-            new_folds.append(new_fold)
+    def _runtime(wc, attempt: int) -> int:
+        return int(_runtime_value(wc, attempt))
 
-        self.sequences_by_fold.update(sequences_by_fold)
-        self.fold_specifications = new_folds
+    def _attempt(wc, attempt: int) -> int:
+        if attempt_fn:
+            return int(attempt_fn(wc, attempt))
+        return attempt
 
+    return {
+        "avg_mem": _avg_mem,
+        "mem_mb": _mem_mb,
+        "runtime": _runtime,
+        "attempt": _attempt,
+    }

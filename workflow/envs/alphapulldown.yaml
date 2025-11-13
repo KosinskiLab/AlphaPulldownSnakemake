@@ -1,21 +1,16 @@
-name: AlphaPulldown
+name: snake
 channels:
-  - bioconda
   - conda-forge
-  - nvidia
-  - omnia
+  - bioconda
 dependencies:
-  - python==3.10
-  - openmm==8.0
-  - pdbfixer==1.9
-  - hmmer
-  - kalign2
-  - cctbx-base
-  - pytest
-  - importlib_metadata
-  - hhsuite
+  - python=3.12
+  - snakemake
+  - snakemake-executor-plugin-slurm
+  - snakedeploy
+  - pulp
+  - click
+  - coincbc
   - pip
   - pip:
-    - jax==0.4.23
-    - jaxlib=*=*cuda*
-    - alphapulldown==1.0.4
+      - alphapulldown-input-parser
+
