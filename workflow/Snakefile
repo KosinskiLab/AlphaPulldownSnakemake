@@ -341,7 +341,6 @@ if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT:
                 alphajudge \
                     {params.prediction_dir} \
                     --recursive \
-                    --summary {output} \
-                    {params.extra_args}
+                    --summary {output} {params.extra_args}
             """
 
