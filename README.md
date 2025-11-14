@@ -3,12 +3,17 @@
 AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Snakemake pipeline. This lets you focus entirely on **what** you want to compute, rather than **how** to manage dependencies, versioning, and cluster execution.
 
 ## 1. Installation
+Clone the repository and open the directory:
+```bash
+git clone git@github.com:KosinskiLab/AlphaPulldownSnakemake.git
+cd AlphaPulldownSnakemake
+```
 
-Create and activate the conda environment:
+Then create and activate the conda environment:
 
 ```bash
-mamba env create -f workflow/envs/alphapulldown.yaml
-mamba activate snake
+conda env create -f workflow/envs/alphapulldown.yaml
+conda activate snake
 ```
 
 This environment file installs Snakemake and all required plugins via conda and pulls in `alphapulldown-input-parser` from PyPI in a single step.
