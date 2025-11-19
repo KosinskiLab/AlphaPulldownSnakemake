@@ -133,13 +133,45 @@ After completion, you'll find:
 - **Predicted structures** in PDB/CIF format in the output directory
 - **Per-fold interface scores** in `output/predictions/<fold>/interfaces.csv`
 - **Aggregated interface summary** in `output/reports/all_interfaces.csv` when `generate_recursive_report: true`
-- **Interactive Jupyter notebook** with 3D visualizations and quality plots
+- **Interactive APLit web viewer (recommended)** for browsing all jobs, PAE plots and AlphaJudge scores
+- **Optional Jupyter notebook** with 3D visualizations and quality plots
 - **Results table** with confidence scores and interaction metrics
 
-Open the Jupyter notebook with:
+# Recommended: explore results with APLit
+
+[APLit](https://github.com/KosinskiLab/aplit)
+ is a Streamlit-based UI for browsing AlphaPulldown runs (AF2 and AF3) and AlphaJudge metrics.
+
+Install APLit (once):
 ```bash
-jupyter-lab output/reports/output.ipynb
+pip install git+https://github.com/KosinskiLab/aplit.git
 ```
+
+Then launch it from your project directory, pointing it to the predictions folder:
+```bash
+aplit --directory output/predictions
+```
+
+This starts a local web server (by default at `http://localhost:8501`) where you can:
+
+- Filter and sort jobs by ipTM, PAE or AlphaJudge scores
+
+- Inspect individual models in 3D (3Dmol.js)
+
+- View PAE heatmaps and download structures / JSON files
+
+On a cluster, run aplit on the login node and forward the port via SSH:
+```bash
+# on cluster
+aplit --directory /path/to/project/output/predictions --no-browser
+```
+```bash
+# on your laptop
+ssh -N -L 8501:localhost:8501 user@cluster.example.org
+```
+
+Then open `http://localhost:8501` in your browser.
+
 
 ---
 
@@ -172,13 +204,6 @@ slurm_gres: "gpu:1"
 slurm_qos: "normal"
 ```
 
-### Using CCP4 for analysis
-
-Download and install CCP4, then update your config:
-
-```yaml
-analysis_container: "/path/to/fold_analysis_2.1.2_withCCP4.sif"
-```
 
 ### Changing folding backends
 
@@ -190,7 +215,7 @@ structure_inference_arguments:
   --<other-flags>
 ```
 
-> **Note**: AlphaPulldown supports: alphafold, alphafold3, alphalink, and unifold backends.
+> **Note**: AlphaPulldown supports: alphafold2, alphafold3 and alphalink backends.
 
 ### Database configuration
 
@@ -200,13 +225,3 @@ Set the path to your AlphaFold databases:
 databases_directory: "/path/to/alphafold/databases"
 ```
 
-### Performance tuning
-
-Adjust computational parameters:
-
-```yaml
-save_msa: False
-use_precomputed_msa: False
-predictions_per_model: 1
-number_of_recycles: 3
-```
