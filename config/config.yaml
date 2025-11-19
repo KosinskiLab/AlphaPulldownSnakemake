@@ -1,7 +1,6 @@
 # List of input sample sheets
 input_files:
   - config/sample_sheet.csv
-  - config/sample_sheet.csv
 
 # Delimiter used in protein names
 protein_delimiter: "+"
