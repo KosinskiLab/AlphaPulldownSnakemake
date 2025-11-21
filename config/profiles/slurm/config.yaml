@@ -4,10 +4,10 @@ default-resources:
   - mem_mb=8000
   - runtime=60
 
-set-resources:
-  - structure_inference:slurm_partition=gpu
-  - structure_inference:slurm_gres=gpu:1
-  - structure_inference:gpus_per_task=1
+#set-resources:
+#  - structure_inference:slurm_partition=gpu
+#  - structure_inference:slurm_gres=gpu:1
+#  - structure_inference:gpus_per_task=1
 
 use-singularity: true
 
