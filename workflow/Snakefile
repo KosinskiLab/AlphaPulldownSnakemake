@@ -135,7 +135,7 @@ rule symlink_local_files:
             for x in local_sequences
         ],
     resources:
-        slurm_qos=DEFAULT_SLURM_QOS,
+        qos=DEFAULT_SLURM_QOS,
         **linear_resources(mem=800, runtime=10),
     run:
         dataset.symlink_local_files(
@@ -146,7 +146,7 @@ rule download_uniprot:
     output:
         join(config["output_directory"], "data", "{uniprot_id}.fasta"),
     resources:
-        slurm_qos=DEFAULT_SLURM_QOS,
+        qos=DEFAULT_SLURM_QOS,
         **linear_resources(mem=800, runtime=10),
     shell:r"""
         set -euo pipefail
@@ -169,7 +169,7 @@ rule symlink_features:
             feature=[basename(x) for x in precomputed_features],
         ),
     resources:
-        slurm_qos=DEFAULT_SLURM_QOS,
+        qos=DEFAULT_SLURM_QOS,
         **linear_resources(mem=800, runtime=10),
     run:
         for in_file, out_file in zip(input, output):
@@ -193,7 +193,7 @@ rule create_features:
             [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
         ),
     resources:
-        slurm_qos=DEFAULT_SLURM_QOS,
+        qos=DEFAULT_SLURM_QOS,
         **linear_resources(
             mem_fn=lambda wc, attempt: base_feature_ram * (feature_scaling ** attempt),
             runtime_fn=lambda wc, attempt: 1440 * attempt,
@@ -236,11 +236,10 @@ rule structure_inference:
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
         ),
-    resources:
+    resources::
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
-        slurm_gres=(DEFAULT_SLURM_GRES or f"gpu:{STRUCTURE_INFERENCE_GPUS}"),
-        slurm_qos=DEFAULT_SLURM_QOS,
-        gpus_per_task=STRUCTURE_INFERENCE_GPUS,
+        gres=(DEFAULT_SLURM_GRES or f"gpu:{STRUCTURE_INFERENCE_GPUS}"),
+        qos=DEFAULT_SLURM_QOS,
         **linear_resources(
             mem_fn=lambda wc, attempt: config.get("structure_inference_ram_bytes", 32000)
             * (1.1 ** attempt),
@@ -270,7 +269,7 @@ if ENABLE_STRUCTURE_ANALYSIS:
         output:
             join(config["output_directory"], "predictions", "{fold}", "interfaces.csv"),
         resources:
-            slurm_qos=DEFAULT_SLURM_QOS,
+            qos=DEFAULT_SLURM_QOS,
             **linear_resources(mem=8000, runtime=1440),
         params:
             prediction_dir=lambda wildcards: join(
@@ -331,7 +330,7 @@ if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT:
                 _format_recursive_arguments(RECURSIVE_REPORT_ARGUMENTS)
             ),
         resources:
-            slurm_qos=DEFAULT_SLURM_QOS,
+            qos=DEFAULT_SLURM_QOS,
             **linear_resources(mem=2000, runtime=1440),
         container:
             config["analysis_container"],
