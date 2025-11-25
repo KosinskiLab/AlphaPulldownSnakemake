@@ -73,6 +73,7 @@ dataset = FoldDataset.from_fold_specifications(
 
 local_sequences = tuple(dataset.sequences_by_origin.get("local", ()))
 
+localrules: symlink_local_files, download_uniprot, symlink_features
 ruleorder: symlink_local_files > download_uniprot > symlink_features > create_features
 
 required_folds = [
@@ -235,7 +236,7 @@ rule structure_inference:
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
         ),
-    resources::
+    resources:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
         gres=(DEFAULT_SLURM_GRES or f"gpu:1"),
         qos=DEFAULT_SLURM_QOS,
