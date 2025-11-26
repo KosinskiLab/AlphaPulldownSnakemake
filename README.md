@@ -1,6 +1,8 @@
 # AlphaPulldownSnakemake
 
-AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Snakemake pipeline. This lets you focus entirely on **what** you want to compute, rather than **how** to manage dependencies, versioning, and cluster execution.
+AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Snakemake pipeline. This lets you focus entirely on **what** you want to compute, rather than **how** to manage dependencies, versioning, and cluster execution.  
+
+**Helpful links:** [AlphaPulldown documentation](https://github.com/KosinskiLab/AlphaPulldown/wiki) · [Precalculated feature databases](https://github.com/KosinskiLab/AlphaPulldown/wiki/Features-Database) · [Downstream analysis guide](https://github.com/KosinskiLab/AlphaPulldown/wiki/Downstream-Analysis)
 
 ## 1. Installation
 Create and activate the conda environment:
@@ -193,16 +195,27 @@ feature_directory:
 Post-inference analysis is enabled by default. You can disable it or add a project-wide summary in `config/config.yaml`:
 
 ```yaml
-enable_structure_analysis: true          # skip alphaJudge if set to false
-generate_recursive_report: true          # set to false if you do not need all_interfaces.csv
-recursive_report_arguments:              # optional extra CLI flags for alphajudge
+enable_structure_analysis: true             # skip alphaJudge if set to false
+generate_recursive_report: true             # disable if you do not need all_interfaces.csv
+recursive_report_arguments:                 # optional extra CLI flags for alphajudge
   --models_to_analyse: best
 
 # SLURM defaults (override to match your cluster)
-slurm_partition: "gpu"
-slurm_gres: "gpu:1"
-slurm_qos: "normal"
+slurm_partition: "gpu"                      # which partition/queue to submit to
+slurm_qos: "normal"                         # optional QoS if your site uses it
+structure_inference_gpus_per_task: 1        # number of GPUs each inference job needs
+structure_inference_gpu_model: "3090"       # optional GPU model constraint (remove to allow any)
+structure_inference_tasks_per_gpu: 0        # <=0 keeps --ntasks-per-gpu unset in the plugin
 ```
+
+`structure_inference_gpus_per_task` and `structure_inference_gpu_model` are read by the
+Snakemake Slurm executor plugin and translated into `--gpus=<model>:<count>` (or `--gpus=<count>` if
+no model is specified). We no longer use `slurm_gres`; requesting GPUs exclusively through these
+fields keeps the job submission consistent across clusters.
+
+`structure_inference_tasks_per_gpu` toggles whether the plugin also emits `--ntasks-per-gpu`. Leaving
+the default `0` prevents that flag, which avoids conflicting with the Tres-per-task request on many
+systems. Set it to a positive integer only if your site explicitly requires `--ntasks-per-gpu`.
 
 
 ### Changing folding backends
@@ -215,13 +228,89 @@ structure_inference_arguments:
   --<other-flags>
 ```
 
-> **Note**: AlphaPulldown supports: alphafold2, alphafold3 and alphalink backends.
+> **Note**: AlphaPulldown supports: `alphafold2`, `alphafold3`, and `alphalink` backends.
+
+### Backend-specific flags
+
+You can pass any backend CLI switches through `structure_inference_arguments`. Common options are listed below; keep or remove lines based on your needs.
+
+<details>
+<summary>AlphaFold2 flags</summary>
+
+```yaml
+structure_inference_arguments:
+  --compress_result_pickles: False        # gzip AF2 result pickles
+  --remove_result_pickles: False          # delete pickles after summary is created
+  --models_to_relax: None                 # all | best | none
+  --remove_keys_from_pickles: True        # strip large tensors from pickle outputs
+  --convert_to_modelcif: True             # additionally write ModelCIF files
+  --allow_resume: True                    # resume from partial runs
+  --num_cycle: 3
+  --num_predictions_per_model: 1
+  --pair_msa: True
+  --save_features_for_multimeric_object: False
+  --skip_templates: False
+  --msa_depth_scan: False
+  --multimeric_template: False
+  --model_names: None
+  --msa_depth: None
+  --description_file: None
+  --path_to_mmt: None
+  --desired_num_res: None
+  --desired_num_msa: None
+  --benchmark: False
+  --model_preset: monomer
+  --use_ap_style: False
+  --use_gpu_relax: True
+  --dropout: False
+```
+</details>
+
+<details>
+<summary>AlphaFold3 flags</summary>
+
+```yaml
+structure_inference_arguments:
+  --jax_compilation_cache_dir: null
+  --buckets: ['64','128','256','512','768','1024','1280','1536','2048','2560','3072','3584','4096','4608','5120']
+  --flash_attention_implementation: triton
+  --num_diffusion_samples: 5
+  --num_seeds: null
+  --debug_templates: False
+  --debug_msas: False
+  --num_recycles: 10
+  --save_embeddings: False
+  --save_distogram: False
+```
+</details>
 
 ### Database configuration
 
-Set the path to your AlphaFold databases:
+Set the paths to AlphaFold databases and backend weights:
 
 ```yaml
 databases_directory: "/path/to/alphafold/databases"
+backend_weights_directory: "/path/to/backend/weights"
+```
+
+---
+
+## How to cite
+
+If AlphaPulldown (or this workflow) contributed to your research, please cite [Molodenskiy et al., 2025](https://doi.org/10.1093/bioinformatics/btaf115):
+
+```bibtex
+@article{Molodenskiy2025AlphaPulldown2,
+  author    = {Molodenskiy, Dmitry and Maurer, Valentin J. and Yu, Dingquan and
+               Chojnowski, Grzegorz and Bienert, Stefan and Tauriello, Gerardo and
+               Gilep, Konstantin and Schwede, Torsten and Kosinski, Jan},
+  title     = {AlphaPulldown2—a general pipeline for high-throughput structural modeling},
+  journal   = {Bioinformatics},
+  volume    = {41},
+  number    = {3},
+  pages     = {btaf115},
+  year      = {2025},
+  doi       = {10.1093/bioinformatics/btaf115}
+}
 ```
 
