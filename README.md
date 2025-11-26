@@ -190,6 +190,23 @@ feature_directory:
 
 > **Note**: If your features are compressed, set `compress-features: True` in the config.
 
+### Feature generation flags (`create_individual_features.py`)
+
+You can tweak the feature-generation step by editing `create_feature_arguments` (or by running the
+script manually). Commonly used flags:
+
+- `--data_pipeline {alphafold2,alphafold3}` – choose the feature format to emit.
+- `--db_preset {full_dbs,reduced_dbs}` – switch between the full BFD stack or the reduced databases.
+- `--use_mmseqs2` – rely on the remote MMseqs2 API; skips local jackhmmer/HHsearch database lookups.
+- `--use_precomputed_msas` / `--save_msa_files` – reuse stored MSAs or keep new ones for later runs.
+- `--compress_features` – zip the generated `*.pkl` files (`.xz` extension) to save space.
+- `--skip_existing` – leave existing feature files untouched (safe for reruns).
+- `--seq_index N` – only process the N‑th sequence from the FASTA list.
+- `--use_hhsearch`, `--re_search_templates_mmseqs2` – toggle template search implementations.
+- `--path_to_mmt`, `--description_file`, `--multiple_mmts` – enable TrueMultimer CSV-driven feature sets.
+- `--max_template_date YYYY-MM-DD` – required cutoff for template structures; keeps runs reproducible.
+
+
 ### Structure analysis & reporting
 
 Post-inference analysis is enabled by default. You can disable it or add a project-wide summary in `config/config.yaml`:
