@@ -52,6 +52,9 @@ if isinstance(input_files, (str, Path)):
 DEFAULT_SLURM_PARTITION = config.get("slurm_partition")
 DEFAULT_SLURM_GRES = config.get("slurm_gres")
 DEFAULT_SLURM_QOS = config.get("slurm_qos")
+DEFAULT_STRUCTURE_INFERENCE_GPUS = config.get("structure_inference_gpus_per_task", 1)
+DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL = config.get("structure_inference_gpu_model")
+DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU = config.get("structure_inference_tasks_per_gpu", 0)
 
 prepare_container_binds(
     output_directory=config["output_directory"],
@@ -238,8 +241,10 @@ rule structure_inference:
         ),
     resources:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
-        gres=(DEFAULT_SLURM_GRES or f"gpu:1"),
         qos=DEFAULT_SLURM_QOS,
+        gpu=DEFAULT_STRUCTURE_INFERENCE_GPUS,
+        gpu_model=DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL,
+        tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(
             mem_fn=lambda wc, attempt: config.get("structure_inference_ram_bytes", 32000)
             * (1.1 ** attempt),
