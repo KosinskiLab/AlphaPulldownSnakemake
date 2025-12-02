@@ -65,9 +65,9 @@ structure_inference_gpus_per_task: 1
 structure_inference_gpu_model: "3090"
 
 # Specify the backend by changing the prediction container
-# - "docker://kosinskilab/fold:2.1.2" for AlphaFold2
-# - "docker://kosinskilab/alphafold3:2.1.2" for AlphaFold3
-# - "docker://kosinskilab/alphalink:2.1.2" for 
+# - "docker://kosinskilab/alphafold2:2.1.5" for AlphaFold2
+# - "docker://kosinskilab/alphafold3:2.1.5" for AlphaFold3
+# - "docker://kosinskilab/alphalink:2.1.5" for AlphaLink 
 # (you can also use local singularity .sif files)
 # - "/path/to/my/container.sif"
 prediction_container: "docker://kosinskilab/alphafold3:latest"
