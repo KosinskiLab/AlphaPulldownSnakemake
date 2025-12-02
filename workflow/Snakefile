@@ -243,7 +243,7 @@ rule structure_inference:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
         qos=DEFAULT_SLURM_QOS,
         gpu=DEFAULT_STRUCTURE_INFERENCE_GPUS,
-        gpu_model=DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL,
+        **({"gpu_model": DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL} if DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL is not None else {}),
         tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(
             mem_fn=lambda wc, attempt: config.get("structure_inference_ram_bytes", 32000)
