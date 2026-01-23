@@ -114,10 +114,17 @@ snakemake --profile config/profiles/desktop --cores 8
 <details>
 <summary>Cluster execution</summary>
 
-For running on a SLURM cluster, use the executor plugin:
+For running on a SLURM cluster, furst create a virtual terminal e.g. using `screen`:
 
 ```bash
 screen -S snakemake_session
+```
+Then activate your conda/mamba environment:
+```bash
+mamba activate snake
+```
+Finally, use the slurm executor plugin:
+```bash
 snakemake \
   --executor slurm \
   --profile config/profiles/slurm \
@@ -126,6 +133,8 @@ snakemake \
 ```
 
 Detach with `Ctrl + A` then `D`. Reattach later with `screen -r snakemake_session`.
+
+Job specific logs are created automatically and stored in your `AlphaPulldownSnakemake/slurm_logs` directory.
 
 </details>
 
