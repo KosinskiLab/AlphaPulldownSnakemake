@@ -232,8 +232,9 @@ rule structure_inference:
             for individual_fold in wildcards.fold.split(" ")
         ],
         requested_fold = lambda wc: (
-                protein_delimiter.join(f"{p}_af3_input.json" for p in wc.fold.split(protein_delimiter))
-                if IS_AF3 else wc.fold
+                protein_delimiter.join(f"{p}_af3_input.json" for p in dataset.sequences_by_fold[wc.fold])
+                if IS_AF3
+                else wc.fold
                 ),
         protein_delimiter=protein_delimiter,
         cli_parameters=" ".join(
