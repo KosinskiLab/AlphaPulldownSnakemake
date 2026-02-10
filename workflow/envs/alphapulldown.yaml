@@ -4,7 +4,7 @@ channels:
   - bioconda
 dependencies:
   - python=3.12
-  - snakemake
+  - snakemake=9.*
   - snakemake-executor-plugin-slurm
   - snakedeploy
   - pulp
@@ -12,5 +12,5 @@ dependencies:
   - coincbc
   - pip
   - pip:
-      - alphapulldown-input-parser
+      - alphapulldown-input-parser>=0.3.0
 
