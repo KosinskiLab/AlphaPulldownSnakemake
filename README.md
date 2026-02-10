@@ -10,7 +10,7 @@ Create and activate the conda environment:
 ```bash
 conda env create \
   -n snake \
-  -f https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.1.5/workflow/envs/alphapulldown.yaml
+  -f https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.1.8/workflow/envs/alphapulldown.yaml
 conda activate snake
 ```
 
