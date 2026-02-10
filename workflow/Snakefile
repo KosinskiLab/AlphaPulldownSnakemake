@@ -42,6 +42,36 @@ else:
 def feature_name(base: str) -> str:
     return f"{base}_af3_input.json" if IS_AF3 else f"{base}.{FEATURE_SUFFIX}"
 
+
+def _format_af3_requested_fold(fold: str, delimiter: str) -> str:
+    """Convert a logical fold specification into AF3 JSON feature inputs.
+
+    Examples:
+        "P01258+P0AEZ3:2" -> "P01258_af3_input.json+P0AEZ3_af3_input.json:2"
+        "P01258"          -> "P01258_af3_input.json"
+
+    Rationale:
+        - Features are generated as "<base>_af3_input.json".
+        - Copy numbers (":2") apply to the logical protein, not the file name.
+        - alphapulldown-input-parser expects copy numbers after the JSON filename.
+    """
+
+    converted_parts: list[str] = []
+    for token in fold.split(delimiter):
+        token = token.strip()
+        if not token:
+            continue
+
+        parts = [p.strip() for p in token.split(":") if p.strip()]
+        base = parts[0]
+        suffix = ":".join(parts[1:]) if len(parts) > 1 else ""
+
+        json_name = f"{base}_af3_input.json"
+        converted = f"{json_name}:{suffix}" if suffix else json_name
+        converted_parts.append(converted)
+
+    return delimiter.join(converted_parts)
+
 protein_delimiter = config.get("protein_delimiter", "+")
 exclude_permutations = config.get("exclude_permutations", True)
 
@@ -231,10 +261,11 @@ rule structure_inference:
             join(config["output_directory"], "predictions", individual_fold)
             for individual_fold in wildcards.fold.split(" ")
         ],
-        requested_fold = lambda wc: (
-                protein_delimiter.join(f"{p}_af3_input.json" for p in wc.fold.split(protein_delimiter))
-                if IS_AF3 else wc.fold
-                ),
+        requested_fold = (
+            lambda wc: _format_af3_requested_fold(wc.fold, protein_delimiter)
+            if IS_AF3
+            else wc.fold
+        ),
         protein_delimiter=protein_delimiter,
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
