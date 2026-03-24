@@ -13,7 +13,7 @@ output_directory: ./temp_fold/
 
 # Path to AlphaFold databases and to backend weights
 # Note prior to version 2.0.4 these were called alphafold_data_directory
-databases_directory: /scratch/AlphaFold_DBs/2.3.0
+databases_directory: /scratch/AlphaFold_DBs/3.0.0
 backend_weights_directory : /g/kosinski/dima/alphafold3_weights/
 
 # Directories containing precomputed features
@@ -38,7 +38,7 @@ create_feature_arguments:
   --use_precomputed_msas: true  # Use precomputed MSA files if available
   --max_template_date: 2050-01-01  # Set maximum template date to include all templates
   --compress_features: true  # Compress generated features
-  --data_pipeline: alphafold2 # Use alphafold2 or alphafold3 data pipeline for generating features
+  --data_pipeline: alphafold3 # Use alphafold2 or alphafold3 data pipeline for generating features
 
 # Arguments for structure inference
 structure_inference_arguments:

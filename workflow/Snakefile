@@ -48,12 +48,13 @@ def _format_af3_requested_fold(fold: str, delimiter: str) -> str:
 
     Examples:
         "P01258+P0AEZ3:2" -> "P01258_af3_input.json+P0AEZ3_af3_input.json:2"
+        "P01258:1-100:2" -> "P01258_af3_input.json:1-100:2"
         "P01258"          -> "P01258_af3_input.json"
 
     Rationale:
         - Features are generated as "<base>_af3_input.json".
-        - Copy numbers (":2") apply to the logical protein, not the file name.
-        - alphapulldown-input-parser expects copy numbers after the JSON filename.
+        - Copy numbers and region ranges apply to the logical protein, not the file name.
+        - alphapulldown-input-parser accepts those suffixes after the JSON filename.
     """
 
     converted_parts: list[str] = []
@@ -378,4 +379,3 @@ if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT:
                     --recursive \
                     --summary {output} {params.extra_args}
             """
-

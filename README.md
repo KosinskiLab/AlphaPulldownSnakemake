@@ -14,7 +14,7 @@ conda env create \
 conda activate snake
 ```
 
-This environment file installs Snakemake and all required plugins via conda and pulls in `alphapulldown-input-parser` from PyPI in a single step.
+This environment file installs Snakemake and all required plugins via conda and pulls in `alphapulldown-input-parser>=0.4.0` from PyPI in a single step.
 
 That's it, you're done!
 
@@ -55,6 +55,13 @@ You can also specify:
 - **Specific residue regions**: `Q8I2G6:1-100` (residues 1-100 only)
 - **Multiple copies**: `Q8I2G6:2` (dimer of the same protein)
 - **Combinations**: `Q8I2G6:2:1-100+Q8I5K4` (dimer of residues 1-100 plus another protein)
+
+The same range syntax also works when the workflow generates AlphaFold 3 JSON
+features (`--data_pipeline: alphafold3`). In that mode the Snakefile rewrites
+logical inputs such as `Q8I2G6:1-100` to the corresponding
+`Q8I2G6_af3_input.json:1-100` feature reference automatically.
+Make sure the prediction container or runtime environment includes a matching
+AlphaPulldown build together with `alphapulldown-input-parser>=0.4.0`.
 
 </details>
 
@@ -342,4 +349,3 @@ If AlphaPulldown (or this workflow) contributed to your research, please cite [M
   doi       = {10.1093/bioinformatics/btaf115}
 }
 ```
-

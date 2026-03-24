@@ -12,5 +12,4 @@ dependencies:
   - coincbc
   - pip
   - pip:
-      - alphapulldown-input-parser>=0.3.0
-
+      - alphapulldown-input-parser>=0.4.0
