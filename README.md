@@ -28,13 +28,13 @@ Create a new processing directory for your project:
 snakedeploy deploy-workflow \
   https://github.com/KosinskiLab/AlphaPulldownSnakemake \
   AlphaPulldownSnakemake \
-  --tag 2.1.7
+  --tag 2.1.8
 cd AlphaPulldownSnakemake
 ```
 
 ### Setup protein folding jobs
 
-Create a sample sheet `folds.txt` listing the proteins you want to fold. The simplest format uses UniProt IDs:
+Create or edit the sample sheet `config/sample_sheet.csv` listing the proteins you want to fold. The simplest format uses one folding specification per line, for example UniProt IDs:
 
 ```
 P01258+P01579
@@ -53,13 +53,23 @@ Each line represents one folding job:
 You can also specify:
 - **FASTA file paths** instead of UniProt IDs: `/path/to/protein.fasta`
 - **Specific residue regions**: `Q8I2G6:1-100` (residues 1-100 only)
+- **Discontinuous regions**: `Q8I2G6:1-100:150-200` (two separate regions from the same protein)
 - **Multiple copies**: `Q8I2G6:2` (dimer of the same protein)
 - **Combinations**: `Q8I2G6:2:1-100+Q8I5K4` (dimer of residues 1-100 plus another protein)
+- **Copies plus discontinuous regions**: `Q8I2G6:2:1-100:150-200+Q8I5K4`
 
-The same range syntax also works when the workflow generates AlphaFold 3 JSON
-features (`--data_pipeline: alphafold3`). In that mode the Snakefile rewrites
-logical inputs such as `Q8I2G6:1-100` to the corresponding
-`Q8I2G6_af3_input.json:1-100` feature reference automatically.
+The same copy/range syntax also works when the workflow generates AlphaFold 3
+JSON features (`--data_pipeline: alphafold3`). Examples:
+
+- `Q8I2G6_af3_input.json:1-100`
+- `Q8I2G6_af3_input.json:1-100:150-200`
+- `Q8I2G6_af3_input.json:2:1-100:150-200+Q8I5K4_af3_input.json`
+
+In that mode the Snakefile rewrites logical inputs such as
+`Q8I2G6:1-100:150-200` to the corresponding
+`Q8I2G6_af3_input.json:1-100:150-200` feature reference automatically.
+For the AlphaFold 3 backend, discontinuous regions are modeled as separate
+chains, so they are not connected by a peptide bond.
 Make sure the prediction container or runtime environment includes a matching
 AlphaPulldown build together with `alphapulldown-input-parser>=0.4.0`.
 
@@ -71,12 +81,12 @@ Edit `config/config.yaml` and set the path to your sample sheet:
 
 ```yaml
 input_files:
-  - "folds.txt"
+  - "config/sample_sheet.csv"
 ```
 
 ### Setup pulldown experiments
 
-If you want to test which proteins from one group interact with proteins from another group, create a second file `baits.txt`:
+If you want to test which proteins from one group interact with proteins from another group, create a second file such as `config/baits.txt`:
 
 ```
 Q8I2G6
@@ -86,11 +96,11 @@ And update your config:
 
 ```yaml
 input_files:
-  - "folds.txt"
-  - "baits.txt"
+  - "config/sample_sheet.csv"
+  - "config/baits.txt"
 ```
 
-This will test all combinations: every protein in `folds.txt` paired with every protein in `baits.txt`.
+This will test all combinations: every protein in `config/sample_sheet.csv` paired with every protein in `config/baits.txt`.
 
 <details>
 <summary>Multi-file pulldown experiments</summary>
