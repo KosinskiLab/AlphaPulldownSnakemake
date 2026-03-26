@@ -68,8 +68,13 @@ JSON features (`--data_pipeline: alphafold3`). Examples:
 In that mode the Snakefile rewrites logical inputs such as
 `Q8I2G6:1-100:150-200` to the corresponding
 `Q8I2G6_af3_input.json:1-100:150-200` feature reference automatically.
-For the AlphaFold 3 backend, discontinuous regions are modeled as separate
-chains, so they are not connected by a peptide bond.
+AlphaPulldown preserves those discontinuous regions as one gapped polymer
+chain with preserved residue-number gaps.
+This keeps retained fragments intra-chain, so template contacts between those
+fragments are not masked as inter-chain interactions.
+The original residue IDs are written to the mmCIF author-numbering fields
+(`auth_seq_id` and `pdbx_PDB_ins_code`); overlapping IDs are disambiguated with
+insertion codes such as `2A`, `2B`, and so on.
 Make sure the prediction container or runtime environment includes a matching
 AlphaPulldown build together with `alphapulldown-input-parser>=0.4.0`.
 
@@ -131,7 +136,7 @@ snakemake --profile config/profiles/desktop --cores 8
 <details>
 <summary>Cluster execution</summary>
 
-For running on a SLURM cluster, furst create a virtual terminal e.g. using `screen`:
+For running on a SLURM cluster, first create a virtual terminal e.g. using `screen`:
 
 ```bash
 screen -S snakemake_session
