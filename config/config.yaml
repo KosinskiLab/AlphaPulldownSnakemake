@@ -50,10 +50,12 @@ analyze_structure_arguments:
   --pae_filter: 100.0 # PAE filter for structure analysis
   --models_to_analyse: "all"  # Models to analyze
 
-# Memory allocation settings for feature creation and structure inference
-feature_create_ram_bytes: 64000
+# Memory allocation for feature creation and structure inference.
+# NOTE: despite the "_bytes" suffix these values are in MEGABYTES (used directly as
+# the SLURM --mem request), so 64000 = 64000 MB ~= 64 GB. They scale with retries.
+feature_create_ram_bytes: 64000      # MB
 feature_create_ram_scaling: 1.1
-structure_inference_ram_bytes: 64000
+structure_inference_ram_bytes: 64000 # MB
 
 # Number of threads for AlphaFold inference
 alphafold_inference_threads: 8

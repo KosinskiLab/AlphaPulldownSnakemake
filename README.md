@@ -210,32 +210,36 @@ fields keeps the job submission consistent across clusters.
 the default `0` prevents that flag, which avoids conflicting with the Tres-per-task request on many
 systems. Set it to a positive integer only if your site explicitly requires `--ntasks-per-gpu`.
 
-#### Restricting or excluding GPUs
+The remaining optional fields help with two common cluster issues: keeping inference off GPUs it
+can't use, and large complexes running out of GPU memory. Defaults are sensible; expand below only if
+you hit these.
 
-There are two complementary ways to keep inference off unsuitable GPUs:
+<details>
+<summary>Avoiding unsuitable GPUs (<code>slurm_exclude_nodes</code>, <code>gpu_model</code>) and the runtime cap</summary>
 
-- **Restrict to one model** with `structure_inference_gpu_model` (e.g. `"A100"`). The plugin emits
-  `--gpus=<model>:<count>`, so SLURM only schedules on that model. This accepts a single model name.
-- **Exclude specific nodes** with `slurm_exclude_nodes`, a comma-separated node list passed straight to
-  `sbatch --exclude` (e.g. `"gpu50,gpu51,gpu52,gpu53"`). Use this to avoid nodes whose GPU the prediction
-  container cannot use — for example a CUDA compute capability newer than the container's bundled
-  `ptxas`, which fails with `ptxas too old` / `UNIMPLEMENTED`. Unlike `--gpus`/`--gres` and `--constraint`
-  (which the plugin manages or forbids in `slurm_extra`), `--exclude` is allowed and is the simplest way
-  to drop a handful of incompatible nodes while keeping the rest of the partition available.
+- **Restrict to one model** with `structure_inference_gpu_model` (e.g. `"A100"`) → the plugin emits
+  `--gpus=<model>:<count>`. Accepts a single model name; leave `""` for any.
+- **Exclude specific nodes** with `slurm_exclude_nodes` → passed verbatim to `sbatch --exclude`
+  (e.g. `"gpu50,gpu51"`). Use it for nodes whose GPU the container can't use — e.g. a CUDA compute
+  capability newer than the container's bundled `ptxas` (fails `ptxas too old` / `UNIMPLEMENTED`).
+  `--exclude` is allowed in `slurm_extra` whereas `--constraint`/`--gres`/`--gpus` are not, so it is
+  the supported way to drop a few nodes while keeping the rest of the partition.
+- **`structure_inference_max_runtime`** caps per-job wall time (minutes). Wall time scales as
+  `1440 * attempt`, so without a cap enough retries exceed the partition `MaxTime` and SLURM rejects
+  the job with `Requested time limit is invalid`. Set it to your partition's `MaxTime`
+  (`scontrol show partition <name>`); default 7 days (10080).
 
-`structure_inference_max_runtime` caps the per-job wall time. Wall time scales with the retry attempt
-(`1440 * attempt` minutes); without a cap, enough retries request more time than the partition's
-`MaxTime` and SLURM rejects the job with `Requested time limit is invalid`. Set this to your partition's
-`MaxTime` in minutes (`scontrol show partition <name>`); the default is 7 days (10080).
+</details>
 
-### Unified memory for large complexes
+<details>
+<summary>Unified memory for large complexes (<code>structure_inference_unified_memory</code>)</summary>
 
-Large AlphaFold 3 inputs (very long complexes, or smaller-VRAM GPUs) can exhaust GPU memory and fail
-with `RESOURCE_EXHAUSTED` / `Allocator (GPU_0_bfc) ran out of memory`. Inference enables JAX/XLA
-**unified (managed) memory** by default, which lets the model spill from GPU VRAM into host RAM instead
-of OOM-ing (slower while spilling, but it completes). This is the
+Large AlphaFold 3 inputs (or smaller-VRAM GPUs) can fail with `RESOURCE_EXHAUSTED` /
+`Allocator (GPU_0_bfc) ran out of memory`. Inference enables JAX/XLA **unified (managed) memory** by
+default so the model spills from GPU VRAM into host RAM instead of OOM-ing (slower while spilling, but
+it completes) — the
 [DeepMind-recommended setting](https://github.com/google-deepmind/alphafold3/blob/main/docs/performance.md)
-for large inputs and is exported into the prediction container as:
+for large inputs. It is exported into the prediction container as:
 
 ```sh
 export TF_FORCE_UNIFIED_MEMORY=true
@@ -244,13 +248,14 @@ export XLA_CLIENT_MEM_FRACTION=3.2   # how far past physical VRAM XLA may alloca
 ```
 
 ```yaml
-structure_inference_unified_memory: true   # set false to disable
+structure_inference_unified_memory: true   # set false to fail fast on OOM instead
 structure_inference_xla_mem_fraction: 3.2  # raise for inputs much larger than VRAM
 ```
 
-Because spilling slows execution, ensure the inference job also requests enough host RAM
-(`structure_inference_ram_bytes`) to hold the overflow. Disable with
-`structure_inference_unified_memory: false` if you prefer to fail fast on OOM instead.
+Because spilling is slower, make sure the job also requests enough host RAM
+(`structure_inference_ram_bytes`, in MB) to hold the overflow.
+
+</details>
 
 ### Using precomputed features
 
