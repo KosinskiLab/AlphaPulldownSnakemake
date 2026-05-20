@@ -85,6 +85,32 @@ DEFAULT_SLURM_QOS = config.get("slurm_qos")
 DEFAULT_STRUCTURE_INFERENCE_GPUS = config.get("structure_inference_gpus_per_task", 1)
 DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL = config.get("structure_inference_gpu_model")
 DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU = config.get("structure_inference_tasks_per_gpu", 0)
+# Optional comma-separated Slurm node exclude list for structure_inference, passed
+# through to sbatch as --exclude (e.g. "gpu50,gpu51" to avoid GPUs the prediction
+# container cannot use). It is a Slurm resource, not part of the rule code, so it
+# does not trigger Snakemake reruns of already-finished predictions.
+DEFAULT_SLURM_EXCLUDE = config.get("slurm_exclude_nodes")
+# Cap structure_inference wall time (minutes) so the retry scaling (1440 * attempt)
+# cannot exceed the partition MaxTime and cause "Requested time limit is invalid"
+# sbatch failures. Set to your partition's MaxTime; default is 7 days.
+STRUCTURE_INFERENCE_MAX_RUNTIME = config.get("structure_inference_max_runtime", 10080)
+# Enable JAX/XLA unified (managed) memory so large complexes can spill from GPU
+# VRAM into host RAM instead of OOM-ing. This is the DeepMind-recommended setting
+# for large AlphaFold 3 inputs. On by default; disable with
+# structure_inference_unified_memory: false. XLA_CLIENT_MEM_FRACTION controls how
+# far past physical VRAM XLA may allocate (AlphaFold 3 default 3.2).
+def _as_bool(value, default=False):
+    """Interpret a config value as a boolean (YAML bools and CLI strings alike)."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+STRUCTURE_INFERENCE_UNIFIED_MEMORY = _as_bool(
+    config.get("structure_inference_unified_memory", True), default=True
+)
+STRUCTURE_INFERENCE_XLA_MEM_FRACTION = config.get("structure_inference_xla_mem_fraction", 3.2)
 
 prepare_container_binds(
     output_directory=config["output_directory"],
@@ -270,16 +296,29 @@ rule structure_inference:
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
         ),
+        # JAX/XLA unified-memory env so large complexes can spill GPU VRAM into host
+        # RAM instead of OOM-ing (DeepMind-recommended for large AlphaFold 3 inputs).
+        # Empty string when disabled, so the rule code is unchanged in that case.
+        unified_memory_env=(
+            (
+                "export TF_FORCE_UNIFIED_MEMORY=true; "
+                "export XLA_PYTHON_CLIENT_PREALLOCATE=false; "
+                f"export XLA_CLIENT_MEM_FRACTION={STRUCTURE_INFERENCE_XLA_MEM_FRACTION}; "
+            )
+            if STRUCTURE_INFERENCE_UNIFIED_MEMORY
+            else ""
+        ),
     resources:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
         qos=DEFAULT_SLURM_QOS,
         gpu=DEFAULT_STRUCTURE_INFERENCE_GPUS,
         **({"gpu_model": DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL} if DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL is not None else {}),
+        **({"slurm_extra": f"--exclude={DEFAULT_SLURM_EXCLUDE}"} if DEFAULT_SLURM_EXCLUDE else {}),
         tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(
             mem_fn=lambda wc, attempt: config.get("structure_inference_ram_bytes", 32000)
             * (1.1 ** attempt),
-            runtime_fn=lambda wc, attempt: 1440 * attempt,
+            runtime_fn=lambda wc, attempt: min(1440 * attempt, STRUCTURE_INFERENCE_MAX_RUNTIME),
         ),
     threads:
         config["alphafold_inference_threads"],
@@ -287,6 +326,7 @@ rule structure_inference:
         config["prediction_container"],
     shell:
         r"""
+        {params.unified_memory_env}
         run_structure_prediction.py \
             --input {params.requested_fold} \
             --output_directory={params.output_directory} \
