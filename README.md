@@ -239,21 +239,43 @@ Large AlphaFold 3 inputs (or smaller-VRAM GPUs) can fail with `RESOURCE_EXHAUSTE
 default so the model spills from GPU VRAM into host RAM instead of OOM-ing (slower while spilling, but
 it completes) — the
 [DeepMind-recommended setting](https://github.com/google-deepmind/alphafold3/blob/main/docs/performance.md)
-for large inputs. It is exported into the prediction container as:
+for large inputs. It is exported inside the prediction container as:
 
 ```sh
 export TF_FORCE_UNIFIED_MEMORY=true
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export XLA_CLIENT_MEM_FRACTION=3.2   # how far past physical VRAM XLA may allocate
+export XLA_PYTHON_CLIENT_PREALLOCATE=false   # don't grab a huge VRAM chunk up front
+export XLA_CLIENT_MEM_FRACTION=$FRACTION      # how far past physical VRAM XLA may allocate
+export XLA_PYTHON_CLIENT_MEM_FRACTION=$FRACTION
 ```
+
+`XLA_PYTHON_CLIENT_PREALLOCATE=false` is required: without it XLA reserves a large
+slice of VRAM immediately, which defeats the point of letting the allocator grow into
+host RAM on demand.
 
 ```yaml
-structure_inference_unified_memory: true   # set false to fail fast on OOM instead
-structure_inference_xla_mem_fraction: 3.2  # raise for inputs much larger than VRAM
+structure_inference_unified_memory: true     # set false to fail fast on OOM instead
+structure_inference_xla_mem_fraction: auto   # "auto", or pin a number like 3.2
 ```
 
+With the default `structure_inference_xla_mem_fraction: auto`, the fraction is computed
+**per job at run time** as `(allocated host RAM) / (physical GPU VRAM)`: the GPU VRAM is
+read with `nvidia-smi` once the job lands on a node, and the host RAM is the job's SLURM
+`--mem` allocation (which scales with retry attempts). This keeps the unified-memory
+ceiling within the SLURM allocation so XLA cannot oversubscribe host RAM beyond what the
+job requested — which would otherwise get the job OOM-killed. The chosen fraction is
+logged as a `[unified-memory]` line at the top of the job log. Pin a number instead if
+you want a fixed multiplier regardless of GPU/RAM (mirrors the EMBL `run_AF_multimer.sh`
+convention).
+
+> The fraction is computed in the job shell rather than via the SLURM executor: the
+> executor passes the submit environment through with `--export=ALL` but offers no
+> per-job env hook, and the value depends on which GPU the job lands on (only known at
+> run time). Computing it in the container shell also avoids the apptainer env-crossing
+> that submit-side env vars would need.
+
 Because spilling is slower, make sure the job also requests enough host RAM
-(`structure_inference_ram_bytes`, in MB) to hold the overflow.
+(`structure_inference_ram_bytes`, in MB) to hold the overflow — under `auto` that RAM is
+exactly what the fraction is sized against.
 
 </details>
 

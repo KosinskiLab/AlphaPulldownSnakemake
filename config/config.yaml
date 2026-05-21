@@ -79,7 +79,11 @@ structure_inference_max_runtime: 10080
 # spill from GPU VRAM into host RAM instead of OOM-ing (DeepMind-recommended for large
 # AlphaFold 3 inputs; slower when actually spilling). On by default.
 structure_inference_unified_memory: true
-structure_inference_xla_mem_fraction: 3.2
+# How far past physical GPU VRAM XLA may allocate. "auto" (default) computes it per
+# job at run time as (allocated host RAM) / (physical GPU VRAM), so the unified-memory
+# ceiling stays within the SLURM --mem allocation and XLA cannot oversubscribe host
+# RAM beyond what the job requested. Set a number (e.g. 3.2) to pin it explicitly.
+structure_inference_xla_mem_fraction: auto
 
 # Specify the backend by changing the prediction container
 # - "docker://kosinskilab/alphafold2:2.1.5" for AlphaFold2

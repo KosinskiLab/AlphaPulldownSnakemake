@@ -98,7 +98,14 @@ STRUCTURE_INFERENCE_MAX_RUNTIME = config.get("structure_inference_max_runtime", 
 # VRAM into host RAM instead of OOM-ing. This is the DeepMind-recommended setting
 # for large AlphaFold 3 inputs. On by default; disable with
 # structure_inference_unified_memory: false. XLA_CLIENT_MEM_FRACTION controls how
-# far past physical VRAM XLA may allocate (AlphaFold 3 default 3.2).
+# far past physical VRAM XLA may allocate.
+#
+# structure_inference_xla_mem_fraction defaults to "auto": the fraction is then
+# computed per-job at run time as (allocated host RAM) / (physical GPU VRAM),
+# mirroring the EMBL run_AF_multimer.sh convention. This keeps the unified-memory
+# ceiling within the SLURM --mem allocation, so XLA cannot oversubscribe host RAM
+# beyond what the job requested (which would otherwise get the job OOM-killed).
+# Set a numeric value (e.g. 3.2) to pin the fraction explicitly instead.
 def _as_bool(value, default=False):
     """Interpret a config value as a boolean (YAML bools and CLI strings alike)."""
     if isinstance(value, bool):
@@ -110,7 +117,13 @@ def _as_bool(value, default=False):
 STRUCTURE_INFERENCE_UNIFIED_MEMORY = _as_bool(
     config.get("structure_inference_unified_memory", True), default=True
 )
-STRUCTURE_INFERENCE_XLA_MEM_FRACTION = config.get("structure_inference_xla_mem_fraction", 3.2)
+_xla_mem_fraction_raw = config.get("structure_inference_xla_mem_fraction", "auto")
+STRUCTURE_INFERENCE_XLA_MEM_FRACTION = (
+    "auto"
+    if _xla_mem_fraction_raw is None
+    or str(_xla_mem_fraction_raw).strip().lower() in {"", "auto"}
+    else str(_xla_mem_fraction_raw)
+)
 
 prepare_container_binds(
     output_directory=config["output_directory"],
@@ -296,18 +309,13 @@ rule structure_inference:
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
         ),
-        # JAX/XLA unified-memory env so large complexes can spill GPU VRAM into host
-        # RAM instead of OOM-ing (DeepMind-recommended for large AlphaFold 3 inputs).
-        # Empty string when disabled, so the rule code is unchanged in that case.
-        unified_memory_env=(
-            (
-                "export TF_FORCE_UNIFIED_MEMORY=true; "
-                "export XLA_PYTHON_CLIENT_PREALLOCATE=false; "
-                f"export XLA_CLIENT_MEM_FRACTION={STRUCTURE_INFERENCE_XLA_MEM_FRACTION}; "
-            )
-            if STRUCTURE_INFERENCE_UNIFIED_MEMORY
-            else ""
-        ),
+        # JAX/XLA unified-memory toggle + fraction source. The actual exports are
+        # built in the shell so the "auto" fraction can read the per-job GPU VRAM
+        # (only known once the job lands on a node) and divide the allocated host
+        # RAM by it. unified_memory is "true"/"false"; xla_mem_fraction is "auto"
+        # or a pinned numeric value.
+        unified_memory="true" if STRUCTURE_INFERENCE_UNIFIED_MEMORY else "false",
+        xla_mem_fraction=STRUCTURE_INFERENCE_XLA_MEM_FRACTION,
     resources:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
         qos=DEFAULT_SLURM_QOS,
@@ -326,7 +334,22 @@ rule structure_inference:
         config["prediction_container"],
     shell:
         r"""
-        {params.unified_memory_env}
+        if [ "{params.unified_memory}" = "true" ]; then
+            export TF_FORCE_UNIFIED_MEMORY=true
+            export XLA_PYTHON_CLIENT_PREALLOCATE=false
+            _aj_frac="{params.xla_mem_fraction}"
+            if [ "$_aj_frac" = "auto" ]; then
+                _aj_gpu_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -dc '0-9')
+                if [ -n "$_aj_gpu_mb" ] && [ "$_aj_gpu_mb" -gt 0 ]; then
+                    _aj_frac=$(awk -v r={resources.mem_mb} -v g="$_aj_gpu_mb" 'BEGIN{{printf "%.3f", r/g}}')
+                else
+                    _aj_frac=3.2
+                fi
+                echo "[unified-memory] host_mem_mb={resources.mem_mb} gpu_mem_mb=$_aj_gpu_mb -> XLA_CLIENT_MEM_FRACTION=$_aj_frac"
+            fi
+            export XLA_CLIENT_MEM_FRACTION="$_aj_frac"
+            export XLA_PYTHON_CLIENT_MEM_FRACTION="$_aj_frac"
+        fi
         run_structure_prediction.py \
             --input {params.requested_fold} \
             --output_directory={params.output_directory} \
