@@ -322,7 +322,9 @@ rule structure_inference:
             export XLA_PYTHON_CLIENT_PREALLOCATE=false
             _aj_frac="{params.xla_mem_fraction}"
             if [ "$_aj_frac" = "auto" ]; then
-                _aj_gpu_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -dc '0-9')
+                _aj_gpu_query=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || true)
+                _aj_gpu_mb="${_aj_gpu_query%%$'\n'*}"
+                _aj_gpu_mb="${_aj_gpu_mb//[!0-9]/}"
                 if [ -n "$_aj_gpu_mb" ] && [ "$_aj_gpu_mb" -gt 0 ]; then
                     _aj_frac=$(awk -v r={resources.mem_mb} -v g="$_aj_gpu_mb" 'BEGIN{{printf "%.3f", r/g}}')
                 else
