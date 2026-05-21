@@ -320,6 +320,7 @@ rule structure_inference:
         if [ "{params.unified_memory}" = "true" ]; then
             export TF_FORCE_UNIFIED_MEMORY=true
             export XLA_PYTHON_CLIENT_PREALLOCATE=false
+            unset XLA_PYTHON_CLIENT_MEM_FRACTION
             _aj_frac="{params.xla_mem_fraction}"
             if [ "$_aj_frac" = "auto" ]; then
                 _aj_gpu_query=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || true)
@@ -333,7 +334,6 @@ rule structure_inference:
                 echo "[unified-memory] host_mem_mb={resources.mem_mb} gpu_mem_mb=$_aj_gpu_mb -> XLA_CLIENT_MEM_FRACTION=$_aj_frac"
             fi
             export XLA_CLIENT_MEM_FRACTION="$_aj_frac"
-            export XLA_PYTHON_CLIENT_MEM_FRACTION="$_aj_frac"
         fi
         run_structure_prediction.py \
             --input {params.requested_fold} \
