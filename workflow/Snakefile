@@ -174,7 +174,10 @@ for feature_directory in feature_directories:
     for available_feature in available_features:
         if available_feature not in required_feature_basenames:
             continue
-        precomputed_features.append(join(feature_directory, available_feature))
+        available_feature_path = join(feature_directory, available_feature)
+        if not exists(available_feature_path):
+            continue
+        precomputed_features.append(available_feature_path)
 
 rule all:
     input:
