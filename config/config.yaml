@@ -50,10 +50,12 @@ analyze_structure_arguments:
   --pae_filter: 100.0 # PAE filter for structure analysis
   --models_to_analyse: "all"  # Models to analyze
 
-# Memory allocation settings for feature creation and structure inference
-feature_create_ram_bytes: 64000
+# Memory allocation for feature creation and structure inference.
+# NOTE: despite the "_bytes" suffix these values are in MEGABYTES (used directly as
+# the SLURM --mem request), so 64000 = 64000 MB ~= 64 GB. They scale with retries.
+feature_create_ram_bytes: 64000      # MB
 feature_create_ram_scaling: 1.1
-structure_inference_ram_bytes: 64000
+structure_inference_ram_bytes: 64000 # MB
 
 # Number of threads for AlphaFold inference
 alphafold_inference_threads: 8
@@ -62,7 +64,26 @@ alphafold_inference_threads: 8
 slurm_partition: "gpu-el8"
 slurm_qos: "normal"
 structure_inference_gpus_per_task: 1
+# Restrict structure_inference to one GPU model (sbatch --gpus=<model>:N), e.g. "3090".
+# Leave "" to let SLURM pick any GPU in the partition.
 structure_inference_gpu_model: "3090"
+# Optional: comma-separated nodes to keep structure_inference OFF, passed to sbatch
+# as --exclude. Useful for GPUs the prediction container cannot use (e.g. a CUDA
+# compute capability the bundled ptxas is too old for). Example:
+# slurm_exclude_nodes: "gpu50,gpu51,gpu52,gpu53"
+# slurm_exclude_nodes: ""
+# Cap structure_inference wall time (minutes) so retry scaling (1440 * attempt) cannot
+# exceed the partition MaxTime and trigger "Requested time limit is invalid" failures.
+structure_inference_max_runtime: 10080
+# Enable JAX/XLA unified (managed) memory for structure inference so large complexes
+# spill from GPU VRAM into host RAM instead of OOM-ing (DeepMind-recommended for large
+# AlphaFold 3 inputs; slower when actually spilling). On by default.
+structure_inference_unified_memory: true
+# How far past physical GPU VRAM XLA may allocate. "auto" (default) computes it per
+# job at run time as (allocated host RAM) / (physical GPU VRAM), so the unified-memory
+# ceiling stays within the SLURM --mem allocation and XLA cannot oversubscribe host
+# RAM beyond what the job requested. Set a number (e.g. 3.2) to pin it explicitly.
+structure_inference_xla_mem_fraction: auto
 
 # Specify the backend by changing the prediction container
 # - "docker://kosinskilab/alphafold2:2.1.5" for AlphaFold2

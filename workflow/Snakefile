@@ -86,6 +86,30 @@ DEFAULT_SLURM_QOS = config.get("slurm_qos")
 DEFAULT_STRUCTURE_INFERENCE_GPUS = config.get("structure_inference_gpus_per_task", 1)
 DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL = config.get("structure_inference_gpu_model")
 DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU = config.get("structure_inference_tasks_per_gpu", 0)
+# --exclude is a Slurm resource (not rule code), so it never triggers reruns.
+DEFAULT_SLURM_EXCLUDE = config.get("slurm_exclude_nodes")
+STRUCTURE_INFERENCE_MAX_RUNTIME = config.get("structure_inference_max_runtime", 10080)
+# Unified memory + its XLA mem fraction. See config.yaml/README for what these do;
+# "auto" means the fraction is computed per job in the shell (it needs the runtime
+# GPU VRAM, see the rule below). Normalize to "auto" or a numeric string here.
+def _as_bool(value, default=False):
+    """Interpret a config value as a boolean (YAML bools and CLI strings alike)."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+STRUCTURE_INFERENCE_UNIFIED_MEMORY = _as_bool(
+    config.get("structure_inference_unified_memory", True), default=True
+)
+_xla_mem_fraction_raw = config.get("structure_inference_xla_mem_fraction", "auto")
+STRUCTURE_INFERENCE_XLA_MEM_FRACTION = (
+    "auto"
+    if _xla_mem_fraction_raw is None
+    or str(_xla_mem_fraction_raw).strip().lower() in {"", "auto"}
+    else str(_xla_mem_fraction_raw)
+)
 
 prepare_container_binds(
     output_directory=config["output_directory"],
@@ -271,16 +295,19 @@ rule structure_inference:
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
         ),
+        unified_memory="true" if STRUCTURE_INFERENCE_UNIFIED_MEMORY else "false",
+        xla_mem_fraction=STRUCTURE_INFERENCE_XLA_MEM_FRACTION,
     resources:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
         qos=DEFAULT_SLURM_QOS,
         gpu=DEFAULT_STRUCTURE_INFERENCE_GPUS,
         **({"gpu_model": DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL} if DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL is not None else {}),
+        **({"slurm_extra": f"--exclude={DEFAULT_SLURM_EXCLUDE}"} if DEFAULT_SLURM_EXCLUDE else {}),
         tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(
             mem_fn=lambda wc, attempt: config.get("structure_inference_ram_bytes", 32000)
             * (1.1 ** attempt),
-            runtime_fn=lambda wc, attempt: 1440 * attempt,
+            runtime_fn=lambda wc, attempt: min(1440 * attempt, STRUCTURE_INFERENCE_MAX_RUNTIME),
         ),
     threads:
         config["alphafold_inference_threads"],
@@ -288,6 +315,24 @@ rule structure_inference:
         config["prediction_container"],
     shell:
         r"""
+        # "auto" is resolved here, not in config, because the fraction is
+        # (host RAM)/(GPU VRAM) and the GPU is only known once the job lands.
+        if [ "{params.unified_memory}" = "true" ]; then
+            export TF_FORCE_UNIFIED_MEMORY=true
+            export XLA_PYTHON_CLIENT_PREALLOCATE=false
+            _aj_frac="{params.xla_mem_fraction}"
+            if [ "$_aj_frac" = "auto" ]; then
+                _aj_gpu_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -dc '0-9')
+                if [ -n "$_aj_gpu_mb" ] && [ "$_aj_gpu_mb" -gt 0 ]; then
+                    _aj_frac=$(awk -v r={resources.mem_mb} -v g="$_aj_gpu_mb" 'BEGIN{{printf "%.3f", r/g}}')
+                else
+                    _aj_frac=3.2
+                fi
+                echo "[unified-memory] host_mem_mb={resources.mem_mb} gpu_mem_mb=$_aj_gpu_mb -> XLA_CLIENT_MEM_FRACTION=$_aj_frac"
+            fi
+            export XLA_CLIENT_MEM_FRACTION="$_aj_frac"
+            export XLA_PYTHON_CLIENT_MEM_FRACTION="$_aj_frac"
+        fi
         run_structure_prediction.py \
             --input {params.requested_fold} \
             --output_directory={params.output_directory} \
