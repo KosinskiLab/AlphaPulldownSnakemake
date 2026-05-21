@@ -85,27 +85,12 @@ DEFAULT_SLURM_QOS = config.get("slurm_qos")
 DEFAULT_STRUCTURE_INFERENCE_GPUS = config.get("structure_inference_gpus_per_task", 1)
 DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL = config.get("structure_inference_gpu_model")
 DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU = config.get("structure_inference_tasks_per_gpu", 0)
-# Optional comma-separated Slurm node exclude list for structure_inference, passed
-# through to sbatch as --exclude (e.g. "gpu50,gpu51" to avoid GPUs the prediction
-# container cannot use). It is a Slurm resource, not part of the rule code, so it
-# does not trigger Snakemake reruns of already-finished predictions.
+# --exclude is a Slurm resource (not rule code), so it never triggers reruns.
 DEFAULT_SLURM_EXCLUDE = config.get("slurm_exclude_nodes")
-# Cap structure_inference wall time (minutes) so the retry scaling (1440 * attempt)
-# cannot exceed the partition MaxTime and cause "Requested time limit is invalid"
-# sbatch failures. Set to your partition's MaxTime; default is 7 days.
 STRUCTURE_INFERENCE_MAX_RUNTIME = config.get("structure_inference_max_runtime", 10080)
-# Enable JAX/XLA unified (managed) memory so large complexes can spill from GPU
-# VRAM into host RAM instead of OOM-ing. This is the DeepMind-recommended setting
-# for large AlphaFold 3 inputs. On by default; disable with
-# structure_inference_unified_memory: false. XLA_CLIENT_MEM_FRACTION controls how
-# far past physical VRAM XLA may allocate.
-#
-# structure_inference_xla_mem_fraction defaults to "auto": the fraction is then
-# computed per-job at run time as (allocated host RAM) / (physical GPU VRAM),
-# mirroring the EMBL run_AF_multimer.sh convention. This keeps the unified-memory
-# ceiling within the SLURM --mem allocation, so XLA cannot oversubscribe host RAM
-# beyond what the job requested (which would otherwise get the job OOM-killed).
-# Set a numeric value (e.g. 3.2) to pin the fraction explicitly instead.
+# Unified memory + its XLA mem fraction. See config.yaml/README for what these do;
+# "auto" means the fraction is computed per job in the shell (it needs the runtime
+# GPU VRAM, see the rule below). Normalize to "auto" or a numeric string here.
 def _as_bool(value, default=False):
     """Interpret a config value as a boolean (YAML bools and CLI strings alike)."""
     if isinstance(value, bool):
@@ -309,11 +294,6 @@ rule structure_inference:
         cli_parameters=" ".join(
             [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
         ),
-        # JAX/XLA unified-memory toggle + fraction source. The actual exports are
-        # built in the shell so the "auto" fraction can read the per-job GPU VRAM
-        # (only known once the job lands on a node) and divide the allocated host
-        # RAM by it. unified_memory is "true"/"false"; xla_mem_fraction is "auto"
-        # or a pinned numeric value.
         unified_memory="true" if STRUCTURE_INFERENCE_UNIFIED_MEMORY else "false",
         xla_mem_fraction=STRUCTURE_INFERENCE_XLA_MEM_FRACTION,
     resources:
@@ -334,6 +314,8 @@ rule structure_inference:
         config["prediction_container"],
     shell:
         r"""
+        # "auto" is resolved here, not in config, because the fraction is
+        # (host RAM)/(GPU VRAM) and the GPU is only known once the job lands.
         if [ "{params.unified_memory}" = "true" ]; then
             export TF_FORCE_UNIFIED_MEMORY=true
             export XLA_PYTHON_CLIENT_PREALLOCATE=false
