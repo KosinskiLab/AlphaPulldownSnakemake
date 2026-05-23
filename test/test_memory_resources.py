@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -56,6 +57,25 @@ def test_fold_total_tokens_sums_chains_and_copies():
         assert common.fold_total_tokens("A:1-100", d, "+") == 200
         # mixed
         assert common.fold_total_tokens("A:2+B", d, "+") == 700
+
+
+def test_fold_total_tokens_af3_precomputed_feature_fallback():
+    """When data/<chain>.fasta is absent (precomputed features), AF3 length comes
+    from the <features_dir>/<chain>_af3_input.json fallback."""
+    common.residue_count.cache_clear()
+    common.af3_input_residue_count.cache_clear()
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as feat:
+        _write_fasta(d, "B", 300)  # only B has a FASTA; A is "precomputed"
+        with open(os.path.join(feat, "A_af3_input.json"), "w") as fh:
+            json.dump({"sequences": [{"protein": {"id": "A", "sequence": "M" * 250}}]}, fh)
+        # without fallback A is unknown -> only B counted
+        assert common.fold_total_tokens("A+B", d, "+") == 300
+        # with AF3 fallback A is recovered from the json
+        assert (
+            common.fold_total_tokens("A+B", d, "+", features_dir=feat, is_af3=True) == 550
+        )
+        # fallback is AF3-only: AF2 precomputed stays at 0 for the missing chain
+        assert common.fold_total_tokens("A+B", d, "+", features_dir=feat, is_af3=False) == 300
 
 
 def test_feature_mem_model_math():

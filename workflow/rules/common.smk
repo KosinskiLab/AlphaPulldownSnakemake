@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import json
 import os
 from collections.abc import Iterable
 from pathlib import Path
@@ -38,14 +39,65 @@ def residue_count(fasta_path: str) -> int:
         return 0
 
 
-def fold_total_tokens(fold: str, data_dir: str, delimiter: str = "+") -> int:
+@functools.lru_cache(maxsize=None)
+def af3_input_residue_count(json_path: str) -> int:
+    """Total polymer residues in an AlphaFold 3 ``*_af3_input.json`` feature file.
+
+    Sums the ``sequence`` length of every protein/RNA/DNA entry under
+    ``sequences`` (ligands have no sequence and are skipped). Returns 0 if the
+    file is missing or not parseable. Used as a fallback for the chain length
+    when no ``data/<chain>.fasta`` exists (e.g. precomputed features supplied via
+    ``feature_directory``, where the download/feature rules never run).
+    """
+    try:
+        with open(json_path) as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return 0
+    total = 0
+    for entry in data.get("sequences", []):
+        if not isinstance(entry, dict):
+            continue
+        for mol in ("protein", "rna", "dna"):
+            mol_entry = entry.get(mol)
+            if isinstance(mol_entry, dict):
+                total += len(mol_entry.get("sequence", "") or "")
+    return total
+
+
+def chain_residue_count(
+    name: str, data_dir: str, features_dir: str | None = None, is_af3: bool = False
+) -> int:
+    """Residue length of a single chain.
+
+    Reads ``<data_dir>/<name>.fasta`` first; if that is unavailable (returns 0)
+    and the run is AlphaFold 3, falls back to the precomputed
+    ``<features_dir>/<name>_af3_input.json`` so length-aware sizing still works
+    when features are supplied via ``feature_directory`` rather than generated.
+    """
+    length = residue_count(os.path.join(data_dir, f"{name}.fasta"))
+    if length == 0 and is_af3 and features_dir:
+        length = af3_input_residue_count(
+            os.path.join(features_dir, f"{name}_af3_input.json")
+        )
+    return length
+
+
+def fold_total_tokens(
+    fold: str,
+    data_dir: str,
+    delimiter: str = "+",
+    features_dir: str | None = None,
+    is_af3: bool = False,
+) -> int:
     """Total residue (token) count of a fold specification.
 
     Sums the residue length of every chain in ``fold``, honouring copy numbers
     such as ``A:2`` (a homo-dimer counts twice). Region selections such as
     ``A:1-100`` are conservatively counted at the chain's full length, which
-    over- rather than under-estimates memory. Per-chain lengths are read from
-    ``<data_dir>/<chain>.fasta``.
+    over- rather than under-estimates memory. Per-chain lengths come from
+    ``<data_dir>/<chain>.fasta`` with an AF3 precomputed-feature fallback (see
+    ``chain_residue_count``).
     """
     total = 0
     for token in str(fold).split(delimiter):
@@ -54,7 +106,7 @@ def fold_total_tokens(fold: str, data_dir: str, delimiter: str = "+") -> int:
             continue
         name = parts[0]
         copies = int(parts[-1]) if len(parts) > 1 and parts[-1].isdigit() else 1
-        total += residue_count(os.path.join(data_dir, f"{name}.fasta")) * copies
+        total += chain_residue_count(name, data_dir, features_dir, is_af3) * copies
     return total
 
 

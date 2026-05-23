@@ -354,6 +354,8 @@ rule structure_inference:
                     wildcards.fold,
                     join(config["output_directory"], "data"),
                     protein_delimiter,
+                    features_dir=join(config["output_directory"], "features"),
+                    is_af3=(INFERENCE_BACKEND == "alphafold3"),
                 ),
                 base_mb=structure_inference_base_ram,
                 per_token_sq_mb=structure_inference_ram_per_token_sq,
