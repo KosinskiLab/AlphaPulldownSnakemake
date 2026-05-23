@@ -258,6 +258,21 @@ def test_af3_input_residue_count_skips_ligands():
         assert common.af3_input_residue_count(p) == 100  # ligand contributes 0
 
 
+def test_select_gpu_model():
+    tiers = {2000: "3090", 4000: "A100", 99999: "H100"}
+    assert common.select_gpu_model(800, tiers) == "3090"   # small -> small GPU
+    assert common.select_gpu_model(2000, tiers) == "3090"  # boundary inclusive
+    assert common.select_gpu_model(2001, tiers) == "A100"
+    assert common.select_gpu_model(4000, tiers) == "A100"
+    assert common.select_gpu_model(4600, tiers) == "H100"
+    assert common.select_gpu_model(500000, tiers) == "H100"  # bigger than all -> last
+    # unordered / string keys (as parsed from YAML) still work
+    assert common.select_gpu_model(3000, {"4000": "A100", "2000": "3090"}) == "A100"
+    # empty map -> fall back to the fixed default model
+    assert common.select_gpu_model(3000, {}, default_model="3090") == "3090"
+    assert common.select_gpu_model(3000, {}) is None
+
+
 def test_mem_mb_reaches_sbatch_via_real_plugin():
     """Integration: the value our model computes is what the SLURM plugin turns
     into `sbatch --mem`. Skips gracefully if the plugin isn't importable."""

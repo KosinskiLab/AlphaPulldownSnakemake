@@ -372,6 +372,30 @@ structure_inference_runtime_minutes = config.get(
     "structure_inference_runtime_minutes", _infer_ram_defaults["runtime_minutes"]
 )
 
+# Optional length-based GPU routing: map an (inclusive) upper token bound to a GPU
+# model, e.g. {2000: "3090", 4000: "A100", 99999: "H100"}. Each complex is routed
+# to the smallest tier it fits (bigger-than-all -> largest tier). When unset, the
+# fixed structure_inference_gpu_model is used (previous behaviour).
+GPU_MODEL_BY_TOKENS = config.get("structure_inference_gpu_model_by_tokens") or {}
+_GPU_MODEL_CONFIGURED = bool(GPU_MODEL_BY_TOKENS) or (
+    DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL is not None
+)
+
+
+def _inference_gpu_model(wildcards):
+    """gpu_model resource: length-tier model, or the fixed model, or '' (any GPU)."""
+    tokens = fold_total_tokens(
+        wildcards.fold,
+        join(config["output_directory"], "data"),
+        protein_delimiter,
+        features_dir=join(config["output_directory"], "features"),
+        is_af3=(INFERENCE_BACKEND == "alphafold3"),
+        length_cache=sequence_length_cache,
+    )
+    return select_gpu_model(
+        tokens, GPU_MODEL_BY_TOKENS, DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL
+    ) or ""
+
 rule symlink_features:
     input:
         precomputed_features,
@@ -472,7 +496,7 @@ rule structure_inference:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
         qos=DEFAULT_SLURM_QOS,
         gpu=DEFAULT_STRUCTURE_INFERENCE_GPUS,
-        **({"gpu_model": DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL} if DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL is not None else {}),
+        **({"gpu_model": _inference_gpu_model} if _GPU_MODEL_CONFIGURED else {}),
         **({"slurm_extra": f"--exclude={DEFAULT_SLURM_EXCLUDE}"} if DEFAULT_SLURM_EXCLUDE else {}),
         tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(

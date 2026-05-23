@@ -205,6 +205,25 @@ def fold_length_violation(
     return None
 
 
+def select_gpu_model(total_tokens: int, tiers, default_model=None):
+    """Pick a GPU model for a complex of ``total_tokens`` from a token->model map.
+
+    ``tiers`` maps an (inclusive) upper token bound to a GPU model name, e.g.
+    ``{2000: "3090", 4000: "A100", 99999: "H100"}``. Returns the model of the
+    smallest tier whose bound is >= ``total_tokens``; a complex larger than every
+    tier falls back to the largest tier's model (best available). When ``tiers``
+    is empty, returns ``default_model`` (the fixed ``structure_inference_gpu_model``,
+    preserving the previous single-model behaviour).
+    """
+    if not tiers:
+        return default_model
+    ordered = sorted((int(bound), str(model)) for bound, model in tiers.items())
+    for bound, model in ordered:
+        if total_tokens <= bound:
+            return model
+    return ordered[-1][1]
+
+
 def _cap_mem(value_mb: float, cap_mb: int) -> int:
     value = max(int(value_mb), 1)
     if cap_mb and cap_mb > 0:

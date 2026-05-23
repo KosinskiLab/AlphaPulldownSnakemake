@@ -241,6 +241,21 @@ you hit these.
 
 - **Restrict to one model** with `structure_inference_gpu_model` (e.g. `"A100"`) → the plugin emits
   `--gpus=<model>:<count>`. Accepts a single model name; leave `""` for any.
+- **Route by complex size** with `structure_inference_gpu_model_by_tokens` → a map of (inclusive)
+  upper total-token bound to GPU model, so small complexes use small GPUs and large ones go to
+  big-VRAM cards (peak VRAM ≈ `0.0045·N²` MB):
+
+  ```yaml
+  structure_inference_gpu_model_by_tokens:
+    2000: "3090"     # <=2000 tokens -> 24 GB
+    4000: "A100"     # <=4000 tokens -> 80 GB
+    99999: "H100"    # larger -> biggest available (spills via unified memory)
+  ```
+
+  Each fold is routed to the smallest tier it fits (larger than all bounds → the last tier). When
+  set this takes precedence over `structure_inference_gpu_model`. This is the practical "fit to GPU"
+  lever: requested host RAM is a separate pool and does not size GPU VRAM, but choosing the GPU model
+  by length does.
 - **Exclude specific nodes** with `slurm_exclude_nodes` → passed verbatim to `sbatch --exclude`
   (e.g. `"gpu50,gpu51"`). Use it for nodes whose GPU the container can't use — e.g. a CUDA compute
   capability newer than the container's bundled `ptxas` (fails `ptxas too old` / `UNIMPLEMENTED`).

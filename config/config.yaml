@@ -122,6 +122,15 @@ structure_inference_gpus_per_task: 1
 # Restrict structure_inference to one GPU model (sbatch --gpus=<model>:N), e.g. "3090".
 # Leave "" to let SLURM pick any GPU in the partition.
 structure_inference_gpu_model: "3090"
+# Optional length-based GPU routing: map an (inclusive) upper TOTAL-token bound to a
+# GPU model, so small complexes go to small GPUs and large ones to big-VRAM cards.
+# Each complex is routed to the smallest tier it fits (larger than all -> last tier).
+# When set, this takes precedence over structure_inference_gpu_model. Example
+# (peak VRAM ~ 0.0045 * N^2 MB, so ~2000 tok fits 24 GB, ~4000 tok needs ~80 GB):
+# structure_inference_gpu_model_by_tokens:
+#   2000: "3090"     # <=2000 tokens -> 24 GB
+#   4000: "A100"     # <=4000 tokens -> 80 GB
+#   99999: "H100"    # larger -> biggest available (will spill via unified memory)
 # Optional: comma-separated nodes to keep structure_inference OFF, passed to sbatch
 # as --exclude. Useful for GPUs the prediction container cannot use (e.g. a CUDA
 # compute capability the bundled ptxas is too old for). Example:
