@@ -317,17 +317,31 @@ structure_inference  mem = safety * (structure_inference_ram_bytes + per_token_s
 
 - `seq_len` is the query length; `N` is the **total residues of the complex** (the
   AlphaFold token count, summed over chains and copy numbers). AlphaFold's pair
-  representation is `O(N^2)`, hence the quadratic inference term — calibrated so a ~2,000-,
-  ~4,500- and ~4,800-residue complex request ≈25, ≈90 and ≈100+ GB respectively.
+  representation is `O(N^2)`, hence the quadratic inference term.
+- **The coefficients default by backend** (selected from `--data_pipeline` / `--fold_backend`).
+  AlphaFold-Multimer (AF2) is heavier than AlphaFold 3 — measured AF2 inference host RSS was
+  ~4× higher than AF3 at the same complex size, and AF2's feature stage runs HHblits (the
+  main OOM source), whereas the AF3 pipeline is lighter. Defaults:
+
+  | backend | feature base | feature /residue | inference base | inference /N² |
+  |---|---|---|---|---|
+  | `alphafold2` | 64000 MB | 40 MB | 24000 MB | 0.0055 |
+  | `alphafold3` | 40000 MB | 25 MB | 16000 MB | 0.0045 |
+
+  The AF3 inference quadratic is sized to the observed GPU-VRAM demand so that, with unified
+  memory, the host spill ceiling (`host_mem / gpu_vram`) covers large complexes instead of
+  OOM-ing.
 - The first attempt already includes `mem_safety_factor` (default `1.25`) of head-room.
   **OOM retries still escalate** on top, multiplying by `..._ram_scaling ** (attempt - 1)`,
   so a bad estimate self-heals.
-- Tune the model via `mem_safety_factor`, `feature_create_ram_per_residue_mb`,
-  `structure_inference_ram_per_token_sq_mb`, the two `..._ram_bytes` bases, and the two
-  `..._ram_scaling` factors (all in `config/config.yaml`). Set `max_mem_mb` to your largest
-  node's RAM on clusters where an over-estimate would otherwise never schedule (`0` = no cap).
-- The `..._ram_bytes` keys are now the **fixed base** of each model rather than a flat
-  request; raising a base only raises the floor. Setting `per_residue`/`per_token_sq` to `0`
+- Override any backend default by setting the matching key in `config/config.yaml`
+  (`feature_create_ram_bytes`, `feature_create_ram_per_residue_mb`,
+  `structure_inference_ram_bytes`, `structure_inference_ram_per_token_sq_mb`); an explicit
+  value applies to all backends. Also tune `mem_safety_factor`, the `..._ram_scaling`
+  factors, `structure_inference_runtime_minutes`, and `max_mem_mb` (set it to your largest
+  node's RAM where an over-estimate would otherwise never schedule; `0` = no cap).
+- The `..._ram_bytes` keys are the **fixed base** of each model rather than a flat request;
+  raising a base only raises the floor. Setting `per_residue`/`per_token_sq` to `0`
   reproduces the old length-blind behaviour (a flat base × retry scaling).
 
 </details>

@@ -219,23 +219,40 @@ rule download_uniprot:
 
 # Length-aware memory model (all values in MB). Host RAM for both compute
 # stages is sized from the input sequence length(s) with a safety margin, then
-# escalated on OOM retries via `scaling ** (attempt - 1)`. See README.
+# escalated on OOM retries via `scaling ** (attempt - 1)`. Defaults differ by
+# backend (AF2 is heavier than AF3); an explicit config value always wins. See README.
 MEM_SAFETY_FACTOR = float(config.get("mem_safety_factor", 1.25))
 MAX_MEM_MB = int(config.get("max_mem_mb", 0) or 0)  # 0 = no cap
 
+# Feature backend = the data pipeline; inference backend = the fold backend
+# (falls back to the data pipeline when --fold_backend is unset).
+FEATURE_BACKEND = normalize_backend(DATA_PIPELINE)
+INFERENCE_BACKEND = normalize_backend(
+    config.get("structure_inference_arguments", {}).get("--fold_backend", DATA_PIPELINE)
+)
+_feat_ram_defaults = FEATURE_RAM_DEFAULTS[FEATURE_BACKEND]
+_infer_ram_defaults = INFERENCE_RAM_DEFAULTS[INFERENCE_BACKEND]
+
 # create_features (CPU/MSA): mem ~ safety * (base + per_residue * seq_len)
 feature_scaling = config.get("feature_create_ram_scaling", 1.1)
-base_feature_ram = config.get("feature_create_ram_bytes", 64000)
-feature_ram_per_residue = config.get("feature_create_ram_per_residue_mb", 30)
+base_feature_ram = config.get("feature_create_ram_bytes", _feat_ram_defaults["base_mb"])
+feature_ram_per_residue = config.get(
+    "feature_create_ram_per_residue_mb", _feat_ram_defaults["per_residue_mb"]
+)
 feature_threads = config.get("feature_threads", 8)
 
 # structure_inference (GPU host RAM): mem ~ safety * (base + per_token_sq * N^2),
 # N = total residues of the complex (AlphaFold pair representation is O(N^2)).
-structure_inference_base_ram = config.get("structure_inference_ram_bytes", 24000)
+structure_inference_base_ram = config.get(
+    "structure_inference_ram_bytes", _infer_ram_defaults["base_mb"]
+)
 structure_inference_ram_per_token_sq = config.get(
-    "structure_inference_ram_per_token_sq_mb", 0.0045
+    "structure_inference_ram_per_token_sq_mb", _infer_ram_defaults["per_token_sq_mb"]
 )
 structure_inference_ram_scaling = config.get("structure_inference_ram_scaling", 1.1)
+structure_inference_runtime_minutes = config.get(
+    "structure_inference_runtime_minutes", _infer_ram_defaults["runtime_minutes"]
+)
 
 rule symlink_features:
     input:
@@ -345,7 +362,9 @@ rule structure_inference:
                 attempt=attempt,
                 cap_mb=MAX_MEM_MB,
             ),
-            runtime_fn=lambda wc, attempt: min(1440 * attempt, STRUCTURE_INFERENCE_MAX_RUNTIME),
+            runtime_fn=lambda wc, attempt: min(
+                structure_inference_runtime_minutes * attempt, STRUCTURE_INFERENCE_MAX_RUNTIME
+            ),
         ),
     threads:
         config["alphafold_inference_threads"],

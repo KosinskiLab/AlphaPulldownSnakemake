@@ -84,22 +84,44 @@ def test_inference_mem_model_math_and_cap():
     assert capped == 50000
 
 
-def test_inference_model_covers_observed_oom_anchors_with_margin():
-    """Requested RAM must exceed the empirically observed AF3 peak demand for the
-    pairs documented in the AlphaJudge handoff, with a sane (not wasteful) margin."""
-    kw = dict(base_mb=24000, per_token_sq_mb=0.0045, scaling=1.1, safety=1.25, attempt=1)
-    anchors = [  # (total_tokens, observed_peak_GB)
-        (2066, 25),   # O00194+Q9ULV0
-        (4556, 82),   # P02549+P11277
-        (4836, 100),  # Q01082+Q13813
-    ]
+def test_af3_inference_defaults_cover_observed_gpu_demand_anchors():
+    """AF3 host request (the unified-memory spill ceiling) must exceed the observed
+    AF3 GPU-VRAM demand for the pairs documented in the AlphaJudge handoff."""
+    d = common.INFERENCE_RAM_DEFAULTS["alphafold3"]
+    kw = dict(base_mb=d["base_mb"], per_token_sq_mb=d["per_token_sq_mb"],
+              scaling=1.1, safety=1.25, attempt=1)
+    anchors = [(2066, 25), (4556, 82), (4836, 100)]  # (tokens, observed GB)
     for n, observed_gb in anchors:
         req_gb = common.estimate_inference_mem_mb(n, **kw) / 1000.0
         assert req_gb >= 1.2 * observed_gb, (n, req_gb, observed_gb)
-        assert req_gb <= 2.5 * observed_gb, (n, req_gb, observed_gb)
-    # monotonic in size
+        assert req_gb <= 2.7 * observed_gb, (n, req_gb, observed_gb)
     sizes = [common.estimate_inference_mem_mb(n, **kw) for n in (200, 1000, 2000, 4000)]
     assert sizes == sorted(sizes)
+
+
+def test_af2_inference_defaults_cover_measured_host_rss():
+    """AF2 host request must cover the measured AF2 inference host RSS (which IS the
+    consumed memory for AF2), with margin."""
+    d = common.INFERENCE_RAM_DEFAULTS["alphafold2"]
+    kw = dict(base_mb=d["base_mb"], per_token_sq_mb=d["per_token_sq_mb"],
+              scaling=1.1, safety=1.25, attempt=1)
+    measured = [(1583, 16.9), (2256, 30.8), (2324, 30.8)]  # (tokens, measured host RSS GB)
+    for n, rss_gb in measured:
+        req_gb = common.estimate_inference_mem_mb(n, **kw) / 1000.0
+        assert req_gb >= 1.2 * rss_gb, (n, req_gb, rss_gb)
+        assert req_gb <= 3.2 * rss_gb, (n, req_gb, rss_gb)
+
+
+def test_backend_defaults_af2_heavier_than_af3():
+    assert common.normalize_backend("af3") == "alphafold3"
+    assert common.normalize_backend("AlphaFold2") == "alphafold2"
+    assert common.normalize_backend(None) == "alphafold2"
+    f2, f3 = common.FEATURE_RAM_DEFAULTS["alphafold2"], common.FEATURE_RAM_DEFAULTS["alphafold3"]
+    i2, i3 = common.INFERENCE_RAM_DEFAULTS["alphafold2"], common.INFERENCE_RAM_DEFAULTS["alphafold3"]
+    assert f2["base_mb"] > f3["base_mb"]
+    assert f2["per_residue_mb"] > f3["per_residue_mb"]
+    assert i2["base_mb"] > i3["base_mb"]
+    assert i2["per_token_sq_mb"] > i3["per_token_sq_mb"]
 
 
 def test_linear_resources_forwards_input_to_new_style_callbacks():

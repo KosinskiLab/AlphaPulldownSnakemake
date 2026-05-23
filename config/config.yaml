@@ -61,6 +61,14 @@ analyze_structure_arguments:
 # where seq_len is the query length, N is the total residues of the complex, and the
 # request is multiplied by (scaling ** (attempt - 1)) on each retry. AlphaFold's pair
 # representation is O(N^2), hence the quadratic term for inference.
+#
+# The base / per-length coefficients DEFAULT BY BACKEND (AF2 is heavier than AF3),
+# selected automatically from --data_pipeline / --fold_backend:
+#                              feature base   feature /res   infer base   infer /N^2
+#   alphafold2 (AF2 multimer):    64000 MB       40 MB         24000 MB     0.0055
+#   alphafold3 (AF3):             40000 MB       25 MB         16000 MB     0.0045
+# Leave the keys below commented to use those backend defaults. Uncomment any key
+# to override it for ALL backends.
 
 # Safety margin applied to the first-attempt estimate of every length-aware stage.
 mem_safety_factor: 1.25
@@ -68,18 +76,22 @@ mem_safety_factor: 1.25
 # your largest node's RAM on clusters where an over-estimate would never schedule.
 max_mem_mb: 0
 
-# create_features (CPU/MSA) — base footprint is database/MSA-tool dominated, with a
-# mild linear dependence on query length.
-feature_create_ram_bytes: 64000          # MB, fixed base (DB/MSA tooling)
-feature_create_ram_per_residue_mb: 30    # MB per query residue
+# create_features (CPU/MSA) — base is database/MSA-tool dominated (AF2 HHblits is the
+# main OOM source), with a mild linear dependence on query length.
+# feature_create_ram_bytes: 64000        # MB, fixed base (default: backend-specific)
+# feature_create_ram_per_residue_mb: 30  # MB per query residue (default: backend-specific)
 feature_create_ram_scaling: 1.1          # per-retry escalation on OOM
 
 # structure_inference (GPU host RAM) — base plus a quadratic term in complex size.
 # With unified memory enabled the XLA spill fraction is derived from this host
 # allocation, so this also sizes the effective GPU memory ceiling.
-structure_inference_ram_bytes: 24000          # MB, fixed base
-structure_inference_ram_per_token_sq_mb: 0.0045  # MB per residue^2 (O(N^2))
-structure_inference_ram_scaling: 1.1          # per-retry escalation on OOM
+# structure_inference_ram_bytes: 24000           # MB, fixed base (default: backend-specific)
+# structure_inference_ram_per_token_sq_mb: 0.0045  # MB per residue^2 (default: backend-specific)
+structure_inference_ram_scaling: 1.1             # per-retry escalation on OOM
+# Wall-time minutes per attempt for structure_inference (capped by
+# structure_inference_max_runtime). Default 1440; AF3 on an adequate GPU finishes far
+# sooner, but host-memory spilling can take many hours, so the default stays generous.
+# structure_inference_runtime_minutes: 1440
 
 # Number of threads for AlphaFold inference
 alphafold_inference_threads: 8

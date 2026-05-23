@@ -117,6 +117,33 @@ def estimate_inference_mem_mb(
     return _cap_mem(value, cap_mb)
 
 
+# Backend-specific memory defaults. AlphaFold-Multimer (AF2) inference carries a
+# substantially heavier host-RAM footprint than AlphaFold 3 at the same complex
+# size (measured host RSS ~4x higher around N~2300 in the benchmark campaign), and
+# its feature stage runs HHblits, the dominant OOM source; the AF3 data pipeline
+# (jackhmmer/nhmmer, no HHblits) is lighter. So AF2 gets larger bases and a larger
+# quadratic term. These apply only when the matching config key is unset, so an
+# explicit config value always wins.
+FEATURE_RAM_DEFAULTS = {
+    "alphafold2": {"base_mb": 64000, "per_residue_mb": 40},
+    "alphafold3": {"base_mb": 40000, "per_residue_mb": 25},
+}
+INFERENCE_RAM_DEFAULTS = {
+    # base_mb: fixed floor; per_token_sq_mb: quadratic coeff in N^2 (total residues).
+    # AF2 base/coeff cover the measured AF2 host RSS with margin; the AF3 quadratic is
+    # sized to the observed GPU-VRAM demand so the unified-memory spill ceiling
+    # (host_mem / gpu_vram) covers large complexes instead of OOM-ing.
+    "alphafold2": {"base_mb": 24000, "per_token_sq_mb": 0.0055, "runtime_minutes": 1440},
+    "alphafold3": {"base_mb": 16000, "per_token_sq_mb": 0.0045, "runtime_minutes": 1440},
+}
+
+
+def normalize_backend(name, default: str = "alphafold2") -> str:
+    """Map a backend/data-pipeline string to 'alphafold2' or 'alphafold3'."""
+    n = str(name if name is not None else default).strip().lower()
+    return "alphafold3" if n in ("alphafold3", "af3") else "alphafold2"
+
+
 def feature_suffix(compression: str = "lzma") -> str:
     _compression = {
         "lzma": "xz",
