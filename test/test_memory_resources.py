@@ -165,6 +165,131 @@ def test_linear_resources_default_scaling_without_callbacks():
     assert res["attempt"]({}, input=[], attempt=4) == 4
 
 
+# --- length filtering (issue #33 + total caps) -------------------------------
+
+def test_parse_fold_chains():
+    assert common.parse_fold_chains("A+B") == [("A", 1), ("B", 1)]
+    assert common.parse_fold_chains("A:2") == [("A", 2)]
+    assert common.parse_fold_chains("A:1-100") == [("A", 1)]  # region, not a copy
+    assert common.parse_fold_chains("A:2:1-100+B") == [("A", 2), ("B", 1)]
+
+
+def test_fold_length_violation():
+    chains = [("A", 300, 1), ("B", 2000, 1)]  # total 2300
+    assert common.fold_length_violation(chains, 0, 0) is None  # limits off
+    assert common.fold_length_violation(chains, 0, 5000) is None  # under total cap
+    assert common.fold_length_violation(chains, 0, 1000) is not None  # over total cap
+    assert common.fold_length_violation(chains, 1000, 0) is not None  # B over per-protein
+    assert common.fold_length_violation(chains, 2500, 0) is None  # under per-protein
+    # homo-dimer copies count toward the total
+    assert common.fold_length_violation([("A", 600, 3)], 0, 1500) is not None
+    # unknown length fails open (None treated as 0)
+    assert common.fold_length_violation([("A", None, 1)], 0, 10) is None
+
+
+def test_default_total_length_caps_af3_gt_af2():
+    assert common.MAX_TOTAL_LENGTH_DEFAULTS["alphafold2"] == 5000
+    assert common.MAX_TOTAL_LENGTH_DEFAULTS["alphafold3"] == 7000
+
+
+def test_fetch_uniprot_length_parses_and_fails_open():
+    import urllib.request as ur
+
+    class _FakeResp:
+        def __init__(self, data):
+            self._data = data
+
+        def read(self):
+            return self._data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    orig = ur.urlopen
+    try:
+        common.fetch_uniprot_length.cache_clear()
+        ur.urlopen = lambda url, timeout=30.0: _FakeResp(b">sp|X\nMKLVMK\nAA\n")
+        assert common.fetch_uniprot_length("FAKE_OK") == 8  # 6 + 2, header skipped
+
+        def _boom(url, timeout=30.0):
+            raise OSError("offline")
+
+        ur.urlopen = _boom
+        assert common.fetch_uniprot_length("FAKE_FAIL") == 0  # fail open, no crash
+    finally:
+        ur.urlopen = orig
+
+
+def test_chain_residue_count_length_cache_fallback():
+    """AF2 precomputed features: no FASTA and no AF3 JSON, but the parse-time
+    length cache supplies the length."""
+    common.residue_count.cache_clear()
+    with tempfile.TemporaryDirectory() as d:
+        # no data/A.fasta exists; cache provides it
+        assert common.chain_residue_count("A", d) == 0
+        assert common.chain_residue_count("A", d, length_cache={"A": 412}) == 412
+
+
+def test_af3_input_residue_count_skips_ligands():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "x.json")
+        with open(p, "w") as fh:
+            json.dump(
+                {"sequences": [
+                    {"protein": {"id": "A", "sequence": "M" * 100}},
+                    {"ligand": {"id": "L", "ccdCodes": ["ATP"]}},  # no 'sequence'
+                ]},
+                fh,
+            )
+        assert common.af3_input_residue_count(p) == 100  # ligand contributes 0
+
+
+def test_mem_mb_reaches_sbatch_via_real_plugin():
+    """Integration: the value our model computes is what the SLURM plugin turns
+    into `sbatch --mem`. Skips gracefully if the plugin isn't importable."""
+    try:
+        from snakemake_executor_plugin_slurm.submit_string import get_submit_command
+    except Exception as exc:  # pragma: no cover - depends on environment
+        print(f"  (skipped: plugin not importable: {exc})")
+        return
+
+    mem = common.estimate_inference_mem_mb(
+        2300, base_mb=16000, per_token_sq_mb=0.0045, scaling=1.1, safety=1.25, attempt=1
+    )
+
+    class _Res(dict):
+        def get(self, key, default=None):
+            return dict.get(self, key, default)
+
+        def __getattr__(self, key):
+            try:
+                return self[key]
+            except KeyError as exc:
+                raise AttributeError(key) from exc
+
+    class _Job:
+        threads = 8
+        resources = _Res(mem_mb=mem, runtime=600, qos="normal")
+
+    params = {
+        "run_uuid": "test",
+        "slurm_logfile": "/tmp/test.log",
+        "comment_str": "test",
+        "account": "",
+        "partition": "",
+        "workdir": "",
+    }
+    try:
+        cmd = get_submit_command(_Job(), params)
+    except Exception as exc:  # pragma: no cover - plugin internals may change
+        print(f"  (skipped: plugin API changed: {exc})")
+        return
+    assert f"--mem {mem}" in cmd, cmd
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

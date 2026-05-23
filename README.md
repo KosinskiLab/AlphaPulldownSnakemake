@@ -343,6 +343,43 @@ structure_inference  mem = safety * (structure_inference_ram_bytes + per_token_s
 - The `..._ram_bytes` keys are the **fixed base** of each model rather than a flat request;
   raising a base only raises the floor. Setting `per_residue`/`per_token_sq` to `0`
   reproduces the old length-blind behaviour (a flat base × retry scaling).
+- **Precomputed features:** when a chain is supplied via `feature_directory`, no
+  `data/<chain>.fasta` is generated. Length is then recovered from the precomputed
+  `<chain>_af3_input.json` (AF3) or from the parse-time length cache written by the length
+  filter below (covers AF2 too). If neither is available the job falls back to the base
+  allocation plus retry escalation. AF3 ligand atoms are not counted (no sequence), a small
+  undercount absorbed by the safety margin.
+
+</details>
+
+<details>
+<summary>Skipping over-large complexes (length filtering)</summary>
+
+Folds that are too large to be worth submitting are **skipped before any job is created**,
+so a single oversized complex (or one giant chain) doesn't waste a GPU/feature allocation
+that will only OOM. Two configurable limits (in `config/config.yaml`):
+
+```yaml
+# Max TOTAL complex length (sum of all chains), per backend — selected by --fold_backend.
+max_total_length_alphafold2: 5000     # AF2-Multimer
+max_total_length_alphafold3: 7000     # AF3 handles larger inputs
+# max_total_length: 6000              # optional single override for both backends
+# Max length of any SINGLE protein; 0 = off (issue #33). A protein over this drops every
+# fold containing it, so it is never even downloaded.
+max_protein_length: 0
+length_filter_fetch_uniprot: true     # set false for fully offline runs
+```
+
+- Lengths are resolved at **parse time** from, in order: a local FASTA, an
+  already-downloaded `data/<id>.fasta`, the persistent cache
+  `<output_directory>/.sequence_lengths.tsv`, and finally the UniProt REST API (cached for
+  next time). Set a limit to `0` to disable it; if both are `0`, no resolution/fetching
+  happens at all.
+- Skipped folds are listed with reasons in `<output_directory>/skipped_folds.tsv` and logged
+  as a `[length-filter]` warning. **Unknown lengths fail open** (the fold is kept), so a
+  UniProt outage never silently drops work.
+- First parse of a large all-UniProt sheet will fetch each unique length once (cached
+  afterwards); already-downloaded inputs and local FASTAs are read without any network call.
 
 </details>
 

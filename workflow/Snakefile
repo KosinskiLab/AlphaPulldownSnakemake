@@ -27,6 +27,14 @@ if isinstance(feature_directories, (str, Path)):
 DATA_PIPELINE = config["create_feature_arguments"].get("--data_pipeline", "alphafold2").lower()
 IS_AF3 = DATA_PIPELINE in ("alphafold3", "af3")
 
+# Backend identity (feature stage = data pipeline; inference stage = fold backend,
+# falling back to the data pipeline). Defined early because length filtering and
+# memory sizing both depend on it.
+FEATURE_BACKEND = normalize_backend(DATA_PIPELINE)
+INFERENCE_BACKEND = normalize_backend(
+    config.get("structure_inference_arguments", {}).get("--fold_backend", DATA_PIPELINE)
+)
+
 if IS_AF3:
     FEATURE_COMPRESSION = None
     FEATURE_SUFFIX = None
@@ -134,9 +142,124 @@ local_sequences = tuple(dataset.sequences_by_origin.get("local", ()))
 localrules: symlink_local_files, download_uniprot, symlink_features
 ruleorder: symlink_local_files > download_uniprot > symlink_features > create_features
 
+# --- Length filtering (issue #33 + backend total-length caps) ----------------
+# Skip folds whose chains exceed a per-protein limit (max_protein_length) or whose
+# total complex length exceeds the backend cap (max_total_length, default 5000 for
+# AF2 / 7000 for AF3), so infeasible jobs are never submitted. Limits are
+# configurable; 0 disables. Per-protein lengths are resolved at parse time from
+# local FASTAs, already-downloaded data/<id>.fasta, a persistent cache, and
+# finally the UniProt REST API; the resulting cache also feeds memory sizing for
+# precomputed-feature runs. Unknown lengths fail open (the fold is kept).
+MAX_PROTEIN_LENGTH = int(config.get("max_protein_length", 0) or 0)
+_max_total_length_cfg = config.get("max_total_length")
+if _max_total_length_cfg is None:
+    _max_total_length_cfg = config.get(
+        f"max_total_length_{INFERENCE_BACKEND}",
+        MAX_TOTAL_LENGTH_DEFAULTS[INFERENCE_BACKEND],
+    )
+MAX_TOTAL_LENGTH = int(_max_total_length_cfg or 0)
+LENGTH_FILTER_FETCH_UNIPROT = _as_bool(
+    config.get("length_filter_fetch_uniprot", True), default=True
+)
+
+_sequence_length_cache_path = join(config["output_directory"], ".sequence_lengths.tsv")
+sequence_length_cache = {}
+if exists(_sequence_length_cache_path):
+    with open(_sequence_length_cache_path) as _cache_fh:
+        for _cache_line in _cache_fh:
+            _cache_row = _cache_line.rstrip("\n").split("\t")
+            if len(_cache_row) >= 2 and _cache_row[1].strip().isdigit():
+                sequence_length_cache[_cache_row[0]] = int(_cache_row[1])
+
+kept_folds = list(dataset.fold_specifications)
+dropped_folds = []
+
+if MAX_PROTEIN_LENGTH > 0 or MAX_TOTAL_LENGTH > 0:
+    _local_path_by_base = {
+        splitext(basename(p))[0]: p
+        for p in dataset.sequences_by_origin.get("local", ())
+    }
+    _data_dir = join(config["output_directory"], "data")
+    _features_dir = join(config["output_directory"], "features")
+
+    def _resolve_protein_length(name):
+        if name in sequence_length_cache:
+            return sequence_length_cache[name]
+        length = 0
+        if name in _local_path_by_base:
+            length = residue_count(_local_path_by_base[name])
+        if length == 0:
+            length = residue_count(join(_data_dir, f"{name}.fasta"))
+        if length == 0 and IS_AF3:
+            length = af3_input_residue_count(
+                join(_features_dir, f"{name}_af3_input.json")
+            )
+        if length == 0 and LENGTH_FILTER_FETCH_UNIPROT:
+            length = fetch_uniprot_length(name)
+        if length > 0:
+            sequence_length_cache[name] = length
+            return length
+        return None
+
+    kept_folds = []
+    _unknown_proteins = set()
+    for fold in dataset.fold_specifications:
+        chain_lengths = []
+        for name, copies in parse_fold_chains(fold, protein_delimiter):
+            length = _resolve_protein_length(name)
+            if length is None:
+                _unknown_proteins.add(name)
+            chain_lengths.append((name, length, copies))
+        reason = fold_length_violation(
+            chain_lengths, MAX_PROTEIN_LENGTH, MAX_TOTAL_LENGTH
+        )
+        if reason:
+            dropped_folds.append((fold, reason))
+        else:
+            kept_folds.append(fold)
+
+    try:
+        makedirs(config["output_directory"], exist_ok=True)
+        with open(_sequence_length_cache_path, "w") as _cache_fh:
+            for _name in sorted(sequence_length_cache):
+                _cache_fh.write(f"{_name}\t{sequence_length_cache[_name]}\n")
+    except OSError:
+        pass
+
+    if dropped_folds:
+        _skipped_path = join(config["output_directory"], "skipped_folds.tsv")
+        try:
+            with open(_skipped_path, "w") as _skip_fh:
+                _skip_fh.write("fold\treason\n")
+                for _fold, _reason in dropped_folds:
+                    _skip_fh.write(f"{_fold}\t{_reason}\n")
+        except OSError:
+            _skipped_path = "(could not be written)"
+        logger.warning(
+            f"[length-filter] skipping {len(dropped_folds)} of "
+            f"{len(dataset.fold_specifications)} folds over the length limits "
+            f"(max_protein_length={MAX_PROTEIN_LENGTH}, max_total_length="
+            f"{MAX_TOTAL_LENGTH} for {INFERENCE_BACKEND}); see {_skipped_path}"
+        )
+    if _unknown_proteins:
+        logger.warning(
+            f"[length-filter] length unknown for {len(_unknown_proteins)} protein(s); "
+            f"their folds were kept (fail-open). Examples: "
+            f"{sorted(_unknown_proteins)[:5]}"
+        )
+
+# Proteins required by the surviving folds (matches FoldDataset dedup ordering).
+kept_proteins = []
+_seen_proteins = set()
+for fold in kept_folds:
+    for _name in dataset.sequences_by_fold.get(fold, ()):
+        if _name not in _seen_proteins:
+            _seen_proteins.add(_name)
+            kept_proteins.append(_name)
+
 required_folds = [
     join(config["output_directory"], "predictions", fold, "completed_fold.txt")
-    for fold in dataset.fold_specifications
+    for fold in kept_folds
 ]
 ENABLE_STRUCTURE_ANALYSIS = config.get("enable_structure_analysis", True)
 GENERATE_RECURSIVE_REPORT = config.get("generate_recursive_report", False)
@@ -149,7 +272,7 @@ RECURSIVE_REPORT = (
 
 required_feature_paths = [
     join(config["output_directory"], "features", feature_name(fasta_basename))
-    for fasta_basename in dataset.unique_sequences
+    for fasta_basename in kept_proteins
 ]
 if config.get("only_generate_features", False):
     required_targets = required_feature_paths
@@ -160,7 +283,7 @@ else:
         else:
             required_targets = [
                 join(config["output_directory"], "predictions", fold, "interfaces.csv")
-                for fold in dataset.fold_specifications
+                for fold in kept_folds
             ]
     else:
         required_targets = required_folds
@@ -224,12 +347,7 @@ rule download_uniprot:
 MEM_SAFETY_FACTOR = float(config.get("mem_safety_factor", 1.25))
 MAX_MEM_MB = int(config.get("max_mem_mb", 0) or 0)  # 0 = no cap
 
-# Feature backend = the data pipeline; inference backend = the fold backend
-# (falls back to the data pipeline when --fold_backend is unset).
-FEATURE_BACKEND = normalize_backend(DATA_PIPELINE)
-INFERENCE_BACKEND = normalize_backend(
-    config.get("structure_inference_arguments", {}).get("--fold_backend", DATA_PIPELINE)
-)
+# Backend defaults (FEATURE_BACKEND / INFERENCE_BACKEND are defined near the top).
 _feat_ram_defaults = FEATURE_RAM_DEFAULTS[FEATURE_BACKEND]
 _infer_ram_defaults = INFERENCE_RAM_DEFAULTS[INFERENCE_BACKEND]
 
@@ -356,6 +474,7 @@ rule structure_inference:
                     protein_delimiter,
                     features_dir=join(config["output_directory"], "features"),
                     is_af3=(INFERENCE_BACKEND == "alphafold3"),
+                    length_cache=sequence_length_cache,
                 ),
                 base_mb=structure_inference_base_ram,
                 per_token_sq_mb=structure_inference_ram_per_token_sq,

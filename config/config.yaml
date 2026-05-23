@@ -93,6 +93,25 @@ structure_inference_ram_scaling: 1.1             # per-retry escalation on OOM
 # sooner, but host-memory spilling can take many hours, so the default stays generous.
 # structure_inference_runtime_minutes: 1440
 
+# Length filtering: skip folds that are too large to be worth submitting. Lengths
+# are resolved at parse time (local FASTA / already-downloaded data / cache / the
+# UniProt REST API) and cached in <output_directory>/.sequence_lengths.tsv; skipped
+# folds are listed in <output_directory>/skipped_folds.tsv. Unknown lengths fail
+# open (the fold is kept). Set a limit to 0 to disable it.
+#
+# Max TOTAL complex length (sum of all chains, residues), per backend; selected by
+# --fold_backend. AF3 handles larger inputs than AF2-Multimer.
+max_total_length_alphafold2: 5000
+max_total_length_alphafold3: 7000
+# Optional single override applied to BOTH backends (takes precedence if set):
+# max_total_length: 6000
+# Max length of any SINGLE protein (residues); 0 disables (issue #33). A protein
+# over this drops every fold containing it, so it is never downloaded/predicted.
+max_protein_length: 0
+# Whether parse-time length resolution may query the UniProt REST API for IDs that
+# have no local FASTA / cached length yet. Set false for fully offline runs.
+length_filter_fetch_uniprot: true
+
 # Number of threads for AlphaFold inference
 alphafold_inference_threads: 8
 

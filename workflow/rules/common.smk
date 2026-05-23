@@ -11,9 +11,15 @@ import functools
 import inspect
 import json
 import os
+import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Callable
+
+# Default maximum *total* complex length (residues) per backend, used to skip
+# folds that are too large to be feasible. AF3 supports larger inputs than
+# AF2-Multimer. Override via config (see Snakefile / config.yaml).
+MAX_TOTAL_LENGTH_DEFAULTS = {"alphafold2": 5000, "alphafold3": 7000}
 
 
 @functools.lru_cache(maxsize=None)
@@ -65,21 +71,69 @@ def af3_input_residue_count(json_path: str) -> int:
     return total
 
 
+def parse_fold_chains(fold: str, delimiter: str = "+") -> list[tuple[str, int]]:
+    """Parse a fold spec into ``(chain_name, copies)`` pairs.
+
+    Follows the AlphaPulldown ``name[:copies][:region...]`` convention: the copy
+    number, if present, is the first ``:`` token after the name and is a bare
+    integer (e.g. ``A:2`` = dimer, ``A:2:1-100`` = dimer of residues 1-100).
+    Region tokens such as ``1-100`` are never bare integers, so ``A:1-100`` is a
+    single copy. Handles ``A+B`` heteromers.
+    """
+    chains: list[tuple[str, int]] = []
+    for token in str(fold).split(delimiter):
+        parts = [part for part in token.split(":") if part]
+        if not parts:
+            continue
+        name = parts[0]
+        copies = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        chains.append((name, copies))
+    return chains
+
+
+@functools.lru_cache(maxsize=None)
+def fetch_uniprot_length(uniprot_id: str, timeout: float = 30.0) -> int:
+    """Residue length of a UniProt entry via the REST API; 0 on any failure.
+
+    Mirrors the reference snippet in issue #33. Used at parse time for length
+    filtering when no local FASTA is available yet; failures return 0 so the
+    caller can fail open (keep the fold) rather than crash offline.
+    """
+    url = f"https://rest.uniprot.org/uniprotkb/{uniprot_id}.fasta"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            text = response.read().decode("utf-8", "replace")
+    except Exception:
+        return 0
+    total = 0
+    for line in text.splitlines():
+        if not line.startswith(">"):
+            total += len(line.strip())
+    return total
+
+
 def chain_residue_count(
-    name: str, data_dir: str, features_dir: str | None = None, is_af3: bool = False
+    name: str,
+    data_dir: str,
+    features_dir: str | None = None,
+    is_af3: bool = False,
+    length_cache: dict | None = None,
 ) -> int:
     """Residue length of a single chain.
 
-    Reads ``<data_dir>/<name>.fasta`` first; if that is unavailable (returns 0)
-    and the run is AlphaFold 3, falls back to the precomputed
-    ``<features_dir>/<name>_af3_input.json`` so length-aware sizing still works
-    when features are supplied via ``feature_directory`` rather than generated.
+    Resolution order: ``<data_dir>/<name>.fasta`` -> AF3 precomputed
+    ``<features_dir>/<name>_af3_input.json`` (AF3 only) -> ``length_cache`` (the
+    parse-time length table, which covers the AF2 precomputed-feature case where
+    neither a FASTA nor an AF3 JSON exists). Returns 0 when length is unknown so
+    sizing degrades to the base allocation plus retry escalation.
     """
     length = residue_count(os.path.join(data_dir, f"{name}.fasta"))
     if length == 0 and is_af3 and features_dir:
         length = af3_input_residue_count(
             os.path.join(features_dir, f"{name}_af3_input.json")
         )
+    if length == 0 and length_cache:
+        length = int(length_cache.get(name, 0) or 0)
     return length
 
 
@@ -89,6 +143,7 @@ def fold_total_tokens(
     delimiter: str = "+",
     features_dir: str | None = None,
     is_af3: bool = False,
+    length_cache: dict | None = None,
 ) -> int:
     """Total residue (token) count of a fold specification.
 
@@ -96,18 +151,44 @@ def fold_total_tokens(
     such as ``A:2`` (a homo-dimer counts twice). Region selections such as
     ``A:1-100`` are conservatively counted at the chain's full length, which
     over- rather than under-estimates memory. Per-chain lengths come from
-    ``<data_dir>/<chain>.fasta`` with an AF3 precomputed-feature fallback (see
-    ``chain_residue_count``).
+    ``chain_residue_count`` (FASTA -> AF3 JSON -> length cache).
+
+    Note: AF3 ligand atoms are not counted (no ``sequence`` field); for
+    protein/nucleic complexes this matches the token count, and the safety
+    margin plus retry escalation absorb any small ligand undercount.
     """
     total = 0
-    for token in str(fold).split(delimiter):
-        parts = [part for part in token.split(":") if part]
-        if not parts:
-            continue
-        name = parts[0]
-        copies = int(parts[-1]) if len(parts) > 1 and parts[-1].isdigit() else 1
-        total += chain_residue_count(name, data_dir, features_dir, is_af3) * copies
+    for name, copies in parse_fold_chains(fold, delimiter):
+        total += (
+            chain_residue_count(name, data_dir, features_dir, is_af3, length_cache)
+            * copies
+        )
     return total
+
+
+def fold_length_violation(
+    chain_lengths: list[tuple[str, int | None, int]],
+    max_protein_length: int = 0,
+    max_total_length: int = 0,
+) -> str | None:
+    """Return a human-readable reason if a fold exceeds a length limit, else None.
+
+    ``chain_lengths`` is a list of ``(name, length_or_None, copies)``. Limits of
+    0 (or negative) are disabled. Unknown lengths (``None``) are treated as 0 so
+    the decision fails open (the fold is kept) rather than dropped on missing data.
+    """
+    if max_protein_length and max_protein_length > 0:
+        for name, length, _copies in chain_lengths:
+            if length is not None and length > max_protein_length:
+                return (
+                    f"protein {name} length {length} exceeds "
+                    f"max_protein_length {max_protein_length}"
+                )
+    if max_total_length and max_total_length > 0:
+        total = sum((length or 0) * copies for _name, length, copies in chain_lengths)
+        if total > max_total_length:
+            return f"total length {total} exceeds max_total_length {max_total_length}"
+    return None
 
 
 def _cap_mem(value_mb: float, cap_mb: int) -> int:
