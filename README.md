@@ -301,6 +301,37 @@ exactly what the fraction is sized against.
 
 </details>
 
+<details>
+<summary>Length-aware memory requests (sized automatically from the input sequences)</summary>
+
+Host RAM for both compute stages is requested **from the input sequence length**, so big
+complexes get enough memory on the first attempt instead of failing and climbing the retry
+ladder, while small jobs are not over-provisioned. The request is computed at scheduling
+time by reading the per-chain FASTA(s) the pipeline already stages under
+`<output_directory>/data/`:
+
+```
+create_features      mem = safety * (feature_create_ram_bytes + per_residue * seq_len)
+structure_inference  mem = safety * (structure_inference_ram_bytes + per_token_sq * N^2)
+```
+
+- `seq_len` is the query length; `N` is the **total residues of the complex** (the
+  AlphaFold token count, summed over chains and copy numbers). AlphaFold's pair
+  representation is `O(N^2)`, hence the quadratic inference term — calibrated so a ~2,000-,
+  ~4,500- and ~4,800-residue complex request ≈25, ≈90 and ≈100+ GB respectively.
+- The first attempt already includes `mem_safety_factor` (default `1.25`) of head-room.
+  **OOM retries still escalate** on top, multiplying by `..._ram_scaling ** (attempt - 1)`,
+  so a bad estimate self-heals.
+- Tune the model via `mem_safety_factor`, `feature_create_ram_per_residue_mb`,
+  `structure_inference_ram_per_token_sq_mb`, the two `..._ram_bytes` bases, and the two
+  `..._ram_scaling` factors (all in `config/config.yaml`). Set `max_mem_mb` to your largest
+  node's RAM on clusters where an over-estimate would otherwise never schedule (`0` = no cap).
+- The `..._ram_bytes` keys are now the **fixed base** of each model rather than a flat
+  request; raising a base only raises the floor. Setting `per_residue`/`per_token_sq` to `0`
+  reproduces the old length-blind behaviour (a flat base × retry scaling).
+
+</details>
+
 ### Using precomputed features
 
 If you have precomputed protein features, specify the directory:

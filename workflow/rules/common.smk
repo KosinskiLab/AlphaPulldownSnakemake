@@ -7,10 +7,114 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
 import os
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Callable
+
+
+@functools.lru_cache(maxsize=None)
+def residue_count(fasta_path: str) -> int:
+    """Number of residues in a (single-record) FASTA file.
+
+    Counts sequence characters, ignoring the header line(s) and whitespace.
+    Returns 0 when the file cannot be read yet (e.g. during a dry-run before
+    the upstream download/symlink rule has produced it) so that resource
+    estimation degrades gracefully to the base allocation instead of crashing.
+    Results are memoised because the structure-inference estimator may look up
+    the same chain repeatedly within a workflow.
+    """
+    try:
+        total = 0
+        with open(fasta_path) as handle:
+            for line in handle:
+                if line.startswith(">"):
+                    continue
+                total += len(line.strip())
+        return total
+    except OSError:
+        return 0
+
+
+def fold_total_tokens(fold: str, data_dir: str, delimiter: str = "+") -> int:
+    """Total residue (token) count of a fold specification.
+
+    Sums the residue length of every chain in ``fold``, honouring copy numbers
+    such as ``A:2`` (a homo-dimer counts twice). Region selections such as
+    ``A:1-100`` are conservatively counted at the chain's full length, which
+    over- rather than under-estimates memory. Per-chain lengths are read from
+    ``<data_dir>/<chain>.fasta``.
+    """
+    total = 0
+    for token in str(fold).split(delimiter):
+        parts = [part for part in token.split(":") if part]
+        if not parts:
+            continue
+        name = parts[0]
+        copies = int(parts[-1]) if len(parts) > 1 and parts[-1].isdigit() else 1
+        total += residue_count(os.path.join(data_dir, f"{name}.fasta")) * copies
+    return total
+
+
+def _cap_mem(value_mb: float, cap_mb: int) -> int:
+    value = max(int(value_mb), 1)
+    if cap_mb and cap_mb > 0:
+        value = min(value, int(cap_mb))
+    return value
+
+
+def estimate_feature_mem_mb(
+    seq_len: int,
+    *,
+    base_mb: float,
+    per_residue_mb: float,
+    scaling: float,
+    safety: float,
+    attempt: int,
+    cap_mb: int = 0,
+) -> int:
+    """Length-aware host RAM (MB) for the feature-generation (MSA) stage.
+
+    Feature memory is dominated by a near-fixed database/MSA-tooling footprint
+    with only a mild dependence on query length, so the model is linear:
+
+        mem = safety * (base_mb + per_residue_mb * seq_len)
+
+    The first attempt already carries the ``safety`` margin; OOM retries
+    escalate further via ``scaling ** (attempt - 1)``.
+    """
+    estimate = safety * (base_mb + per_residue_mb * max(int(seq_len), 0))
+    value = estimate * (scaling ** max(int(attempt) - 1, 0))
+    return _cap_mem(value, cap_mb)
+
+
+def estimate_inference_mem_mb(
+    total_tokens: int,
+    *,
+    base_mb: float,
+    per_token_sq_mb: float,
+    scaling: float,
+    safety: float,
+    attempt: int,
+    cap_mb: int = 0,
+) -> int:
+    """Length-aware host RAM (MB) for the structure-inference stage.
+
+    AlphaFold's pair representation is O(N^2) in the number of tokens N (total
+    residues of the complex), so peak memory follows a quadratic:
+
+        mem = safety * (base_mb + per_token_sq_mb * N**2)
+
+    With unified memory enabled the XLA fraction is derived from this host
+    allocation, so sizing host RAM by N also sizes the GPU spill ceiling. The
+    first attempt carries the ``safety`` margin; OOM retries escalate via
+    ``scaling ** (attempt - 1)``.
+    """
+    estimate = safety * (base_mb + per_token_sq_mb * (max(int(total_tokens), 0) ** 2))
+    value = estimate * (scaling ** max(int(attempt) - 1, 0))
+    return _cap_mem(value, cap_mb)
 
 
 def feature_suffix(compression: str = "lzma") -> str:
@@ -105,30 +209,46 @@ def linear_resources(
     runtime_fn: Callable[[Any, int], float] | None = None,
     attempt_fn: Callable[[Any, int], int] | None = None,
 ) -> dict[str, Any]:
-    """Return a Snakemake resources dictionary scaling with retry attempts."""
+    """Return a Snakemake resources dictionary scaling with retry attempts.
 
-    def _mem_value(wc, attempt: int) -> float:
+    User-supplied ``*_fn`` callbacks receive ``wildcards`` positionally and may
+    additionally declare ``input`` and/or ``attempt`` parameters; only the ones
+    they declare are forwarded. This keeps legacy ``f(wc, attempt)`` callbacks
+    working while letting length-aware callbacks read input files via
+    ``f(wildcards, input, attempt)``.
+    """
+
+    def _invoke(fn, wc, input, attempt):
+        params = inspect.signature(fn).parameters
+        kwargs = {}
+        if "input" in params:
+            kwargs["input"] = input
+        if "attempt" in params:
+            kwargs["attempt"] = attempt
+        return fn(wc, **kwargs)
+
+    def _mem_value(wc, input, attempt: int) -> float:
         if mem_fn:
-            return float(mem_fn(wc, attempt))
+            return float(_invoke(mem_fn, wc, input, attempt))
         return float(mem * attempt)
 
-    def _runtime_value(wc, attempt: int) -> float:
+    def _runtime_value(wc, input, attempt: int) -> float:
         if runtime_fn:
-            return float(runtime_fn(wc, attempt))
+            return float(_invoke(runtime_fn, wc, input, attempt))
         return float(runtime * attempt)
 
-    def _avg_mem(wc, attempt: int) -> int:
-        return int(_mem_value(wc, attempt) * avg_factor)
+    def _avg_mem(wc, input, attempt: int) -> int:
+        return int(_mem_value(wc, input, attempt) * avg_factor)
 
-    def _mem_mb(wc, attempt: int) -> int:
-        return int(_mem_value(wc, attempt))
+    def _mem_mb(wc, input, attempt: int) -> int:
+        return int(_mem_value(wc, input, attempt))
 
-    def _runtime(wc, attempt: int) -> int:
-        return int(_runtime_value(wc, attempt))
+    def _runtime(wc, input, attempt: int) -> int:
+        return int(_runtime_value(wc, input, attempt))
 
-    def _attempt(wc, attempt: int) -> int:
+    def _attempt(wc, input, attempt: int) -> int:
         if attempt_fn:
-            return int(attempt_fn(wc, attempt))
+            return int(_invoke(attempt_fn, wc, input, attempt))
         return attempt
 
     return {

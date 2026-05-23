@@ -217,9 +217,25 @@ rule download_uniprot:
         tail -n +2 "${{temp_file}}" >> {output}
     """
 
+# Length-aware memory model (all values in MB). Host RAM for both compute
+# stages is sized from the input sequence length(s) with a safety margin, then
+# escalated on OOM retries via `scaling ** (attempt - 1)`. See README.
+MEM_SAFETY_FACTOR = float(config.get("mem_safety_factor", 1.25))
+MAX_MEM_MB = int(config.get("max_mem_mb", 0) or 0)  # 0 = no cap
+
+# create_features (CPU/MSA): mem ~ safety * (base + per_residue * seq_len)
 feature_scaling = config.get("feature_create_ram_scaling", 1.1)
 base_feature_ram = config.get("feature_create_ram_bytes", 64000)
+feature_ram_per_residue = config.get("feature_create_ram_per_residue_mb", 30)
 feature_threads = config.get("feature_threads", 8)
+
+# structure_inference (GPU host RAM): mem ~ safety * (base + per_token_sq * N^2),
+# N = total residues of the complex (AlphaFold pair representation is O(N^2)).
+structure_inference_base_ram = config.get("structure_inference_ram_bytes", 24000)
+structure_inference_ram_per_token_sq = config.get(
+    "structure_inference_ram_per_token_sq_mb", 0.0045
+)
+structure_inference_ram_scaling = config.get("structure_inference_ram_scaling", 1.1)
 
 rule symlink_features:
     input:
@@ -256,7 +272,15 @@ rule create_features:
     resources:
         qos=DEFAULT_SLURM_QOS,
         **linear_resources(
-            mem_fn=lambda wc, attempt: base_feature_ram * (feature_scaling ** attempt),
+            mem_fn=lambda wildcards, input, attempt: estimate_feature_mem_mb(
+                residue_count(str(input[0])) if input else 0,
+                base_mb=base_feature_ram,
+                per_residue_mb=feature_ram_per_residue,
+                scaling=feature_scaling,
+                safety=MEM_SAFETY_FACTOR,
+                attempt=attempt,
+                cap_mb=MAX_MEM_MB,
+            ),
             runtime_fn=lambda wc, attempt: 1440 * attempt,
         ),
     threads: feature_threads,
@@ -308,8 +332,19 @@ rule structure_inference:
         **({"slurm_extra": f"--exclude={DEFAULT_SLURM_EXCLUDE}"} if DEFAULT_SLURM_EXCLUDE else {}),
         tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(
-            mem_fn=lambda wc, attempt: config.get("structure_inference_ram_bytes", 32000)
-            * (1.1 ** attempt),
+            mem_fn=lambda wildcards, attempt: estimate_inference_mem_mb(
+                fold_total_tokens(
+                    wildcards.fold,
+                    join(config["output_directory"], "data"),
+                    protein_delimiter,
+                ),
+                base_mb=structure_inference_base_ram,
+                per_token_sq_mb=structure_inference_ram_per_token_sq,
+                scaling=structure_inference_ram_scaling,
+                safety=MEM_SAFETY_FACTOR,
+                attempt=attempt,
+                cap_mb=MAX_MEM_MB,
+            ),
             runtime_fn=lambda wc, attempt: min(1440 * attempt, STRUCTURE_INFERENCE_MAX_RUNTIME),
         ),
     threads:

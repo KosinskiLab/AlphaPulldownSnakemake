@@ -52,10 +52,34 @@ analyze_structure_arguments:
 
 # Memory allocation for feature creation and structure inference.
 # NOTE: despite the "_bytes" suffix these values are in MEGABYTES (used directly as
-# the SLURM --mem request), so 64000 = 64000 MB ~= 64 GB. They scale with retries.
-feature_create_ram_bytes: 64000      # MB
-feature_create_ram_scaling: 1.1
-structure_inference_ram_bytes: 64000 # MB
+# the SLURM --mem request), so 64000 = 64000 MB ~= 64 GB.
+#
+# Host RAM for both stages is sized automatically from the input sequence length
+# with a safety margin, and still escalates on OOM retries. The requested memory is:
+#   create_features      : safety * (feature_create_ram_bytes + per_residue * seq_len)
+#   structure_inference  : safety * (structure_inference_ram_bytes + per_token_sq * N^2)
+# where seq_len is the query length, N is the total residues of the complex, and the
+# request is multiplied by (scaling ** (attempt - 1)) on each retry. AlphaFold's pair
+# representation is O(N^2), hence the quadratic term for inference.
+
+# Safety margin applied to the first-attempt estimate of every length-aware stage.
+mem_safety_factor: 1.25
+# Optional hard ceiling (MB) on any single memory request; 0 = no cap. Set this to
+# your largest node's RAM on clusters where an over-estimate would never schedule.
+max_mem_mb: 0
+
+# create_features (CPU/MSA) — base footprint is database/MSA-tool dominated, with a
+# mild linear dependence on query length.
+feature_create_ram_bytes: 64000          # MB, fixed base (DB/MSA tooling)
+feature_create_ram_per_residue_mb: 30    # MB per query residue
+feature_create_ram_scaling: 1.1          # per-retry escalation on OOM
+
+# structure_inference (GPU host RAM) — base plus a quadratic term in complex size.
+# With unified memory enabled the XLA spill fraction is derived from this host
+# allocation, so this also sizes the effective GPU memory ceiling.
+structure_inference_ram_bytes: 24000          # MB, fixed base
+structure_inference_ram_per_token_sq_mb: 0.0045  # MB per residue^2 (O(N^2))
+structure_inference_ram_scaling: 1.1          # per-retry escalation on OOM
 
 # Number of threads for AlphaFold inference
 alphafold_inference_threads: 8
