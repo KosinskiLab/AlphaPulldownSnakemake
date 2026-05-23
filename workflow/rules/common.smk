@@ -205,23 +205,51 @@ def fold_length_violation(
     return None
 
 
-def select_gpu_model(total_tokens: int, tiers, default_model=None):
-    """Pick a GPU model for a complex of ``total_tokens`` from a token->model map.
+def required_gpu_vram_gb(
+    total_tokens: int, per_token_sq_mb: float, headroom: float = 1.0
+) -> float:
+    """Estimated peak GPU VRAM (GB) for a complex of ``total_tokens``.
 
-    ``tiers`` maps an (inclusive) upper token bound to a GPU model name, e.g.
-    ``{2000: "3090", 4000: "A100", 99999: "H100"}``. Returns the model of the
-    smallest tier whose bound is >= ``total_tokens``; a complex larger than every
-    tier falls back to the largest tier's model (best available). When ``tiers``
-    is empty, returns ``default_model`` (the fixed ``structure_inference_gpu_model``,
-    preserving the previous single-model behaviour).
+    Uses the same O(N^2) coefficient as host-memory sizing as a proxy for on-device
+    peak demand, scaled by ``headroom`` (e.g. 0.8 tolerates ~20% spill to host).
     """
-    if not tiers:
-        return default_model
-    ordered = sorted((int(bound), str(model)) for bound, model in tiers.items())
-    for bound, model in ordered:
-        if total_tokens <= bound:
-            return model
-    return ordered[-1][1]
+    return headroom * per_token_sq_mb * (max(int(total_tokens), 0) ** 2) / 1000.0
+
+
+def gpu_exclude_nodes(
+    total_tokens: int,
+    tiers,
+    per_token_sq_mb: float,
+    headroom: float = 1.0,
+    extra_exclude: str = "",
+) -> str:
+    """Comma-joined SLURM nodes to exclude so a complex lands on a big-enough GPU.
+
+    ``tiers`` is an iterable of ``{"min_vram_gb": int, "nodes": "<slurm hostlist>"}``
+    describing the cluster's GPU pool. The complex's required VRAM
+    (:func:`required_gpu_vram_gb`) selects the smallest tier that satisfies it (the
+    largest tier if none does — the remainder spills to host via unified memory);
+    the nodes of every *smaller* tier are excluded, so the job may run on any GPU at
+    or above the chosen tier (the whole pool, not one pinned model). ``extra_exclude``
+    (the static ``slurm_exclude_nodes``) is always appended.
+
+    Cluster-agnostic: each site lists its own GPU tiers/nodes; nothing about a
+    specific cluster is hard-coded.
+    """
+    parts: list[str] = []
+    valid = [t for t in tiers if t and t.get("nodes")]
+    if valid:
+        ordered = sorted(valid, key=lambda t: int(t["min_vram_gb"]))
+        required = required_gpu_vram_gb(total_tokens, per_token_sq_mb, headroom)
+        chosen = len(ordered) - 1
+        for index, tier in enumerate(ordered):
+            if int(tier["min_vram_gb"]) >= required:
+                chosen = index
+                break
+        parts.extend(str(tier["nodes"]) for tier in ordered[:chosen])
+    if extra_exclude:
+        parts.append(str(extra_exclude))
+    return ",".join(part for part in parts if part)
 
 
 def _cap_mem(value_mb: float, cap_mb: int) -> int:

@@ -241,21 +241,27 @@ you hit these.
 
 - **Restrict to one model** with `structure_inference_gpu_model` (e.g. `"A100"`) → the plugin emits
   `--gpus=<model>:<count>`. Accepts a single model name; leave `""` for any.
-- **Route by complex size** with `structure_inference_gpu_model_by_tokens` → a map of (inclusive)
-  upper total-token bound to GPU model, so small complexes use small GPUs and large ones go to
-  big-VRAM cards (peak VRAM ≈ `0.0045·N²` MB):
+- **Route by complex size (VRAM)** with `structure_inference_gpu_tiers` → list your GPU pool as
+  tiers of `{min_vram_gb, nodes}`. A complex's estimated peak VRAM (≈ `per_token_sq·N²`) selects the
+  smallest tier that fits and all *smaller*-GPU nodes are excluded, so the job runs on **any** GPU at
+  or above that tier — using the whole pool, not one pinned model. A complex larger than every tier
+  uses the biggest tier and spills to host RAM via unified memory.
 
   ```yaml
-  structure_inference_gpu_model_by_tokens:
-    2000: "3090"     # <=2000 tokens -> 24 GB
-    4000: "A100"     # <=4000 tokens -> 80 GB
-    99999: "H100"    # larger -> biggest available (spills via unified memory)
+  # Example for EMBL gpu-el8 — replace nodes with your cluster's (nothing is hard-coded):
+  structure_inference_gpu_vram_headroom: 1.0   # <1.0 tolerates that fraction of host spill
+  structure_inference_gpu_tiers:
+    - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29,gpu30,gpu31,gpu32,gpu33,gpu34,gpu35,gpu36,gpu37"}
+    - {min_vram_gb: 40, nodes: "gpu25,gpu26,gpu27,gpu28"}
+    - {min_vram_gb: 48, nodes: "gpu40,gpu41,gpu42,gpu43,gpu44,gpu45,gpu46,gpu47,gpu48"}
+    - {min_vram_gb: 80, nodes: "gpu38,gpu39"}
   ```
 
-  Each fold is routed to the smallest tier it fits (larger than all bounds → the last tier). When
-  set this takes precedence over `structure_inference_gpu_model`. This is the practical "fit to GPU"
-  lever: requested host RAM is a separate pool and does not size GPU VRAM, but choosing the GPU model
-  by length does.
+  When set this drives `--exclude` per job and **overrides** `structure_inference_gpu_model` (the two
+  would conflict). It's the practical "fit to GPU" lever: requested host RAM is a separate pool and
+  does not size GPU VRAM, but excluding too-small GPUs by length does. Use explicit comma node lists
+  (bracket ranges may be glob-expanded by the shell). Multi-partition routing (e.g. EMBL's bigger
+  `gpu-training` cards) is out of scope — keep one partition and let unified memory spill the tail.
 - **Exclude specific nodes** with `slurm_exclude_nodes` → passed verbatim to `sbatch --exclude`
   (e.g. `"gpu50,gpu51"`). Use it for nodes whose GPU the container can't use — e.g. a CUDA compute
   capability newer than the container's bundled `ptxas` (fails `ptxas too old` / `UNIMPLEMENTED`).

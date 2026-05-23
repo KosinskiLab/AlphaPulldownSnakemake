@@ -122,15 +122,23 @@ structure_inference_gpus_per_task: 1
 # Restrict structure_inference to one GPU model (sbatch --gpus=<model>:N), e.g. "3090".
 # Leave "" to let SLURM pick any GPU in the partition.
 structure_inference_gpu_model: "3090"
-# Optional length-based GPU routing: map an (inclusive) upper TOTAL-token bound to a
-# GPU model, so small complexes go to small GPUs and large ones to big-VRAM cards.
-# Each complex is routed to the smallest tier it fits (larger than all -> last tier).
-# When set, this takes precedence over structure_inference_gpu_model. Example
-# (peak VRAM ~ 0.0045 * N^2 MB, so ~2000 tok fits 24 GB, ~4000 tok needs ~80 GB):
-# structure_inference_gpu_model_by_tokens:
-#   2000: "3090"     # <=2000 tokens -> 24 GB
-#   4000: "A100"     # <=4000 tokens -> 80 GB
-#   99999: "H100"    # larger -> biggest available (will spill via unified memory)
+# Optional length-based GPU routing by VRAM (within this partition). List your GPU
+# pool as tiers of {min_vram_gb, nodes}; a complex's estimated peak VRAM
+# (~ structure_inference_ram_per_token_sq * N^2) selects the smallest tier that fits
+# and all SMALLER-GPU nodes are excluded, so the job runs on ANY GPU >= that tier
+# (the whole pool, not one pinned model). A complex larger than every tier uses the
+# biggest tier and spills to host RAM via unified memory. When set, this drives
+# --exclude and OVERRIDES structure_inference_gpu_model. Use explicit comma node lists
+# (avoid bracket ranges, which the shell may glob). The example below is for the EMBL
+# gpu-el8 partition - replace nodes with your cluster's; nothing is hard-coded.
+# structure_inference_gpu_vram_headroom: 1.0   # <1.0 tolerates that fraction of host spill
+# structure_inference_gpu_tiers:
+#   - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29,gpu30,gpu31,gpu32,gpu33,gpu34,gpu35,gpu36,gpu37"}  # RTX 3090
+#   - {min_vram_gb: 40, nodes: "gpu25,gpu26,gpu27,gpu28"}                                # A100 40GB
+#   - {min_vram_gb: 48, nodes: "gpu40,gpu41,gpu42,gpu43,gpu44,gpu45,gpu46,gpu47,gpu48"}  # L40s/A40 48GB
+#   - {min_vram_gb: 80, nodes: "gpu38,gpu39"}                                            # H100 PCIe 80GB
+# Note: RTX PRO 6000 (gpu50-53, 96GB) are ptxas-incompatible -> keep in slurm_exclude_nodes.
+# H100-SXM/H200/B200 live on the separate gpu-training partition (not routed here).
 # Optional: comma-separated nodes to keep structure_inference OFF, passed to sbatch
 # as --exclude. Useful for GPUs the prediction container cannot use (e.g. a CUDA
 # compute capability the bundled ptxas is too old for). Example:

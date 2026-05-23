@@ -258,19 +258,37 @@ def test_af3_input_residue_count_skips_ligands():
         assert common.af3_input_residue_count(p) == 100  # ligand contributes 0
 
 
-def test_select_gpu_model():
-    tiers = {2000: "3090", 4000: "A100", 99999: "H100"}
-    assert common.select_gpu_model(800, tiers) == "3090"   # small -> small GPU
-    assert common.select_gpu_model(2000, tiers) == "3090"  # boundary inclusive
-    assert common.select_gpu_model(2001, tiers) == "A100"
-    assert common.select_gpu_model(4000, tiers) == "A100"
-    assert common.select_gpu_model(4600, tiers) == "H100"
-    assert common.select_gpu_model(500000, tiers) == "H100"  # bigger than all -> last
-    # unordered / string keys (as parsed from YAML) still work
-    assert common.select_gpu_model(3000, {"4000": "A100", "2000": "3090"}) == "A100"
-    # empty map -> fall back to the fixed default model
-    assert common.select_gpu_model(3000, {}, default_model="3090") == "3090"
-    assert common.select_gpu_model(3000, {}) is None
+def test_required_gpu_vram_gb():
+    # 0.0045 MB/token^2: N=4836 -> ~105 GB; headroom scales it
+    assert round(common.required_gpu_vram_gb(4836, 0.0045)) == 105
+    assert round(common.required_gpu_vram_gb(2066, 0.0045)) == 19
+    assert common.required_gpu_vram_gb(4836, 0.0045, headroom=0.5) < 60
+
+
+def test_gpu_exclude_nodes_vram_routing():
+    tiers = [
+        {"min_vram_gb": 24, "nodes": "n24a,n24b"},
+        {"min_vram_gb": 48, "nodes": "n48a,n48b"},
+        {"min_vram_gb": 80, "nodes": "n80a"},
+    ]
+    c = 0.0045
+    # small complex (~3 GB) fits the smallest tier -> exclude nothing
+    assert common.gpu_exclude_nodes(800, tiers, c) == ""
+    # ~26 GB -> needs >=48 GB tier -> exclude the 24 GB nodes
+    assert common.gpu_exclude_nodes(2400, tiers, c) == "n24a,n24b"
+    # ~55 GB -> needs the 80 GB tier -> exclude 24 and 48 GB nodes
+    assert common.gpu_exclude_nodes(3500, tiers, c) == "n24a,n24b,n48a,n48b"
+    # bigger than every tier -> use largest tier (spill), exclude all smaller
+    assert common.gpu_exclude_nodes(20000, tiers, c) == "n24a,n24b,n48a,n48b"
+    # static extra excludes are always appended (e.g. ptxas-incompatible cards)
+    assert common.gpu_exclude_nodes(800, tiers, c, extra_exclude="gpu50,gpu51") == "gpu50,gpu51"
+    assert (
+        common.gpu_exclude_nodes(2400, tiers, c, extra_exclude="gpu50")
+        == "n24a,n24b,gpu50"
+    )
+    # unsorted tiers handled; no tiers -> only the static excludes
+    assert common.gpu_exclude_nodes(2400, [], c, extra_exclude="gpu50") == "gpu50"
+    assert common.gpu_exclude_nodes(2400, [], c) == ""
 
 
 def test_mem_mb_reaches_sbatch_via_real_plugin():

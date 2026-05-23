@@ -372,18 +372,20 @@ structure_inference_runtime_minutes = config.get(
     "structure_inference_runtime_minutes", _infer_ram_defaults["runtime_minutes"]
 )
 
-# Optional length-based GPU routing: map an (inclusive) upper token bound to a GPU
-# model, e.g. {2000: "3090", 4000: "A100", 99999: "H100"}. Each complex is routed
-# to the smallest tier it fits (bigger-than-all -> largest tier). When unset, the
-# fixed structure_inference_gpu_model is used (previous behaviour).
-GPU_MODEL_BY_TOKENS = config.get("structure_inference_gpu_model_by_tokens") or {}
-_GPU_MODEL_CONFIGURED = bool(GPU_MODEL_BY_TOKENS) or (
-    DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL is not None
-)
+# Optional length-based GPU routing by VRAM (within one partition). Each tier is
+# {min_vram_gb, nodes}; a complex's estimated peak VRAM picks the smallest tier that
+# fits, and all smaller-GPU nodes are excluded so the job runs on ANY GPU >= that
+# tier (the whole pool, not one pinned model). Cluster-agnostic: list your own tiers.
+# When set, this drives `slurm_extra=--exclude=...` and takes precedence over the
+# fixed structure_inference_gpu_model (which is dropped to avoid an impossible
+# "pin model X but exclude its nodes" request).
+GPU_TIERS = config.get("structure_inference_gpu_tiers") or []
+GPU_VRAM_HEADROOM = float(config.get("structure_inference_gpu_vram_headroom", 1.0))
 
 
-def _inference_gpu_model(wildcards):
-    """gpu_model resource: length-tier model, or the fixed model, or '' (any GPU)."""
+def _inference_slurm_extra(wildcards):
+    """slurm_extra resource: --exclude small-GPU nodes for large complexes, merged
+    with the static slurm_exclude_nodes."""
     tokens = fold_total_tokens(
         wildcards.fold,
         join(config["output_directory"], "data"),
@@ -392,9 +394,14 @@ def _inference_gpu_model(wildcards):
         is_af3=(INFERENCE_BACKEND == "alphafold3"),
         length_cache=sequence_length_cache,
     )
-    return select_gpu_model(
-        tokens, GPU_MODEL_BY_TOKENS, DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL
-    ) or ""
+    nodes = gpu_exclude_nodes(
+        tokens,
+        GPU_TIERS,
+        structure_inference_ram_per_token_sq,
+        GPU_VRAM_HEADROOM,
+        DEFAULT_SLURM_EXCLUDE or "",
+    )
+    return f"--exclude={nodes}" if nodes else ""
 
 rule symlink_features:
     input:
@@ -496,8 +503,20 @@ rule structure_inference:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
         qos=DEFAULT_SLURM_QOS,
         gpu=DEFAULT_STRUCTURE_INFERENCE_GPUS,
-        **({"gpu_model": _inference_gpu_model} if _GPU_MODEL_CONFIGURED else {}),
-        **({"slurm_extra": f"--exclude={DEFAULT_SLURM_EXCLUDE}"} if DEFAULT_SLURM_EXCLUDE else {}),
+        # Pin a single GPU model only when VRAM-tier routing is NOT used (the two
+        # would conflict: tier routing may exclude the pinned model's nodes).
+        **(
+            {"gpu_model": DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL}
+            if (DEFAULT_STRUCTURE_INFERENCE_GPU_MODEL is not None and not GPU_TIERS)
+            else {}
+        ),
+        # --exclude is dynamic (per-complex VRAM routing) when tiers are set, else the
+        # static slurm_exclude_nodes.
+        **(
+            {"slurm_extra": _inference_slurm_extra}
+            if (GPU_TIERS or DEFAULT_SLURM_EXCLUDE)
+            else {}
+        ),
         tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(
             mem_fn=lambda wildcards, attempt: estimate_inference_mem_mb(
