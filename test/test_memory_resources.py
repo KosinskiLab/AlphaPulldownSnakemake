@@ -37,7 +37,7 @@ def _write_fasta(directory: str, name: str, length: int) -> str:
 
 
 def test_residue_count_counts_sequence_only():
-    common.residue_count.cache_clear()
+    common._RESIDUE_COUNT_CACHE.clear()
     with tempfile.TemporaryDirectory() as d:
         p = _write_fasta(d, "X", 137)
         assert common.residue_count(p) == 137
@@ -45,8 +45,19 @@ def test_residue_count_counts_sequence_only():
     assert common.residue_count(os.path.join(d, "does_not_exist.fasta")) == 0
 
 
+def test_residue_count_does_not_cache_missing_file():
+    """Regression: an early read of a not-yet-created file must NOT cache 0, or
+    length-aware sizing collapses to the base once the file later appears."""
+    common._RESIDUE_COUNT_CACHE.clear()
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "late.fasta")
+        assert common.residue_count(p) == 0  # file absent now
+        _write_fasta(d, "late", 321)         # produced by an upstream job later
+        assert common.residue_count(p) == 321  # re-read, not the stale 0
+
+
 def test_fold_total_tokens_sums_chains_and_copies():
-    common.residue_count.cache_clear()
+    common._RESIDUE_COUNT_CACHE.clear()
     with tempfile.TemporaryDirectory() as d:
         _write_fasta(d, "A", 200)
         _write_fasta(d, "B", 300)
@@ -62,8 +73,8 @@ def test_fold_total_tokens_sums_chains_and_copies():
 def test_fold_total_tokens_af3_precomputed_feature_fallback():
     """When data/<chain>.fasta is absent (precomputed features), AF3 length comes
     from the <features_dir>/<chain>_af3_input.json fallback."""
-    common.residue_count.cache_clear()
-    common.af3_input_residue_count.cache_clear()
+    common._RESIDUE_COUNT_CACHE.clear()
+    common._AF3_INPUT_COUNT_CACHE.clear()
     with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as feat:
         _write_fasta(d, "B", 300)  # only B has a FASTA; A is "precomputed"
         with open(os.path.join(feat, "A_af3_input.json"), "w") as fh:
@@ -226,7 +237,7 @@ def test_fetch_uniprot_length_parses_and_fails_open():
 def test_chain_residue_count_length_cache_fallback():
     """AF2 precomputed features: no FASTA and no AF3 JSON, but the parse-time
     length cache supplies the length."""
-    common.residue_count.cache_clear()
+    common._RESIDUE_COUNT_CACHE.clear()
     with tempfile.TemporaryDirectory() as d:
         # no data/A.fasta exists; cache provides it
         assert common.chain_residue_count("A", d) == 0

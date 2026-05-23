@@ -22,39 +22,51 @@ from typing import Any, Callable
 MAX_TOTAL_LENGTH_DEFAULTS = {"alphafold2": 5000, "alphafold3": 7000}
 
 
-@functools.lru_cache(maxsize=None)
+# Length lookups cache only *successful* (>0) reads. Caching a 0 from a not-yet-
+# created file would be a correctness bug: Snakemake's scheduler evaluates resource
+# functions early (before upstream download/symlink rules run), and a memoised 0
+# would then stick even after the file appears, collapsing length-aware sizing to
+# the base allocation. Re-reading a small FASTA/JSON on later calls is cheap.
+_RESIDUE_COUNT_CACHE: dict[str, int] = {}
+_AF3_INPUT_COUNT_CACHE: dict[str, int] = {}
+
+
 def residue_count(fasta_path: str) -> int:
     """Number of residues in a (single-record) FASTA file.
 
-    Counts sequence characters, ignoring the header line(s) and whitespace.
-    Returns 0 when the file cannot be read yet (e.g. during a dry-run before
-    the upstream download/symlink rule has produced it) so that resource
-    estimation degrades gracefully to the base allocation instead of crashing.
-    Results are memoised because the structure-inference estimator may look up
-    the same chain repeatedly within a workflow.
+    Counts sequence characters, ignoring header lines and whitespace. Returns 0
+    when the file cannot be read yet (so estimation degrades to the base
+    allocation rather than crashing) and does not cache that 0 — see the note
+    above on why caching a missing-file result would be wrong.
     """
+    cached = _RESIDUE_COUNT_CACHE.get(fasta_path)
+    if cached:
+        return cached
     try:
         total = 0
         with open(fasta_path) as handle:
             for line in handle:
-                if line.startswith(">"):
-                    continue
-                total += len(line.strip())
-        return total
+                if not line.startswith(">"):
+                    total += len(line.strip())
     except OSError:
         return 0
+    if total > 0:
+        _RESIDUE_COUNT_CACHE[fasta_path] = total
+    return total
 
 
-@functools.lru_cache(maxsize=None)
 def af3_input_residue_count(json_path: str) -> int:
     """Total polymer residues in an AlphaFold 3 ``*_af3_input.json`` feature file.
 
     Sums the ``sequence`` length of every protein/RNA/DNA entry under
     ``sequences`` (ligands have no sequence and are skipped). Returns 0 if the
-    file is missing or not parseable. Used as a fallback for the chain length
-    when no ``data/<chain>.fasta`` exists (e.g. precomputed features supplied via
-    ``feature_directory``, where the download/feature rules never run).
+    file is missing or not parseable (not cached); used as a fallback for the
+    chain length when no ``data/<chain>.fasta`` exists (e.g. precomputed features
+    supplied via ``feature_directory``).
     """
+    cached = _AF3_INPUT_COUNT_CACHE.get(json_path)
+    if cached:
+        return cached
     try:
         with open(json_path) as handle:
             data = json.load(handle)
@@ -68,6 +80,8 @@ def af3_input_residue_count(json_path: str) -> int:
             mol_entry = entry.get(mol)
             if isinstance(mol_entry, dict):
                 total += len(mol_entry.get("sequence", "") or "")
+    if total > 0:
+        _AF3_INPUT_COUNT_CACHE[json_path] = total
     return total
 
 

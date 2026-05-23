@@ -407,8 +407,17 @@ rule create_features:
     resources:
         qos=DEFAULT_SLURM_QOS,
         **linear_resources(
+            # Length from the parse-time cache (populated before any job runs) or
+            # the staged FASTA, falling back to the rule input. Using the cache
+            # avoids depending on when Snakemake evaluates the resource relative to
+            # the upstream download.
             mem_fn=lambda wildcards, input, attempt: estimate_feature_mem_mb(
-                residue_count(str(input[0])) if input else 0,
+                chain_residue_count(
+                    wildcards.fasta_basename,
+                    join(config["output_directory"], "data"),
+                    length_cache=sequence_length_cache,
+                )
+                or (residue_count(str(input[0])) if input else 0),
                 base_mb=base_feature_ram,
                 per_residue_mb=feature_ram_per_residue,
                 scaling=feature_scaling,
