@@ -401,6 +401,11 @@ length_filter_fetch_uniprot: true     # set false for fully offline runs
   UniProt outage never silently drops work.
 - First parse of a large all-UniProt sheet will fetch each unique length once (cached
   afterwards); already-downloaded inputs and local FASTAs are read without any network call.
+- **Applies to every profile, including local/workstation runs** (it runs during workflow
+  parsing, not in the executor). It's the only length-aware feature that does — the memory
+  and GPU-routing settings are SLURM resources that local runs ignore. To attempt a complex
+  larger than the caps on a big workstation, raise or zero the `max_total_length_*` values
+  (and set `length_filter_fetch_uniprot: false` for offline use).
 
 </details>
 
