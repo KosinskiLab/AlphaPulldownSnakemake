@@ -162,8 +162,8 @@ structure_inference_unified_memory: true
 structure_inference_xla_mem_fraction: auto
 
 # Specify the backend by changing the prediction container
-# - "docker://kosinskilab/alphafold2:2.5.0" for AlphaFold2
-# - "docker://kosinskilab/alphafold3:2.5.0" for AlphaFold3
+# - "docker://kosinskilab/alphafold2:2.4.0" for AlphaFold2
+# - "docker://kosinskilab/alphafold3:2.4.0" for AlphaFold3
 # - "docker://kosinskilab/alphalink:2.1.5" for AlphaLink  (latest published alphalink tag)
 # (you can also use local singularity .sif files)
 # - "/path/to/my/container.sif"
