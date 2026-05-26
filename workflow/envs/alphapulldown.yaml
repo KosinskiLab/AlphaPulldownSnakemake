@@ -12,4 +12,6 @@ dependencies:
   - coincbc
   - pip
   - pip:
-      - alphapulldown-input-parser>=0.4.0
+      # >=0.5.0 exposes the public parse_fold_chains() used by the length-aware
+      # memory model and the length filter at workflow-parse time.
+      - alphapulldown-input-parser>=0.5.0

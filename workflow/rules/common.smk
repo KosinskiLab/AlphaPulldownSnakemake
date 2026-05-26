@@ -7,10 +7,333 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
+import json
 import os
+import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Callable
+
+# Default maximum *total* complex length (residues) per backend, used to skip
+# folds that are too large to be feasible. AF3 supports larger inputs than
+# AF2-Multimer. Override via config (see Snakefile / config.yaml).
+MAX_TOTAL_LENGTH_DEFAULTS = {"alphafold2": 5000, "alphafold3": 7000}
+
+
+# Length lookups cache only *successful* (>0) reads. Caching a 0 from a not-yet-
+# created file would be a correctness bug: Snakemake's scheduler evaluates resource
+# functions early (before upstream download/symlink rules run), and a memoised 0
+# would then stick even after the file appears, collapsing length-aware sizing to
+# the base allocation. Re-reading a small FASTA/JSON on later calls is cheap.
+_RESIDUE_COUNT_CACHE: dict[str, int] = {}
+_AF3_INPUT_COUNT_CACHE: dict[str, int] = {}
+
+
+def residue_count(fasta_path: str) -> int:
+    """Number of residues in a (single-record) FASTA file.
+
+    Counts sequence characters, ignoring header lines and whitespace. Returns 0
+    when the file cannot be read yet (so estimation degrades to the base
+    allocation rather than crashing) and does not cache that 0 — see the note
+    above on why caching a missing-file result would be wrong.
+    """
+    cached = _RESIDUE_COUNT_CACHE.get(fasta_path)
+    if cached:
+        return cached
+    try:
+        total = 0
+        with open(fasta_path) as handle:
+            for line in handle:
+                if not line.startswith(">"):
+                    total += len(line.strip())
+    except OSError:
+        return 0
+    if total > 0:
+        _RESIDUE_COUNT_CACHE[fasta_path] = total
+    return total
+
+
+def af3_input_residue_count(json_path: str) -> int:
+    """Total polymer residues in an AlphaFold 3 ``*_af3_input.json`` feature file.
+
+    Sums the ``sequence`` length of every protein/RNA/DNA entry under
+    ``sequences`` (ligands have no sequence and are skipped). Returns 0 if the
+    file is missing or not parseable (not cached); used as a fallback for the
+    chain length when no ``data/<chain>.fasta`` exists (e.g. precomputed features
+    supplied via ``feature_directory``).
+    """
+    cached = _AF3_INPUT_COUNT_CACHE.get(json_path)
+    if cached:
+        return cached
+    try:
+        with open(json_path) as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return 0
+    total = 0
+    for entry in data.get("sequences", []):
+        if not isinstance(entry, dict):
+            continue
+        for mol in ("protein", "rna", "dna"):
+            mol_entry = entry.get(mol)
+            if isinstance(mol_entry, dict):
+                total += len(mol_entry.get("sequence", "") or "")
+    if total > 0:
+        _AF3_INPUT_COUNT_CACHE[json_path] = total
+    return total
+
+
+# Re-export the canonical fold-spec parser from `alphapulldown-input-parser` under a
+# short local name. Adapts the parser's `(name, copies, regions)` triples to the
+# `(name, copies)` pairs the memory/length-filter logic here uses (regions are
+# conservatively counted at full chain length — see `fold_total_tokens` for why).
+from alphapulldown_input_parser import (
+    parse_fold_chains as _parse_fold_chains_with_regions,  # noqa: E402
+)
+
+
+def parse_fold_chains(fold: str, delimiter: str = "+") -> list[tuple[str, int]]:
+    """Delegate to ``alphapulldown_input_parser.parse_fold_chains``; drop regions."""
+    return [
+        (name, copies)
+        for name, copies, _regions in _parse_fold_chains_with_regions(fold, delimiter)
+    ]
+
+
+@functools.lru_cache(maxsize=None)
+def fetch_uniprot_length(uniprot_id: str, timeout: float = 30.0) -> int:
+    """Residue length of a UniProt entry via the REST API; 0 on any failure.
+
+    Mirrors the reference snippet in issue #33. Used at parse time for length
+    filtering when no local FASTA is available yet; failures return 0 so the
+    caller can fail open (keep the fold) rather than crash offline.
+    """
+    url = f"https://rest.uniprot.org/uniprotkb/{uniprot_id}.fasta"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            text = response.read().decode("utf-8", "replace")
+    except Exception:
+        return 0
+    total = 0
+    for line in text.splitlines():
+        if not line.startswith(">"):
+            total += len(line.strip())
+    return total
+
+
+def chain_residue_count(
+    name: str,
+    data_dir: str,
+    features_dir: str | None = None,
+    is_af3: bool = False,
+    length_cache: dict | None = None,
+) -> int:
+    """Residue length of a single chain.
+
+    Resolution order: ``<data_dir>/<name>.fasta`` -> AF3 precomputed
+    ``<features_dir>/<name>_af3_input.json`` (AF3 only) -> ``length_cache`` (the
+    parse-time length table, which covers the AF2 precomputed-feature case where
+    neither a FASTA nor an AF3 JSON exists). Returns 0 when length is unknown so
+    sizing degrades to the base allocation plus retry escalation.
+    """
+    length = residue_count(os.path.join(data_dir, f"{name}.fasta"))
+    if length == 0 and is_af3 and features_dir:
+        length = af3_input_residue_count(
+            os.path.join(features_dir, f"{name}_af3_input.json")
+        )
+    if length == 0 and length_cache:
+        length = int(length_cache.get(name, 0) or 0)
+    return length
+
+
+def fold_total_tokens(
+    fold: str,
+    data_dir: str,
+    delimiter: str = "+",
+    features_dir: str | None = None,
+    is_af3: bool = False,
+    length_cache: dict | None = None,
+) -> int:
+    """Total residue (token) count of a fold specification.
+
+    Sums the residue length of every chain in ``fold``, honouring copy numbers
+    such as ``A:2`` (a homo-dimer counts twice). Region selections such as
+    ``A:1-100`` are conservatively counted at the chain's full length, which
+    over- rather than under-estimates memory. Per-chain lengths come from
+    ``chain_residue_count`` (FASTA -> AF3 JSON -> length cache).
+
+    Note: AF3 ligand atoms are not counted (no ``sequence`` field); for
+    protein/nucleic complexes this matches the token count, and the safety
+    margin plus retry escalation absorb any small ligand undercount.
+    """
+    total = 0
+    for name, copies in parse_fold_chains(fold, delimiter):
+        total += (
+            chain_residue_count(name, data_dir, features_dir, is_af3, length_cache)
+            * copies
+        )
+    return total
+
+
+def fold_length_violation(
+    chain_lengths: list[tuple[str, int | None, int]],
+    max_protein_length: int = 0,
+    max_total_length: int = 0,
+) -> str | None:
+    """Return a human-readable reason if a fold exceeds a length limit, else None.
+
+    ``chain_lengths`` is a list of ``(name, length_or_None, copies)``. Limits of
+    0 (or negative) are disabled. Unknown lengths (``None``) are treated as 0 so
+    the decision fails open (the fold is kept) rather than dropped on missing data.
+    """
+    if max_protein_length and max_protein_length > 0:
+        for name, length, _copies in chain_lengths:
+            if length is not None and length > max_protein_length:
+                return (
+                    f"protein {name} length {length} exceeds "
+                    f"max_protein_length {max_protein_length}"
+                )
+    if max_total_length and max_total_length > 0:
+        total = sum((length or 0) * copies for _name, length, copies in chain_lengths)
+        if total > max_total_length:
+            return f"total length {total} exceeds max_total_length {max_total_length}"
+    return None
+
+
+def required_gpu_vram_gb(
+    total_tokens: int, per_token_sq_mb: float, headroom: float = 1.0
+) -> float:
+    """Estimated peak GPU VRAM (GB) for a complex of ``total_tokens``.
+
+    Uses the same O(N^2) coefficient as host-memory sizing as a proxy for on-device
+    peak demand, scaled by ``headroom`` (e.g. 0.8 tolerates ~20% spill to host).
+    """
+    return headroom * per_token_sq_mb * (max(int(total_tokens), 0) ** 2) / 1000.0
+
+
+def gpu_exclude_nodes(
+    total_tokens: int,
+    tiers,
+    per_token_sq_mb: float,
+    headroom: float = 1.0,
+    extra_exclude: str = "",
+) -> str:
+    """Comma-joined SLURM nodes to exclude so a complex lands on a big-enough GPU.
+
+    ``tiers`` is an iterable of ``{"min_vram_gb": int, "nodes": "<slurm hostlist>"}``
+    describing the cluster's GPU pool. The complex's required VRAM
+    (:func:`required_gpu_vram_gb`) selects the smallest tier that satisfies it (the
+    largest tier if none does — the remainder spills to host via unified memory);
+    the nodes of every *smaller* tier are excluded, so the job may run on any GPU at
+    or above the chosen tier (the whole pool, not one pinned model). ``extra_exclude``
+    (the static ``slurm_exclude_nodes``) is always appended.
+
+    Cluster-agnostic: each site lists its own GPU tiers/nodes; nothing about a
+    specific cluster is hard-coded.
+    """
+    parts: list[str] = []
+    valid = [t for t in tiers if t and t.get("nodes")]
+    if valid:
+        ordered = sorted(valid, key=lambda t: int(t["min_vram_gb"]))
+        required = required_gpu_vram_gb(total_tokens, per_token_sq_mb, headroom)
+        chosen = len(ordered) - 1
+        for index, tier in enumerate(ordered):
+            if int(tier["min_vram_gb"]) >= required:
+                chosen = index
+                break
+        parts.extend(str(tier["nodes"]) for tier in ordered[:chosen])
+    if extra_exclude:
+        parts.append(str(extra_exclude))
+    return ",".join(part for part in parts if part)
+
+
+def _cap_mem(value_mb: float, cap_mb: int) -> int:
+    value = max(int(value_mb), 1)
+    if cap_mb and cap_mb > 0:
+        value = min(value, int(cap_mb))
+    return value
+
+
+def estimate_feature_mem_mb(
+    seq_len: int,
+    *,
+    base_mb: float,
+    per_residue_mb: float,
+    scaling: float,
+    safety: float,
+    attempt: int,
+    cap_mb: int = 0,
+) -> int:
+    """Length-aware host RAM (MB) for the feature-generation (MSA) stage.
+
+    Feature memory is dominated by a near-fixed database/MSA-tooling footprint
+    with only a mild dependence on query length, so the model is linear:
+
+        mem = safety * (base_mb + per_residue_mb * seq_len)
+
+    The first attempt already carries the ``safety`` margin; OOM retries
+    escalate further via ``scaling ** (attempt - 1)``.
+    """
+    estimate = safety * (base_mb + per_residue_mb * max(int(seq_len), 0))
+    value = estimate * (scaling ** max(int(attempt) - 1, 0))
+    return _cap_mem(value, cap_mb)
+
+
+def estimate_inference_mem_mb(
+    total_tokens: int,
+    *,
+    base_mb: float,
+    per_token_sq_mb: float,
+    scaling: float,
+    safety: float,
+    attempt: int,
+    cap_mb: int = 0,
+) -> int:
+    """Length-aware host RAM (MB) for the structure-inference stage.
+
+    AlphaFold's pair representation is O(N^2) in the number of tokens N (total
+    residues of the complex), so peak memory follows a quadratic:
+
+        mem = safety * (base_mb + per_token_sq_mb * N**2)
+
+    With unified memory enabled the XLA fraction is derived from this host
+    allocation, so sizing host RAM by N also sizes the GPU spill ceiling. The
+    first attempt carries the ``safety`` margin; OOM retries escalate via
+    ``scaling ** (attempt - 1)``.
+    """
+    estimate = safety * (base_mb + per_token_sq_mb * (max(int(total_tokens), 0) ** 2))
+    value = estimate * (scaling ** max(int(attempt) - 1, 0))
+    return _cap_mem(value, cap_mb)
+
+
+# Backend-specific memory defaults. AlphaFold-Multimer (AF2) inference carries a
+# substantially heavier host-RAM footprint than AlphaFold 3 at the same complex
+# size (measured host RSS ~4x higher around N~2300 in the benchmark campaign), and
+# its feature stage runs HHblits, the dominant OOM source; the AF3 data pipeline
+# (jackhmmer/nhmmer, no HHblits) is lighter. So AF2 gets larger bases and a larger
+# quadratic term. These apply only when the matching config key is unset, so an
+# explicit config value always wins.
+FEATURE_RAM_DEFAULTS = {
+    "alphafold2": {"base_mb": 64000, "per_residue_mb": 40},
+    "alphafold3": {"base_mb": 40000, "per_residue_mb": 25},
+}
+INFERENCE_RAM_DEFAULTS = {
+    # base_mb: fixed floor; per_token_sq_mb: quadratic coeff in N^2 (total residues).
+    # Bases are deliberately modest: at low N the safety factor (1.25 by default) keeps a
+    # comfortable margin over measured host RSS (~6 GB AF3 / ~6-30 GB AF2), and at high N
+    # the quadratic dominates anyway. Retries still escalate via `scaling ** (attempt-1)`,
+    # so an under-provisioned job self-heals (mem grows on each retry from this base).
+    "alphafold2": {"base_mb": 16000, "per_token_sq_mb": 0.0055, "runtime_minutes": 1440},
+    "alphafold3": {"base_mb":  8000, "per_token_sq_mb": 0.0045, "runtime_minutes": 1440},
+}
+
+
+def normalize_backend(name, default: str = "alphafold2") -> str:
+    """Map a backend/data-pipeline string to 'alphafold2' or 'alphafold3'."""
+    n = str(name if name is not None else default).strip().lower()
+    return "alphafold3" if n in ("alphafold3", "af3") else "alphafold2"
 
 
 def feature_suffix(compression: str = "lzma") -> str:
@@ -105,30 +428,46 @@ def linear_resources(
     runtime_fn: Callable[[Any, int], float] | None = None,
     attempt_fn: Callable[[Any, int], int] | None = None,
 ) -> dict[str, Any]:
-    """Return a Snakemake resources dictionary scaling with retry attempts."""
+    """Return a Snakemake resources dictionary scaling with retry attempts.
 
-    def _mem_value(wc, attempt: int) -> float:
+    User-supplied ``*_fn`` callbacks receive ``wildcards`` positionally and may
+    additionally declare ``input`` and/or ``attempt`` parameters; only the ones
+    they declare are forwarded. This keeps legacy ``f(wc, attempt)`` callbacks
+    working while letting length-aware callbacks read input files via
+    ``f(wildcards, input, attempt)``.
+    """
+
+    def _invoke(fn, wc, input, attempt):
+        params = inspect.signature(fn).parameters
+        kwargs = {}
+        if "input" in params:
+            kwargs["input"] = input
+        if "attempt" in params:
+            kwargs["attempt"] = attempt
+        return fn(wc, **kwargs)
+
+    def _mem_value(wc, input, attempt: int) -> float:
         if mem_fn:
-            return float(mem_fn(wc, attempt))
+            return float(_invoke(mem_fn, wc, input, attempt))
         return float(mem * attempt)
 
-    def _runtime_value(wc, attempt: int) -> float:
+    def _runtime_value(wc, input, attempt: int) -> float:
         if runtime_fn:
-            return float(runtime_fn(wc, attempt))
+            return float(_invoke(runtime_fn, wc, input, attempt))
         return float(runtime * attempt)
 
-    def _avg_mem(wc, attempt: int) -> int:
-        return int(_mem_value(wc, attempt) * avg_factor)
+    def _avg_mem(wc, input, attempt: int) -> int:
+        return int(_mem_value(wc, input, attempt) * avg_factor)
 
-    def _mem_mb(wc, attempt: int) -> int:
-        return int(_mem_value(wc, attempt))
+    def _mem_mb(wc, input, attempt: int) -> int:
+        return int(_mem_value(wc, input, attempt))
 
-    def _runtime(wc, attempt: int) -> int:
-        return int(_runtime_value(wc, attempt))
+    def _runtime(wc, input, attempt: int) -> int:
+        return int(_runtime_value(wc, input, attempt))
 
-    def _attempt(wc, attempt: int) -> int:
+    def _attempt(wc, input, attempt: int) -> int:
         if attempt_fn:
-            return int(attempt_fn(wc, attempt))
+            return int(_invoke(attempt_fn, wc, input, attempt))
         return attempt
 
     return {

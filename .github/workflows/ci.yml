@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install alphapulldown-input-parser
+        # common.smk imports parse_fold_chains from the parser package; >=0.5.0
+        # is required for the public helper.
+        run: pip install --quiet "alphapulldown-input-parser>=0.5.0"
+      - name: Byte-compile common.smk
+        # common.smk carries the memory/length logic; delegates parsing to the parser.
+        run: python -m py_compile workflow/rules/common.smk
+      - name: Run resource/length unit tests
+        # The suite loads common.smk directly; the SLURM-plugin integration test
+        # self-skips when the plugin is absent.
+        run: python test/test_memory_resources.py

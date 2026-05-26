@@ -52,10 +52,67 @@ analyze_structure_arguments:
 
 # Memory allocation for feature creation and structure inference.
 # NOTE: despite the "_bytes" suffix these values are in MEGABYTES (used directly as
-# the SLURM --mem request), so 64000 = 64000 MB ~= 64 GB. They scale with retries.
-feature_create_ram_bytes: 64000      # MB
-feature_create_ram_scaling: 1.1
-structure_inference_ram_bytes: 64000 # MB
+# the SLURM --mem request), so 64000 = 64000 MB ~= 64 GB.
+#
+# Host RAM for both stages is sized automatically from the input sequence length
+# with a safety margin, and still escalates on OOM retries. The requested memory is:
+#   create_features      : safety * (feature_create_ram_bytes + per_residue * seq_len)
+#   structure_inference  : safety * (structure_inference_ram_bytes + per_token_sq * N^2)
+# where seq_len is the query length, N is the total residues of the complex, and the
+# request is multiplied by (scaling ** (attempt - 1)) on each retry. AlphaFold's pair
+# representation is O(N^2), hence the quadratic term for inference.
+#
+# The base / per-length coefficients DEFAULT BY BACKEND (AF2 is heavier than AF3),
+# selected automatically from --data_pipeline / --fold_backend:
+#                              feature base   feature /res   infer base   infer /N^2
+#   alphafold2 (AF2 multimer):    64000 MB       40 MB         16000 MB     0.0055
+#   alphafold3 (AF3):             40000 MB       25 MB          8000 MB     0.0045
+# Inference bases are deliberately modest; the quadratic term dominates at high N, and
+# OOM retries still escalate from this base via `..._ram_scaling ** (attempt - 1)`.
+# Leave the keys below commented to use those backend defaults. Uncomment any key
+# to override it for ALL backends.
+
+# Safety margin applied to the first-attempt estimate of every length-aware stage.
+mem_safety_factor: 1.25
+# Optional hard ceiling (MB) on any single memory request; 0 = no cap. Set this to
+# your largest node's RAM on clusters where an over-estimate would never schedule.
+max_mem_mb: 0
+
+# create_features (CPU/MSA) — base is database/MSA-tool dominated (AF2 HHblits is the
+# main OOM source), with a mild linear dependence on query length.
+# feature_create_ram_bytes: 64000        # MB, fixed base (default: backend-specific)
+# feature_create_ram_per_residue_mb: 30  # MB per query residue (default: backend-specific)
+feature_create_ram_scaling: 1.1          # per-retry escalation on OOM
+
+# structure_inference (GPU host RAM) — base plus a quadratic term in complex size.
+# With unified memory enabled the XLA spill fraction is derived from this host
+# allocation, so this also sizes the effective GPU memory ceiling.
+# structure_inference_ram_bytes: 16000           # MB, fixed base (default: backend-specific)
+# structure_inference_ram_per_token_sq_mb: 0.0045  # MB per residue^2 (default: backend-specific)
+structure_inference_ram_scaling: 1.1             # per-retry escalation on OOM
+# Wall-time minutes per attempt for structure_inference (capped by
+# structure_inference_max_runtime). Default 1440; AF3 on an adequate GPU finishes far
+# sooner, but host-memory spilling can take many hours, so the default stays generous.
+# structure_inference_runtime_minutes: 1440
+
+# Length filtering: skip folds that are too large to be worth submitting. Lengths
+# are resolved at parse time (local FASTA / already-downloaded data / cache / the
+# UniProt REST API) and cached in <output_directory>/.sequence_lengths.tsv; skipped
+# folds are listed in <output_directory>/skipped_folds.tsv. Unknown lengths fail
+# open (the fold is kept). Set a limit to 0 to disable it.
+#
+# Max TOTAL complex length (sum of all chains, residues), per backend; selected by
+# --fold_backend. AF3 handles larger inputs than AF2-Multimer.
+max_total_length_alphafold2: 5000
+max_total_length_alphafold3: 7000
+# Optional single override applied to BOTH backends (takes precedence if set):
+# max_total_length: 6000
+# Max length of any SINGLE protein (residues); 0 disables (issue #33). A protein
+# over this drops every fold containing it, so it is never downloaded/predicted.
+max_protein_length: 0
+# Whether parse-time length resolution may query the UniProt REST API for IDs that
+# have no local FASTA / cached length yet. Set false for fully offline runs.
+length_filter_fetch_uniprot: true
 
 # Number of threads for AlphaFold inference
 alphafold_inference_threads: 8
@@ -65,8 +122,27 @@ slurm_partition: "gpu-el8"
 slurm_qos: "normal"
 structure_inference_gpus_per_task: 1
 # Restrict structure_inference to one GPU model (sbatch --gpus=<model>:N), e.g. "3090".
-# Leave "" to let SLURM pick any GPU in the partition.
-structure_inference_gpu_model: "3090"
+# Default "" lets SLURM pick any GPU in the partition (use the whole pool); set a model
+# name only if you want to pin all inference jobs to one card type. The richer
+# structure_inference_gpu_tiers below routes by VRAM and OVERRIDES this when set.
+structure_inference_gpu_model: ""
+# Optional length-based GPU routing by VRAM (within this partition). List your GPU
+# pool as tiers of {min_vram_gb, nodes}; a complex's estimated peak VRAM
+# (~ structure_inference_ram_per_token_sq * N^2) selects the smallest tier that fits
+# and all SMALLER-GPU nodes are excluded, so the job runs on ANY GPU >= that tier
+# (the whole pool, not one pinned model). A complex larger than every tier uses the
+# biggest tier and spills to host RAM via unified memory. When set, this drives
+# --exclude and OVERRIDES structure_inference_gpu_model. Use explicit comma node lists
+# (avoid bracket ranges, which the shell may glob). The example below is for the EMBL
+# gpu-el8 partition - replace nodes with your cluster's; nothing is hard-coded.
+# structure_inference_gpu_vram_headroom: 1.0   # <1.0 tolerates that fraction of host spill
+# structure_inference_gpu_tiers:
+#   - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29,gpu30,gpu31,gpu32,gpu33,gpu34,gpu35,gpu36,gpu37"}  # RTX 3090
+#   - {min_vram_gb: 40, nodes: "gpu25,gpu26,gpu27,gpu28"}                                # A100 40GB
+#   - {min_vram_gb: 48, nodes: "gpu40,gpu41,gpu42,gpu43,gpu44,gpu45,gpu46,gpu47,gpu48"}  # L40s/A40 48GB
+#   - {min_vram_gb: 80, nodes: "gpu38,gpu39"}                                            # H100 PCIe 80GB
+# Note: RTX PRO 6000 (gpu50-53, 96GB) are ptxas-incompatible -> keep in slurm_exclude_nodes.
+# H100-SXM/H200/B200 live on the separate gpu-training partition (not routed here).
 # Optional: comma-separated nodes to keep structure_inference OFF, passed to sbatch
 # as --exclude. Useful for GPUs the prediction container cannot use (e.g. a CUDA
 # compute capability the bundled ptxas is too old for). Example:
