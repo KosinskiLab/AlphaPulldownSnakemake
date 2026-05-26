@@ -14,7 +14,7 @@ conda env create \
 conda activate snake
 ```
 
-This environment file installs Snakemake and all required plugins via conda and pulls in `alphapulldown-input-parser>=0.4.0` from PyPI in a single step.
+This environment file installs Snakemake and all required plugins via conda and pulls in `alphapulldown-input-parser>=0.5.0` from PyPI in a single step.
 
 That's it, you're done!
 
@@ -76,7 +76,7 @@ The original residue IDs are written to the mmCIF author-numbering fields
 (`auth_seq_id` and `pdbx_PDB_ins_code`); overlapping IDs are disambiguated with
 insertion codes such as `2A`, `2B`, and so on.
 Make sure the prediction container or runtime environment includes a matching
-AlphaPulldown build together with `alphapulldown-input-parser>=0.4.0`.
+AlphaPulldown build together with `alphapulldown-input-parser>=0.5.0`.
 
 </details>
 

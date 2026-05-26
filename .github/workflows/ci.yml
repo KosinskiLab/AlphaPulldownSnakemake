@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   unit-tests:
@@ -19,11 +20,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install alphapulldown-input-parser
         # common.smk imports parse_fold_chains from the parser package; >=0.5.0
-        # required for the public helper. Switch to `pip install
-        # alphapulldown-input-parser>=0.5.0` once that release lands on PyPI.
-        run: |
-          pip install --quiet "alphapulldown-input-parser>=0.5.0" || \
-          pip install --quiet "git+https://github.com/KosinskiLab/alphapulldown-input-parser@feat/public-parse-fold-chains"
+        # is required for the public helper.
+        run: pip install --quiet "alphapulldown-input-parser>=0.5.0"
       - name: Byte-compile common.smk
         # common.smk carries the memory/length logic; delegates parsing to the parser.
         run: python -m py_compile workflow/rules/common.smk
