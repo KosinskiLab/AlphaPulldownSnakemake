@@ -217,7 +217,7 @@ Override default values to match your cluster:
 slurm_partition: "gpu"                      # which partition/queue to submit to
 slurm_qos: "normal"                         # optional QoS if your site uses it
 structure_inference_gpus_per_task: 1        # number of GPUs each inference job needs
-structure_inference_gpu_model: "3090"       # optional GPU model constraint (remove to allow any)
+structure_inference_gpu_model: ""           # "" lets SLURM pick any GPU in the partition; set a model to pin
 structure_inference_tasks_per_gpu: 0        # <=0 keeps --ntasks-per-gpu unset in the plugin
 slurm_exclude_nodes: ""                     # optional comma-separated nodes to avoid (sbatch --exclude)
 structure_inference_max_runtime: 10080      # cap wall time (min) at the partition MaxTime
