@@ -346,8 +346,8 @@ structure_inference  mem = safety * (structure_inference_ram_bytes + per_token_s
 
   | backend | feature base | feature /residue | inference base | inference /N² |
   |---|---|---|---|---|
-  | `alphafold2` | 64000 MB | 40 MB | 24000 MB | 0.0055 |
-  | `alphafold3` | 40000 MB | 25 MB | 16000 MB | 0.0045 |
+  | `alphafold2` | 64000 MB | 40 MB | 16000 MB | 0.0055 |
+  | `alphafold3` | 40000 MB | 25 MB |  8000 MB | 0.0045 |
 
   The AF3 inference quadratic is sized to the observed GPU-VRAM demand so that, with unified
   memory, the host spill ceiling (`host_mem / gpu_vram`) covers large complexes instead of

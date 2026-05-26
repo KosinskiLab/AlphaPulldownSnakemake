@@ -324,11 +324,12 @@ FEATURE_RAM_DEFAULTS = {
 }
 INFERENCE_RAM_DEFAULTS = {
     # base_mb: fixed floor; per_token_sq_mb: quadratic coeff in N^2 (total residues).
-    # AF2 base/coeff cover the measured AF2 host RSS with margin; the AF3 quadratic is
-    # sized to the observed GPU-VRAM demand so the unified-memory spill ceiling
-    # (host_mem / gpu_vram) covers large complexes instead of OOM-ing.
-    "alphafold2": {"base_mb": 24000, "per_token_sq_mb": 0.0055, "runtime_minutes": 1440},
-    "alphafold3": {"base_mb": 16000, "per_token_sq_mb": 0.0045, "runtime_minutes": 1440},
+    # Bases are deliberately modest: at low N the safety factor (1.25 by default) keeps a
+    # comfortable margin over measured host RSS (~6 GB AF3 / ~6-30 GB AF2), and at high N
+    # the quadratic dominates anyway. Retries still escalate via `scaling ** (attempt-1)`,
+    # so an under-provisioned job self-heals (mem grows on each retry from this base).
+    "alphafold2": {"base_mb": 16000, "per_token_sq_mb": 0.0055, "runtime_minutes": 1440},
+    "alphafold3": {"base_mb":  8000, "per_token_sq_mb": 0.0045, "runtime_minutes": 1440},
 }
 
 

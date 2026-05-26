@@ -65,8 +65,10 @@ analyze_structure_arguments:
 # The base / per-length coefficients DEFAULT BY BACKEND (AF2 is heavier than AF3),
 # selected automatically from --data_pipeline / --fold_backend:
 #                              feature base   feature /res   infer base   infer /N^2
-#   alphafold2 (AF2 multimer):    64000 MB       40 MB         24000 MB     0.0055
-#   alphafold3 (AF3):             40000 MB       25 MB         16000 MB     0.0045
+#   alphafold2 (AF2 multimer):    64000 MB       40 MB         16000 MB     0.0055
+#   alphafold3 (AF3):             40000 MB       25 MB          8000 MB     0.0045
+# Inference bases are deliberately modest; the quadratic term dominates at high N, and
+# OOM retries still escalate from this base via `..._ram_scaling ** (attempt - 1)`.
 # Leave the keys below commented to use those backend defaults. Uncomment any key
 # to override it for ALL backends.
 
@@ -85,7 +87,7 @@ feature_create_ram_scaling: 1.1          # per-retry escalation on OOM
 # structure_inference (GPU host RAM) — base plus a quadratic term in complex size.
 # With unified memory enabled the XLA spill fraction is derived from this host
 # allocation, so this also sizes the effective GPU memory ceiling.
-# structure_inference_ram_bytes: 24000           # MB, fixed base (default: backend-specific)
+# structure_inference_ram_bytes: 16000           # MB, fixed base (default: backend-specific)
 # structure_inference_ram_per_token_sq_mb: 0.0045  # MB per residue^2 (default: backend-specific)
 structure_inference_ram_scaling: 1.1             # per-retry escalation on OOM
 # Wall-time minutes per attempt for structure_inference (capped by
@@ -120,8 +122,10 @@ slurm_partition: "gpu-el8"
 slurm_qos: "normal"
 structure_inference_gpus_per_task: 1
 # Restrict structure_inference to one GPU model (sbatch --gpus=<model>:N), e.g. "3090".
-# Leave "" to let SLURM pick any GPU in the partition.
-structure_inference_gpu_model: "3090"
+# Default "" lets SLURM pick any GPU in the partition (use the whole pool); set a model
+# name only if you want to pin all inference jobs to one card type. The richer
+# structure_inference_gpu_tiers below routes by VRAM and OVERRIDES this when set.
+structure_inference_gpu_model: ""
 # Optional length-based GPU routing by VRAM (within this partition). List your GPU
 # pool as tiers of {min_vram_gb, nodes}; a complex's estimated peak VRAM
 # (~ structure_inference_ram_per_token_sq * N^2) selects the smallest tier that fits
