@@ -85,24 +85,21 @@ def af3_input_residue_count(json_path: str) -> int:
     return total
 
 
-def parse_fold_chains(fold: str, delimiter: str = "+") -> list[tuple[str, int]]:
-    """Parse a fold spec into ``(chain_name, copies)`` pairs.
+# Re-export the canonical fold-spec parser from `alphapulldown-input-parser` under a
+# short local name. Adapts the parser's `(name, copies, regions)` triples to the
+# `(name, copies)` pairs the memory/length-filter logic here uses (regions are
+# conservatively counted at full chain length — see `fold_total_tokens` for why).
+from alphapulldown_input_parser import (
+    parse_fold_chains as _parse_fold_chains_with_regions,  # noqa: E402
+)
 
-    Follows the AlphaPulldown ``name[:copies][:region...]`` convention: the copy
-    number, if present, is the first ``:`` token after the name and is a bare
-    integer (e.g. ``A:2`` = dimer, ``A:2:1-100`` = dimer of residues 1-100).
-    Region tokens such as ``1-100`` are never bare integers, so ``A:1-100`` is a
-    single copy. Handles ``A+B`` heteromers.
-    """
-    chains: list[tuple[str, int]] = []
-    for token in str(fold).split(delimiter):
-        parts = [part for part in token.split(":") if part]
-        if not parts:
-            continue
-        name = parts[0]
-        copies = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
-        chains.append((name, copies))
-    return chains
+
+def parse_fold_chains(fold: str, delimiter: str = "+") -> list[tuple[str, int]]:
+    """Delegate to ``alphapulldown_input_parser.parse_fold_chains``; drop regions."""
+    return [
+        (name, copies)
+        for name, copies, _regions in _parse_fold_chains_with_regions(fold, delimiter)
+    ]
 
 
 @functools.lru_cache(maxsize=None)

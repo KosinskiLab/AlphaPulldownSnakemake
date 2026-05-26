@@ -17,10 +17,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install alphapulldown-input-parser
+        # common.smk imports parse_fold_chains from the parser package; >=0.5.0
+        # required for the public helper. Switch to `pip install
+        # alphapulldown-input-parser>=0.5.0` once that release lands on PyPI.
+        run: |
+          pip install --quiet "alphapulldown-input-parser>=0.5.0" || \
+          pip install --quiet "git+https://github.com/KosinskiLab/alphapulldown-input-parser@feat/public-parse-fold-chains"
       - name: Byte-compile common.smk
-        # common.smk is plain Python and carries the memory/length logic.
+        # common.smk carries the memory/length logic; delegates parsing to the parser.
         run: python -m py_compile workflow/rules/common.smk
       - name: Run resource/length unit tests
-        # The suite loads common.smk directly and needs no third-party deps;
-        # the SLURM-plugin integration test self-skips when the plugin is absent.
+        # The suite loads common.smk directly; the SLURM-plugin integration test
+        # self-skips when the plugin is absent.
         run: python test/test_memory_resources.py

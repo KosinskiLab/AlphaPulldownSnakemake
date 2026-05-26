@@ -177,12 +177,9 @@ def test_linear_resources_default_scaling_without_callbacks():
 
 
 # --- length filtering (issue #33 + total caps) -------------------------------
-
-def test_parse_fold_chains():
-    assert common.parse_fold_chains("A+B") == [("A", 1), ("B", 1)]
-    assert common.parse_fold_chains("A:2") == [("A", 2)]
-    assert common.parse_fold_chains("A:1-100") == [("A", 1)]  # region, not a copy
-    assert common.parse_fold_chains("A:2:1-100+B") == [("A", 2), ("B", 1)]
+# Note: fold-spec parsing (name/copies/regions) is owned by `alphapulldown-input-parser`
+# (>=0.5.0) and tested there; APS's `parse_fold_chains` is a thin (name, copies) adapter
+# exercised end-to-end through `fold_total_tokens` and the filter logic below.
 
 
 def test_fold_length_violation():
