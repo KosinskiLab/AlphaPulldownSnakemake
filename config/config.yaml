@@ -29,8 +29,14 @@ enable_structure_analysis: true
 # Generate an aggregated CSV (reports/all_interfaces.csv) across all folds
 generate_recursive_report: true
 
-# Extra CLI flags to pass to alphajudge during recursive report generation
+# Extra CLI flags to pass to alphajudge during recursive report generation.
+# Uncomment --aggregate_report to also produce an RCSB-style validation PDF
+# alongside the all_interfaces.csv (one slider page per detected interface,
+# ranked by interface_meta_score against the AlphaJudge benchmark). The path
+# must be absolute (or relative to the working directory snakemake uses).
 recursive_report_arguments: {}
+# recursive_report_arguments:
+#   --aggregate_report: /absolute/path/to/reports/aggregate_report.pdf
 
 # Arguments for feature generation
 create_feature_arguments:
@@ -44,9 +50,12 @@ create_feature_arguments:
 structure_inference_arguments:
   --fold_backend: alphafold3 # Options: alphafold2, alphafold3, alphalink
 
-# Arguments for structure analysis
+# Arguments for structure analysis.
+# Per-fold alphajudge runs automatically write a per-run RCSB-style report.pdf
+# next to interfaces.csv (the --report flag is on by default when no --summary
+# is requested at this stage).
 analyze_structure_arguments:
-  --contact_thresh: 8.0 # Contact threshold for structure analysis 
+  --contact_thresh: 8.0 # Contact threshold for structure analysis
   --pae_filter: 100.0 # PAE filter for structure analysis
   --models_to_analyse: "all"  # Models to analyze
 
