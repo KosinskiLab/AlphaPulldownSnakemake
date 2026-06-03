@@ -19,9 +19,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install alphapulldown-input-parser
-        # common.smk imports parse_fold_chains from the parser package; >=0.5.0
-        # is required for the public helper.
-        run: pip install --quiet "alphapulldown-input-parser>=0.5.0"
+        # common.smk imports parse_fold_chains from the parser package; >=0.5.1
+        # is required (public helper + ".json" preservation for AF3 inputs, #41).
+        run: pip install --quiet "alphapulldown-input-parser>=0.5.1"
       - name: Byte-compile common.smk
         # common.smk carries the memory/length logic; delegates parsing to the parser.
         run: python -m py_compile workflow/rules/common.smk

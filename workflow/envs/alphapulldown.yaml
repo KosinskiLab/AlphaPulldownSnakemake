@@ -14,4 +14,6 @@ dependencies:
   - pip:
       # >=0.5.0 exposes the public parse_fold_chains() used by the length-aware
       # memory model and the length filter at workflow-parse time.
-      - alphapulldown-input-parser>=0.5.0
+      # >=0.5.1 preserves ".json" tokens in FoldDataset normalization so AF3 JSON
+      # inputs (e.g. ligands) are not mistaken for proteins (issue #41).
+      - alphapulldown-input-parser>=0.5.1

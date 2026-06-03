@@ -12,7 +12,7 @@ include: "rules/common.smk"
 
 from pathlib import Path
 from os import makedirs, listdir, symlink, remove
-from os.path import abspath, join, splitext, basename, exists
+from os.path import abspath, join, splitext, basename, exists, lexists, realpath
 
 from alphapulldown_input_parser.parser import FoldDataset, generate_fold_specifications
 
@@ -51,35 +51,10 @@ def feature_name(base: str) -> str:
     return f"{base}_af3_input.json" if IS_AF3 else f"{base}.{FEATURE_SUFFIX}"
 
 
-def _format_af3_requested_fold(fold: str, delimiter: str) -> str:
-    """Convert a logical fold specification into AF3 JSON feature inputs.
-
-    Examples:
-        "P01258+P0AEZ3:2" -> "P01258_af3_input.json+P0AEZ3_af3_input.json:2"
-        "P01258:1-100:2" -> "P01258_af3_input.json:1-100:2"
-        "P01258"          -> "P01258_af3_input.json"
-
-    Rationale:
-        - Features are generated as "<base>_af3_input.json".
-        - Copy numbers and region ranges apply to the logical protein, not the file name.
-        - alphapulldown-input-parser accepts those suffixes after the JSON filename.
-    """
-
-    converted_parts: list[str] = []
-    for token in fold.split(delimiter):
-        token = token.strip()
-        if not token:
-            continue
-
-        parts = [p.strip() for p in token.split(":") if p.strip()]
-        base = parts[0]
-        suffix = ":".join(parts[1:]) if len(parts) > 1 else ""
-
-        json_name = f"{base}_af3_input.json"
-        converted = f"{json_name}:{suffix}" if suffix else json_name
-        converted_parts.append(converted)
-
-    return delimiter.join(converted_parts)
+# AF3 ``--input`` formatting (protein chains -> generated feature JSON; direct
+# ``*.json`` inputs passed through) and protein/JSON partitioning live in
+# common.smk (``format_af3_requested_fold`` / ``split_fold_inputs``) so they are
+# unit-testable; both are imported via the ``include`` above.
 
 protein_delimiter = config.get("protein_delimiter", "+")
 exclude_permutations = config.get("exclude_permutations", True)
@@ -183,6 +158,11 @@ if MAX_PROTEIN_LENGTH > 0 or MAX_TOTAL_LENGTH > 0:
     _features_dir = join(config["output_directory"], "features")
 
     def _resolve_protein_length(name):
+        if is_json_input(name):
+            # Direct AF3 JSON input (e.g. a ligand): not a UniProt protein, so do
+            # not query UniProt. Count polymer residues from the file if present,
+            # else 0 (a known length, so the fold is kept rather than flagged).
+            return chain_residue_count(name, _data_dir, _features_dir, IS_AF3)
         if name in sequence_length_cache:
             return sequence_length_cache[name]
         length = 0
@@ -248,14 +228,29 @@ if MAX_PROTEIN_LENGTH > 0 or MAX_TOTAL_LENGTH > 0:
             f"{sorted(_unknown_proteins)[:5]}"
         )
 
-# Proteins required by the surviving folds (matches FoldDataset dedup ordering).
+# Feature requirements of the surviving folds. Protein chains need features
+# (downloaded + generated, or symlinked when precomputed); direct AF3 ``*.json``
+# inputs (e.g. ligands) are supplied via feature_directory and are NEVER downloaded
+# or generated -- they are required as the JSON file itself. Both lists preserve
+# first-seen order and are de-duplicated.
 kept_proteins = []
+required_feature_files = []
 _seen_proteins = set()
+_seen_features = set()
 for fold in kept_folds:
-    for _name in dataset.sequences_by_fold.get(fold, ()):
+    _protein_bases, _json_basenames = split_fold_inputs(fold, protein_delimiter)
+    for _name in _protein_bases:
         if _name not in _seen_proteins:
             _seen_proteins.add(_name)
             kept_proteins.append(_name)
+        _feat = feature_name(_name)
+        if _feat not in _seen_features:
+            _seen_features.add(_feat)
+            required_feature_files.append(_feat)
+    for _json in _json_basenames:
+        if _json not in _seen_features:
+            _seen_features.add(_json)
+            required_feature_files.append(_json)
 
 required_folds = [
     join(config["output_directory"], "predictions", fold, "completed_fold.txt")
@@ -271,8 +266,8 @@ RECURSIVE_REPORT = (
 )
 
 required_feature_paths = [
-    join(config["output_directory"], "features", feature_name(fasta_basename))
-    for fasta_basename in kept_proteins
+    join(config["output_directory"], "features", feature_basename)
+    for feature_basename in required_feature_files
 ]
 if config.get("only_generate_features", False):
     required_targets = required_feature_paths
@@ -416,9 +411,13 @@ rule symlink_features:
         **linear_resources(mem=800, runtime=10),
     run:
         for in_file, out_file in zip(input, output):
-            if exists(out_file):
+            source = realpath(in_file)
+            destination = abspath(out_file)
+            if source == destination:
+                continue
+            if lexists(out_file):
                 remove(out_file)
-            symlink(abspath(in_file), out_file)
+            symlink(source, out_file)
 
 rule create_features:
     input:
@@ -471,9 +470,14 @@ rule create_features:
         """
 
 def lookup_features(wildcards):
+    # Inputs for inference: generated/precomputed protein features plus any direct
+    # AF3 JSON inputs (e.g. ligands), which are required as the JSON file itself
+    # rather than as a generated <name>_af3_input.json.
+    protein_bases, json_basenames = split_fold_inputs(wildcards.fold, protein_delimiter)
+    feature_files = [feature_name(base) for base in protein_bases] + list(json_basenames)
     return [
-        join(config["output_directory"], "features", feature_name(feature))
-        for feature in dataset.sequences_by_fold[wildcards.fold]
+        join(config["output_directory"], "features", feature_basename)
+        for feature_basename in feature_files
     ]
 
 rule structure_inference:
@@ -489,7 +493,7 @@ rule structure_inference:
             for individual_fold in wildcards.fold.split(" ")
         ],
         requested_fold = (
-            lambda wc: _format_af3_requested_fold(wc.fold, protein_delimiter)
+            lambda wc: format_af3_requested_fold(wc.fold, protein_delimiter)
             if IS_AF3
             else wc.fold
         ),
