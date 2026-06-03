@@ -102,6 +102,83 @@ def parse_fold_chains(fold: str, delimiter: str = "+") -> list[tuple[str, int]]:
     ]
 
 
+def is_json_input(name: str) -> bool:
+    """True if a fold token names a direct AF3 JSON input (e.g. a ``ligand.json``).
+
+    Such tokens are AlphaFold 3 inputs supplied as-is via ``feature_directory``;
+    they are *not* proteins and must never be downloaded or sent through feature
+    generation. Everything else is treated as a protein chain reference.
+    """
+    return str(name).lower().endswith(".json")
+
+
+def split_fold_inputs(
+    fold: str, delimiter: str = "+"
+) -> tuple[list[str], list[str]]:
+    """Partition a fold spec into protein chains and direct AF3 JSON inputs.
+
+    Returns ``(protein_bases, json_basenames)``:
+
+    - ``protein_bases``  -- base names (path + extension stripped) of chains that
+      need feature generation/download, mirroring the parser's stem handling.
+    - ``json_basenames`` -- basenames of ``*.json`` tokens supplied directly as AF3
+      inputs (e.g. ligands), which are provided via ``feature_directory`` and never
+      generated.
+
+    Both lists preserve first-seen order and are de-duplicated. Copy numbers and
+    region ranges (``ligand.json:80``, ``A:1-100``) are stripped by the underlying
+    chain parser, so only the chain name survives here.
+    """
+    protein_bases: list[str] = []
+    json_basenames: list[str] = []
+    seen_proteins: set[str] = set()
+    seen_json: set[str] = set()
+    for name, _copies in parse_fold_chains(fold, delimiter):
+        if is_json_input(name):
+            base = os.path.basename(name)
+            if base not in seen_json:
+                seen_json.add(base)
+                json_basenames.append(base)
+        else:
+            base = os.path.splitext(os.path.basename(name))[0]
+            if base not in seen_proteins:
+                seen_proteins.add(base)
+                protein_bases.append(base)
+    return protein_bases, json_basenames
+
+
+def format_af3_requested_fold(fold: str, delimiter: str = "+") -> str:
+    """Convert a logical fold spec into AlphaFold 3 inference ``--input`` tokens.
+
+    Protein chains map to their generated feature file ``<base>_af3_input.json``;
+    tokens that are already ``*.json`` (direct AF3 JSON inputs such as ligands) are
+    passed through unchanged. Copy numbers and region ranges are preserved after the
+    file name.
+
+    Examples:
+        ``P01258+P0AEZ3:2``       -> ``P01258_af3_input.json+P0AEZ3_af3_input.json:2``
+        ``P01258+ligand.json:80`` -> ``P01258_af3_input.json+ligand.json:80``
+        ``P01258:1-100:2``        -> ``P01258_af3_input.json:1-100:2``
+
+    Rationale:
+        - Protein features are generated as ``<base>_af3_input.json``.
+        - JSON inputs are already AF3 inputs and must not get a second suffix.
+        - Copy numbers / region ranges apply to the logical chain, not the file
+          name; ``alphapulldown-input-parser`` accepts them after the JSON filename.
+    """
+    converted_parts: list[str] = []
+    for token in str(fold).split(delimiter):
+        token = token.strip()
+        if not token:
+            continue
+        parts = [p.strip() for p in token.split(":") if p.strip()]
+        base = parts[0]
+        suffix = ":".join(parts[1:]) if len(parts) > 1 else ""
+        json_name = base if is_json_input(base) else f"{base}_af3_input.json"
+        converted_parts.append(f"{json_name}:{suffix}" if suffix else json_name)
+    return delimiter.join(converted_parts)
+
+
 @functools.lru_cache(maxsize=None)
 def fetch_uniprot_length(uniprot_id: str, timeout: float = 30.0) -> int:
     """Residue length of a UniProt entry via the REST API; 0 on any failure.
@@ -137,7 +214,17 @@ def chain_residue_count(
     parse-time length table, which covers the AF2 precomputed-feature case where
     neither a FASTA nor an AF3 JSON exists). Returns 0 when length is unknown so
     sizing degrades to the base allocation plus retry escalation.
+
+    A direct AF3 JSON input (``ligand.json``) is read from the file itself in
+    ``features_dir``; ligand-only inputs have no polymer ``sequence`` and so
+    contribute 0 (consistent with AF3 ligand atoms not being counted as tokens).
     """
+    if is_json_input(name):
+        if features_dir:
+            return af3_input_residue_count(
+                os.path.join(features_dir, os.path.basename(name))
+            )
+        return 0
     length = residue_count(os.path.join(data_dir, f"{name}.fasta"))
     if length == 0 and is_af3 and features_dir:
         length = af3_input_residue_count(

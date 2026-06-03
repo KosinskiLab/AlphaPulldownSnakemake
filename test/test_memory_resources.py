@@ -331,6 +331,90 @@ def test_mem_mb_reaches_sbatch_via_real_plugin():
     assert f"--mem {mem}" in cmd, cmd
 
 
+# ---------------------------------------------------------------------------
+# AF3 JSON inputs (ligands etc.) — issue #41: a `*.json` token in a fold must be
+# treated as a direct AF3 input, never as a protein to download / build features for.
+# ---------------------------------------------------------------------------
+
+
+def _write_af3_json(directory: str, name: str, *, protein_len: int = 0, ligand=None):
+    """Write a minimal AF3 input JSON; optional protein sequence and/or ligand."""
+    sequences = []
+    if protein_len:
+        sequences.append({"protein": {"id": "A", "sequence": "A" * protein_len}})
+    if ligand:
+        sequences.append({"ligand": {"id": "L", "ccdCodes": [ligand]}})
+    path = os.path.join(directory, name)
+    with open(path, "w") as handle:
+        json.dump({"name": name, "sequences": sequences}, handle)
+    return path
+
+
+def test_is_json_input_detects_json_tokens():
+    assert common.is_json_input("ligand.json")
+    assert common.is_json_input("/path/to/LIGAND.JSON")  # case-insensitive
+    assert not common.is_json_input("P12345")
+    assert not common.is_json_input("Prot.fasta")
+
+
+def test_split_fold_inputs_separates_proteins_and_json():
+    # The reported case: protein + ligand JSON with a copy number.
+    assert common.split_fold_inputs("P12345+ligand.json:80") == (
+        ["P12345"],
+        ["ligand.json"],
+    )
+    # Pure protein folds yield no JSON inputs; copies/regions are stripped.
+    assert common.split_fold_inputs("P01258+P0AEZ3:2") == (["P01258", "P0AEZ3"], [])
+    # Paths are reduced to a base (protein) / basename (json).
+    assert common.split_fold_inputs("/p/Prot.fasta+/q/lig.json") == (
+        ["Prot"],
+        ["lig.json"],
+    )
+    # De-duplication, first-seen order preserved.
+    assert common.split_fold_inputs("A+A+lig.json+lig.json") == (["A"], ["lig.json"])
+
+
+def test_format_af3_requested_fold_passes_json_through():
+    # Regression for #41: protein -> generated feature JSON; *.json left untouched.
+    assert (
+        common.format_af3_requested_fold("P12345+ligand.json:80")
+        == "P12345_af3_input.json+ligand.json:80"
+    )
+    assert (
+        common.format_af3_requested_fold("P01258+P0AEZ3:2")
+        == "P01258_af3_input.json+P0AEZ3_af3_input.json:2"
+    )
+    assert common.format_af3_requested_fold("P01258:1-100:2") == (
+        "P01258_af3_input.json:1-100:2"
+    )
+
+
+def test_chain_residue_count_reads_json_input():
+    common._AF3_INPUT_COUNT_CACHE.clear()
+    with tempfile.TemporaryDirectory() as d:
+        # Ligand-only JSON has no polymer sequence -> contributes 0.
+        _write_af3_json(d, "ligand.json", ligand="ATP")
+        assert common.chain_residue_count("ligand.json", d, d, is_af3=True) == 0
+        # A JSON carrying a protein sequence is counted by its polymer length.
+        _write_af3_json(d, "complex.json", protein_len=150)
+        assert common.chain_residue_count("complex.json", d, d, is_af3=True) == 150
+
+
+def test_fold_total_tokens_counts_protein_not_ligand_json():
+    common._RESIDUE_COUNT_CACHE.clear()
+    common._AF3_INPUT_COUNT_CACHE.clear()
+    with tempfile.TemporaryDirectory() as d:
+        _write_fasta(d, "P12345", 200)
+        _write_af3_json(d, "ligand.json", ligand="ATP")
+        # Protein counted; ligand JSON adds 0 and does not error.
+        assert (
+            common.fold_total_tokens(
+                "P12345+ligand.json:80", d, "+", features_dir=d, is_af3=True
+            )
+            == 200
+        )
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:
