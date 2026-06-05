@@ -42,7 +42,7 @@ recursive_report_arguments: {}
 create_feature_arguments:
   --save_msa_files: false  # Do not save multiple sequence alignment (MSA) files
   --use_precomputed_msas: true  # Use precomputed MSA files if available
-  --max_template_date: 2050-01-01  # Set maximum template date to include all templates
+  --max_template_date: "2050-01-01"  # Set maximum template date (quote it: unquoted YAML parses as a date object that is not JSON serializable)
   --compress_features: true  # Compress generated features
   --data_pipeline: alphafold3 # Use alphafold2 or alphafold3 data pipeline for generating features
 
