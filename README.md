@@ -263,8 +263,11 @@ you hit these.
   (bracket ranges may be glob-expanded by the shell). Multi-partition routing (e.g. EMBL's bigger
   `gpu-training` cards) is out of scope — keep one partition and let unified memory spill the tail.
 - **Exclude specific nodes** with `slurm_exclude_nodes` → passed verbatim to `sbatch --exclude`
-  (e.g. `"gpu50,gpu51"`). Use it for nodes whose GPU the container can't use — e.g. a CUDA compute
-  capability newer than the container's bundled `ptxas` (fails `ptxas too old` / `UNIMPLEMENTED`).
+  (e.g. `"gpu50,gpu51"`). Use it as a fallback for nodes whose GPU the container can't use — e.g.
+  a CUDA compute capability newer than the container's bundled `ptxas` (fails `ptxas too old` /
+  `UNIMPLEMENTED`). The RTX PRO 6000 / Blackwell failure mode seen on EMBL `gpu50-53` was an
+  old/pre-Tokamax AlphaFold 3 image issue; updated AF3 v3.0.2/Tokamax images should run on those
+  cards, so excluding them is not proof of RTX compatibility.
   `--exclude` is allowed in `slurm_extra` whereas `--constraint`/`--gres`/`--gpus` are not, so it is
   the supported way to drop a few nodes while keeping the rest of the partition.
 - **`structure_inference_max_runtime`** caps per-job wall time (minutes). Wall time scales as
