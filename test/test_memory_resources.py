@@ -277,7 +277,7 @@ def test_gpu_exclude_nodes_vram_routing():
     assert common.gpu_exclude_nodes(3500, tiers, c) == "n24a,n24b,n48a,n48b"
     # bigger than every tier -> use largest tier (spill), exclude all smaller
     assert common.gpu_exclude_nodes(20000, tiers, c) == "n24a,n24b,n48a,n48b"
-    # static extra excludes are always appended (e.g. ptxas-incompatible cards)
+    # static extra excludes are always appended (fallback for old container/GPU incompatibilities)
     assert common.gpu_exclude_nodes(800, tiers, c, extra_exclude="gpu50,gpu51") == "gpu50,gpu51"
     assert (
         common.gpu_exclude_nodes(2400, tiers, c, extra_exclude="gpu50")
