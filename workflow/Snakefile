@@ -253,27 +253,39 @@ for fold in kept_folds:
             required_feature_files.append(_json)
 
 # --- Small-job batching (issue #48) ------------------------------------------
-# Group folds into batches that share ONE structure_inference Slurm job. Each
-# batch is run by a single run_structure_prediction.py invocation that loads the
-# model once and predicts its folds back to back, so a batch pays the queue wait
-# and model-load/compile cost once instead of per fold. Composition is decided
-# here at parse time (sequence lengths are already resolved above for length
-# filtering / memory sizing), so no checkpoint is needed. A batch's id is its
-# first member: with batch_size <= 1 every batch is one fold whose id IS the fold,
-# giving identical prediction paths and DAG to the unbatched pipeline. Folds are
-# grouped by size; batch_max_tokens optionally caps the summed tokens per batch so
-# a batch's total walltime stays within the partition limit.
+# Group folds into batches that share ONE structure_inference Slurm job. The job
+# runs run_structure_prediction.py once per fold (see the rule's shell loop), so the
+# folds wait in the queue once between them instead of once each -- the main cost for
+# many short inference jobs. A per-fold loop (rather than one call with all folds) is
+# required because the AlphaFold3 backend merges folds passed together into a single
+# combined complex; a shared --jax_compilation_cache_dir recovers most of the
+# per-call compile cost. Composition is decided here at parse time (sequence lengths
+# are already resolved above for length filtering / memory sizing), so no checkpoint
+# is needed. A batch's id is its first member: with batch_size <= 1 every batch is one
+# fold whose id IS the fold, giving identical prediction paths and DAG to the unbatched
+# pipeline. Folds are grouped by size; batch_max_tokens optionally caps the summed
+# tokens per batch so a batch's total walltime stays within the partition limit.
 BATCH_SIZE = int(config.get("batch_size", 1) or 1)
 BATCH_MAX_TOKENS = int(config.get("batch_max_tokens", 0) or 0)
 
-# Inference CLI args. When batching, a crashed job re-runs the whole batch, so make
-# sure the backend resumes folds whose outputs already exist instead of recomputing
-# them (both AF2 and AF3 backends honour --allow_resume per fold). It defaults to
-# True upstream; we set it explicitly so a batched run never silently recomputes
-# finished folds. A user value in structure_inference_arguments is left untouched.
+# Inference CLI args (shared by every per-fold call in a batch). Two batch tweaks,
+# both leaving any user-set value untouched:
+#  * --allow_resume: a crashed batch re-runs all its folds, so resume the ones whose
+#    outputs already exist. Only AlphaFold2 accepts it; AlphaFold3 rejects unknown
+#    flags (ValueError "not supported by backend 'alphafold3'"), so AF2 only.
+#  * --jax_compilation_cache_dir: the batch runs one run_structure_prediction.py per
+#    fold (the AF3 backend MERGES folds passed together into one complex, so they must
+#    be predicted separately), which would otherwise recompile per fold. A shared
+#    on-disk JAX cache lets later folds reuse earlier compilations (esp. AF3 buckets),
+#    recovering most of the per-job compile cost the single-process approach would have.
 _structure_inference_args = dict(config.get("structure_inference_arguments", {}))
 if BATCH_SIZE > 1:
-    _structure_inference_args.setdefault("--allow_resume", "true")
+    if INFERENCE_BACKEND == "alphafold2":
+        _structure_inference_args.setdefault("--allow_resume", "true")
+    _structure_inference_args.setdefault(
+        "--jax_compilation_cache_dir",
+        join(config["output_directory"], ".jax_compilation_cache"),
+    )
 STRUCTURE_INFERENCE_CLI = " ".join(
     f"{k}={v}" for k, v in _structure_inference_args.items()
 )
@@ -290,9 +302,25 @@ def _fold_tokens(fold):
     )
 
 
+def _fold_grouping_tokens(fold):
+    """Parse-stable size proxy for batching: read length ONLY from the persisted
+    sequence-length cache, never from staged features. The Slurm executor re-parses
+    the Snakefile on the compute node to run a single rule, where features are
+    already staged; reading them would change the size-based grouping (and thus the
+    batch id that named the job) versus the login-node parse that submitted it,
+    yielding a "no such batch" KeyError. The cache (`.sequence_lengths.tsv`, written
+    once at parse time when length resolution runs) is identical at every parse. When
+    it is empty (length filtering disabled) all folds score 0 and group by name --
+    still deterministic, just not size-aware."""
+    total = 0
+    for name, copies in parse_fold_chains(fold, protein_delimiter):
+        total += int(sequence_length_cache.get(name, 0) or 0) * copies
+    return total
+
+
 if BATCH_SIZE > 1 and kept_folds:
     _fold_batches = bin_folds(
-        [(fold, _fold_tokens(fold)) for fold in kept_folds],
+        [(fold, _fold_grouping_tokens(fold)) for fold in kept_folds],
         batch_size=BATCH_SIZE,
         max_batch_tokens=BATCH_MAX_TOKENS,
     )
@@ -567,14 +595,17 @@ rule structure_inference:
     params:
         data_directory=config["backend_weights_directory"],
         feature_directory=join(config["output_directory"], "features"),
-        # Comma-joined because run_structure_prediction.py's --input/--output_directory
-        # are absl comma-separated lists; one output directory per fold in the batch.
-        output_directory=lambda wildcards: ",".join(
-            batch_prediction_dirs(wildcards.batch)
-        ),
-        requested_fold=lambda wc: ",".join(
+        # Parallel space-separated lists (one entry per fold in the batch) consumed by
+        # the shell loop below. The shell calls run_structure_prediction.py ONCE PER
+        # fold rather than passing them together, because the AlphaFold3 backend merges
+        # folds given in a single call into one combined complex. Fold specs and output
+        # paths never contain spaces, so space-splitting in bash is safe.
+        requested_folds=lambda wc: " ".join(
             (format_af3_requested_fold(fold, protein_delimiter) if IS_AF3 else fold)
             for fold in BATCH_FOLDS[wc.batch]
+        ),
+        fold_output_dirs=lambda wildcards: " ".join(
+            batch_prediction_dirs(wildcards.batch)
         ),
         protein_delimiter=protein_delimiter,
         cli_parameters=STRUCTURE_INFERENCE_CLI,
@@ -601,7 +632,7 @@ rule structure_inference:
         tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(
             # Peak host RAM is the largest fold in the batch (folds run one at a
-            # time, memory released between).
+            # time in the loop, memory released between calls).
             mem_fn=lambda wildcards, attempt: estimate_inference_mem_mb(
                 batch_max_tokens_for(wildcards.batch),
                 base_mb=structure_inference_base_ram,
@@ -612,7 +643,7 @@ rule structure_inference:
                 cap_mb=MAX_MEM_MB,
             ),
             # Walltime scales with the number of folds in the batch (they run
-            # sequentially in one process), capped at the partition MaxTime.
+            # sequentially, one CLI call each), capped at the partition MaxTime.
             runtime_fn=lambda wc, attempt: min(
                 structure_inference_runtime_minutes * len(BATCH_FOLDS[wc.batch]) * attempt,
                 STRUCTURE_INFERENCE_MAX_RUNTIME,
@@ -644,13 +675,22 @@ rule structure_inference:
             fi
             export XLA_CLIENT_MEM_FRACTION="$_aj_frac"
         fi
-        run_structure_prediction.py \
-            --input {params.requested_fold} \
-            --output_directory={params.output_directory} \
-            --protein_delimiter={params.protein_delimiter} \
-            --data_directory={params.data_directory} \
-            --features_directory={params.feature_directory} \
-            {params.cli_parameters}
+        # One run_structure_prediction.py call per fold in the batch (a single call
+        # with several folds would be merged into one complex by the AF3 backend).
+        # The folds share this one Slurm allocation -- the queue is waited on once --
+        # and a shared --jax_compilation_cache_dir lets later folds reuse earlier
+        # compilations. Arrays split on spaces (fold specs / paths contain none).
+        read -ra _aj_inputs <<< "{params.requested_folds}"
+        read -ra _aj_outdirs <<< "{params.fold_output_dirs}"
+        for _aj_i in "${{!_aj_inputs[@]}}"; do
+            run_structure_prediction.py \
+                --input "${{_aj_inputs[$_aj_i]}}" \
+                --output_directory="${{_aj_outdirs[$_aj_i]}}" \
+                --protein_delimiter={params.protein_delimiter} \
+                --data_directory={params.data_directory} \
+                --features_directory={params.feature_directory} \
+                {params.cli_parameters}
+        done
 
         mkdir -p "$(dirname "{output}")"
         echo "Completed" > "{output}"
