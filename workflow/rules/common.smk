@@ -563,3 +563,52 @@ def linear_resources(
         "runtime": _runtime,
         "attempt": _attempt,
     }
+
+
+def bin_folds(
+    fold_tokens: Iterable[tuple[str, int]],
+    *,
+    batch_size: int = 1,
+    max_batch_tokens: int = 0,
+) -> list[list[str]]:
+    """Group folds into batches that share a single inference job (issue #48).
+
+    Each batch is run by one ``run_structure_prediction.py`` invocation, which
+    loads the model once and predicts the folds back to back. Batching trades
+    finer-grained retries for far less queue wait and a single model-load per
+    batch instead of one per fold.
+
+    Folds are sorted by token count so a batch holds similarly sized folds: the
+    batch's memory is sized from its largest fold and its walltime from the sum,
+    so keeping sizes close stops a tiny fold from inheriting a huge fold's
+    allocation (and clusters the many small folds the issue is about). The number
+    of folds per batch is capped by ``batch_size``; the optional
+    ``max_batch_tokens`` additionally caps the summed tokens per batch so total
+    walltime stays within the partition limit. A single fold always forms a valid
+    batch even if it alone exceeds ``max_batch_tokens``.
+
+    ``batch_size <= 1`` returns one fold per batch in the original input order,
+    i.e. the unbatched behaviour, so the default path is unchanged.
+    """
+    items = [(str(fold), int(tokens or 0)) for fold, tokens in fold_tokens]
+    if batch_size <= 1:
+        return [[fold] for fold, _ in items]
+
+    ordered = sorted(items, key=lambda ft: (ft[1], ft[0]))
+    cap = int(max_batch_tokens or 0)
+
+    batches: list[list[str]] = []
+    current: list[str] = []
+    current_tokens = 0
+    for fold, tokens in ordered:
+        too_many = len(current) >= batch_size
+        too_big = cap > 0 and bool(current) and (current_tokens + tokens) > cap
+        if current and (too_many or too_big):
+            batches.append(current)
+            current = []
+            current_tokens = 0
+        current.append(fold)
+        current_tokens += tokens
+    if current:
+        batches.append(current)
+    return batches

@@ -252,9 +252,77 @@ for fold in kept_folds:
             _seen_features.add(_json)
             required_feature_files.append(_json)
 
+# --- Small-job batching (issue #48) ------------------------------------------
+# Group folds into batches that share ONE structure_inference Slurm job. Each
+# batch is run by a single run_structure_prediction.py invocation that loads the
+# model once and predicts its folds back to back, so a batch pays the queue wait
+# and model-load/compile cost once instead of per fold. Composition is decided
+# here at parse time (sequence lengths are already resolved above for length
+# filtering / memory sizing), so no checkpoint is needed. A batch's id is its
+# first member: with batch_size <= 1 every batch is one fold whose id IS the fold,
+# giving identical prediction paths and DAG to the unbatched pipeline. Folds are
+# grouped by size; batch_max_tokens optionally caps the summed tokens per batch so
+# a batch's total walltime stays within the partition limit.
+BATCH_SIZE = int(config.get("batch_size", 1) or 1)
+BATCH_MAX_TOKENS = int(config.get("batch_max_tokens", 0) or 0)
+
+
+def _fold_tokens(fold):
+    return fold_total_tokens(
+        fold,
+        join(config["output_directory"], "data"),
+        protein_delimiter,
+        features_dir=join(config["output_directory"], "features"),
+        is_af3=(INFERENCE_BACKEND == "alphafold3"),
+        length_cache=sequence_length_cache,
+    )
+
+
+if BATCH_SIZE > 1 and kept_folds:
+    _fold_batches = bin_folds(
+        [(fold, _fold_tokens(fold)) for fold in kept_folds],
+        batch_size=BATCH_SIZE,
+        max_batch_tokens=BATCH_MAX_TOKENS,
+    )
+else:
+    _fold_batches = [[fold] for fold in kept_folds]
+
+# batch_id -> [fold, ...] and the inverse fold -> batch_id. The batch id is the
+# first fold of the batch, so the sentinel predictions/<batch_id>/completed_fold.txt
+# lives in a real prediction directory (no synthetic dirs); singletons reduce to
+# the original predictions/<fold>/completed_fold.txt.
+BATCH_FOLDS = {}
+FOLD_BATCH = {}
+for _batch_members in _fold_batches:
+    _batch_id = _batch_members[0]
+    BATCH_FOLDS[_batch_id] = _batch_members
+    for _member in _batch_members:
+        FOLD_BATCH[_member] = _batch_id
+
+
+def batch_prediction_dirs(batch_id):
+    return [
+        join(config["output_directory"], "predictions", fold)
+        for fold in BATCH_FOLDS[batch_id]
+    ]
+
+
+def batch_max_tokens_for(batch_id):
+    """Largest fold in the batch sizes its memory/GPU tier (folds run one at a
+    time, so peak memory is the max, not the sum)."""
+    return max((_fold_tokens(fold) for fold in BATCH_FOLDS[batch_id]), default=0)
+
+
+def completed_fold_target(fold):
+    """Sentinel marking a fold's batch as done (shared by all folds in the batch)."""
+    return join(
+        config["output_directory"], "predictions", FOLD_BATCH[fold], "completed_fold.txt"
+    )
+
+
 required_folds = [
-    join(config["output_directory"], "predictions", fold, "completed_fold.txt")
-    for fold in kept_folds
+    join(config["output_directory"], "predictions", batch_id, "completed_fold.txt")
+    for batch_id in BATCH_FOLDS
 ]
 ENABLE_STRUCTURE_ANALYSIS = config.get("enable_structure_analysis", True)
 GENERATE_RECURSIVE_REPORT = config.get("generate_recursive_report", False)
@@ -380,15 +448,8 @@ GPU_VRAM_HEADROOM = float(config.get("structure_inference_gpu_vram_headroom", 1.
 
 def _inference_slurm_extra(wildcards):
     """slurm_extra resource: --exclude small-GPU nodes for large complexes, merged
-    with the static slurm_exclude_nodes."""
-    tokens = fold_total_tokens(
-        wildcards.fold,
-        join(config["output_directory"], "data"),
-        protein_delimiter,
-        features_dir=join(config["output_directory"], "features"),
-        is_af3=(INFERENCE_BACKEND == "alphafold3"),
-        length_cache=sequence_length_cache,
-    )
+    with the static slurm_exclude_nodes. Sized from the largest fold in the batch."""
+    tokens = batch_max_tokens_for(wildcards.batch)
     nodes = gpu_exclude_nodes(
         tokens,
         GPU_TIERS,
@@ -469,33 +530,39 @@ rule create_features:
             {params.cli_parameters}
         """
 
-def lookup_features(wildcards):
+def lookup_batch_features(wildcards):
     # Inputs for inference: generated/precomputed protein features plus any direct
     # AF3 JSON inputs (e.g. ligands), which are required as the JSON file itself
-    # rather than as a generated <name>_af3_input.json.
-    protein_bases, json_basenames = split_fold_inputs(wildcards.fold, protein_delimiter)
-    feature_files = [feature_name(base) for base in protein_bases] + list(json_basenames)
-    return [
-        join(config["output_directory"], "features", feature_basename)
-        for feature_basename in feature_files
-    ]
+    # rather than as a generated <name>_af3_input.json. Collected over every fold in
+    # the batch, de-duplicated (folds may share a protein) and order-preserving.
+    feature_files = []
+    seen = set()
+    for fold in BATCH_FOLDS[wildcards.batch]:
+        protein_bases, json_basenames = split_fold_inputs(fold, protein_delimiter)
+        for feature_basename in [feature_name(b) for b in protein_bases] + list(json_basenames):
+            if feature_basename not in seen:
+                seen.add(feature_basename)
+                feature_files.append(
+                    join(config["output_directory"], "features", feature_basename)
+                )
+    return feature_files
 
 rule structure_inference:
     input:
-        features=lookup_features,
+        features=lookup_batch_features,
     output:
-        join(config["output_directory"], "predictions", "{fold}", "completed_fold.txt"),
+        join(config["output_directory"], "predictions", "{batch}", "completed_fold.txt"),
     params:
         data_directory=config["backend_weights_directory"],
         feature_directory=join(config["output_directory"], "features"),
-        output_directory=lambda wildcards: [
-            join(config["output_directory"], "predictions", individual_fold)
-            for individual_fold in wildcards.fold.split(" ")
-        ],
-        requested_fold = (
-            lambda wc: format_af3_requested_fold(wc.fold, protein_delimiter)
-            if IS_AF3
-            else wc.fold
+        # Comma-joined because run_structure_prediction.py's --input/--output_directory
+        # are absl comma-separated lists; one output directory per fold in the batch.
+        output_directory=lambda wildcards: ",".join(
+            batch_prediction_dirs(wildcards.batch)
+        ),
+        requested_fold=lambda wc: ",".join(
+            (format_af3_requested_fold(fold, protein_delimiter) if IS_AF3 else fold)
+            for fold in BATCH_FOLDS[wc.batch]
         ),
         protein_delimiter=protein_delimiter,
         cli_parameters=" ".join(
@@ -523,15 +590,10 @@ rule structure_inference:
         ),
         tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(
+            # Peak host RAM is the largest fold in the batch (folds run one at a
+            # time, memory released between).
             mem_fn=lambda wildcards, attempt: estimate_inference_mem_mb(
-                fold_total_tokens(
-                    wildcards.fold,
-                    join(config["output_directory"], "data"),
-                    protein_delimiter,
-                    features_dir=join(config["output_directory"], "features"),
-                    is_af3=(INFERENCE_BACKEND == "alphafold3"),
-                    length_cache=sequence_length_cache,
-                ),
+                batch_max_tokens_for(wildcards.batch),
                 base_mb=structure_inference_base_ram,
                 per_token_sq_mb=structure_inference_ram_per_token_sq,
                 scaling=structure_inference_ram_scaling,
@@ -539,8 +601,11 @@ rule structure_inference:
                 attempt=attempt,
                 cap_mb=MAX_MEM_MB,
             ),
+            # Walltime scales with the number of folds in the batch (they run
+            # sequentially in one process), capped at the partition MaxTime.
             runtime_fn=lambda wc, attempt: min(
-                structure_inference_runtime_minutes * attempt, STRUCTURE_INFERENCE_MAX_RUNTIME
+                structure_inference_runtime_minutes * len(BATCH_FOLDS[wc.batch]) * attempt,
+                STRUCTURE_INFERENCE_MAX_RUNTIME,
             ),
         ),
     threads:
@@ -577,13 +642,16 @@ rule structure_inference:
             --features_directory={params.feature_directory} \
             {params.cli_parameters}
 
+        mkdir -p "$(dirname "{output}")"
         echo "Completed" > "{output}"
         """
 
 if ENABLE_STRUCTURE_ANALYSIS:
     rule analyze_structure:
         input:
-            rules.structure_inference.output,
+            # Depends on the (possibly shared) batch sentinel; analysis still runs
+            # per fold, reading this fold's own prediction directory.
+            lambda wildcards: completed_fold_target(wildcards.fold),
         output:
             join(config["output_directory"], "predictions", "{fold}", "interfaces.csv"),
         resources:
