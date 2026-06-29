@@ -412,6 +412,32 @@ length_filter_fetch_uniprot: true     # set false for fully offline runs
 
 </details>
 
+### Batching small jobs into one SLURM job
+
+Many short, inference-only predictions can spend more time waiting in the SLURM queue
+than running. To amortise that wait — and the one-off model load/compile each job pays —
+several folds can share a single `structure_inference` job that predicts them back to
+back in one `run_structure_prediction.py` call (the model is loaded once):
+
+```yaml
+batch_size: 4          # max folds per inference job (1 = one job per fold, the default)
+batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
+```
+
+- Folds are grouped **by size**, so a batch's memory tracks its largest fold and its
+  walltime scales with the number of folds. `batch_max_tokens` keeps a batch's total
+  work within the partition's `MaxTime`; a single oversized fold always runs alone.
+- Works with both AlphaFold2 and AlphaFold3. `--allow_resume` is enabled automatically
+  for batches, so if a job is interrupted, a rerun skips folds whose outputs already
+  exist and only finishes the rest.
+- Analysis and reports are unaffected — `alphajudge` still runs per fold (one
+  `interfaces.csv` + `report.pdf` each) and the recursive summary still aggregates them.
+- **Trade-off:** a batch is one SLURM job, so a failure reruns the whole batch (minus the
+  folds resume can skip) and the allocation is sized for the batch's largest fold. Keep
+  `batch_size` modest and pair it with `batch_max_tokens` for heterogeneous fold sizes.
+
+`batch_size: 1` (the default) is exactly the original one-job-per-fold behaviour.
+
 ### Using precomputed features
 
 If you have precomputed protein features, specify the directory:

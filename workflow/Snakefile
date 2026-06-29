@@ -266,6 +266,18 @@ for fold in kept_folds:
 BATCH_SIZE = int(config.get("batch_size", 1) or 1)
 BATCH_MAX_TOKENS = int(config.get("batch_max_tokens", 0) or 0)
 
+# Inference CLI args. When batching, a crashed job re-runs the whole batch, so make
+# sure the backend resumes folds whose outputs already exist instead of recomputing
+# them (both AF2 and AF3 backends honour --allow_resume per fold). It defaults to
+# True upstream; we set it explicitly so a batched run never silently recomputes
+# finished folds. A user value in structure_inference_arguments is left untouched.
+_structure_inference_args = dict(config.get("structure_inference_arguments", {}))
+if BATCH_SIZE > 1:
+    _structure_inference_args.setdefault("--allow_resume", "true")
+STRUCTURE_INFERENCE_CLI = " ".join(
+    f"{k}={v}" for k, v in _structure_inference_args.items()
+)
+
 
 def _fold_tokens(fold):
     return fold_total_tokens(
@@ -565,9 +577,7 @@ rule structure_inference:
             for fold in BATCH_FOLDS[wc.batch]
         ),
         protein_delimiter=protein_delimiter,
-        cli_parameters=" ".join(
-            [f"{k}={v}" for k, v in config["structure_inference_arguments"].items()]
-        ),
+        cli_parameters=STRUCTURE_INFERENCE_CLI,
         unified_memory="true" if STRUCTURE_INFERENCE_UNIFIED_MEMORY else "false",
         xla_mem_fraction=STRUCTURE_INFERENCE_XLA_MEM_FRACTION,
     resources:
