@@ -214,7 +214,8 @@ Then open `http://localhost:8501` in your browser.
 Override default values to match your cluster:
 
 ```yaml
-slurm_partition: "gpu"                      # which partition/queue to submit to
+slurm_partition: "gpu"                      # partition(s) to submit inference to; one name,
+                                            # "gpu-el8,gpu-training" or a YAML list for several
 slurm_qos: "normal"                         # optional QoS if your site uses it
 structure_inference_gpus_per_task: 1        # number of GPUs each inference job needs
 structure_inference_gpu_model: ""           # "" lets SLURM pick any GPU in the partition; set a model to pin
@@ -260,8 +261,15 @@ you hit these.
   When set this drives `--exclude` per job and **overrides** `structure_inference_gpu_model` (the two
   would conflict). It's the practical "fit to GPU" lever: requested host RAM is a separate pool and
   does not size GPU VRAM, but excluding too-small GPUs by length does. Use explicit comma node lists
-  (bracket ranges may be glob-expanded by the shell). Multi-partition routing (e.g. EMBL's bigger
-  `gpu-training` cards) is out of scope — keep one partition and let unified memory spill the tail.
+  (bracket ranges may be glob-expanded by the shell). VRAM-tier routing works *within* the listed
+  partition(s); it excludes nodes by name, so if you span partitions make sure the tier node lists
+  cover every partition you submit to.
+- **Span several partitions** by giving `slurm_partition` more than one name — a comma-separated
+  string (`"gpu-el8,gpu-training"`) or a YAML list. The plugin passes them straight to `sbatch -p`,
+  and SLURM starts each inference job on whichever partition frees up first, so jobs aren't stuck
+  behind one busy queue (e.g. spill onto EMBL's bigger `gpu-training` cards). Every listed partition
+  must accept the job's GPUs, `--mem` and walltime (`structure_inference_max_runtime` ≤ each
+  partition's `MaxTime`); a partition the job doesn't fit is simply skipped by SLURM.
 - **Exclude specific nodes** with `slurm_exclude_nodes` → passed verbatim to `sbatch --exclude`
   (e.g. `"gpu50,gpu51"`). Use it as a fallback for nodes whose GPU the container can't use — e.g.
   a CUDA compute capability newer than the container's bundled `ptxas` (fails `ptxas too old` /
