@@ -516,7 +516,26 @@ structure_inference_arguments:
 
 ### Backend-specific flags
 
-You can pass any backend CLI switches through `structure_inference_arguments`. Common options are listed below; keep or remove lines based on your needs.
+You can pass backend CLI switches through `structure_inference_arguments`. Common options are listed below; keep or remove lines based on your needs.
+
+> [!IMPORTANT]
+> **These flags are backend-exclusive.** `run_structure_prediction.py` validates every flag
+> against the selected `--fold_backend` and aborts the job with
+> `ValueError: The following flags are not supported by backend '<name>'` if you pass one the
+> backend does not accept. Only use flags from **your** backend's list below — e.g.
+> `--allow_resume` is AlphaFold2-only and `--jax_compilation_cache_dir` is AlphaFold3-only.
+> A single wrong flag fails the job immediately (before any prediction runs).
+>
+> When **batching** (`batch_size > 1`) the workflow adds the correct one for you —
+> `--allow_resume` for AlphaFold2, `--jax_compilation_cache_dir` for AlphaFold3 — so you don't
+> set them yourself.
+>
+> The authoritative, always-current list for your image is the backend validation inside the
+> container. Print it with:
+> ```bash
+> singularity exec <prediction_container> run_structure_prediction.py --help
+> ```
+> (`alphalink` accepts the AlphaFold2 flags plus `--crosslinks`.)
 
 <details>
 <summary>AlphaFold2 flags</summary>
@@ -528,7 +547,11 @@ structure_inference_arguments:
   --models_to_relax: None                 # all | best | none
   --remove_keys_from_pickles: True        # strip large tensors from pickle outputs
   --convert_to_modelcif: True             # additionally write ModelCIF files
-  --allow_resume: True                    # resume from partial runs
+  --allow_resume: True                    # resume from partial runs (auto-added when batching)
+  --relax_best_score_threshold: null      # only relax models above this score
+  --threshold_clashes: null               # clash threshold for relaxation
+  --hb_allowance: null                    # H-bond allowance for relaxation
+  --plddt_threshold: null                 # pLDDT cutoff for relaxation
   --num_cycle: 3
   --num_predictions_per_model: 1
   --pair_msa: True
@@ -555,7 +578,7 @@ structure_inference_arguments:
 
 ```yaml
 structure_inference_arguments:
-  --jax_compilation_cache_dir: null
+  --jax_compilation_cache_dir: null       # AF3-only; auto-added when batching
   --buckets: ['64','128','256','512','768','1024','1280','1536','2048','2560','3072','3584','4096','4608','5120']
   --flash_attention_implementation: triton
   --num_diffusion_samples: 5
@@ -565,6 +588,7 @@ structure_inference_arguments:
   --num_recycles: 10
   --save_embeddings: False
   --save_distogram: False
+  --use_ap_style: False                   # shared with AlphaFold2
 ```
 </details>
 
