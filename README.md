@@ -233,6 +233,24 @@ fields keeps the job submission consistent across clusters.
 the default `0` prevents that flag, which avoids conflicting with the Tres-per-task request on many
 systems. Set it to a positive integer only if your site explicitly requires `--ntasks-per-gpu`.
 
+**Multiple partitions.** `slurm_partition` may name more than one partition — as a comma-separated
+string (`"gpu-el8,gpu-training"`) or a YAML list:
+
+```yaml
+slurm_partition:          # inference runs on whichever of these frees up first
+  - gpu-el8
+  - gpu-training
+```
+
+The value is passed straight to `sbatch -p`, and SLURM starts each inference job on whichever listed
+partition can run it soonest, so jobs aren't stuck behind one busy queue (e.g. they spill onto a
+site's larger `gpu-training` cards when the default GPU partition is full). SLURM runs the job on the
+first listed partition that fits its GPUs, `--mem` and walltime and skips the ones that don't (e.g. a
+partition whose `MaxTime` is below `structure_inference_max_runtime`, or with no matching GPU) — so
+make sure **at least one** listed partition can accommodate the job. Only `structure_inference` uses
+this; the other (CPU) rules run on the cluster's default partition. A single name (the default) is
+unchanged.
+
 The remaining optional fields help with two common cluster issues: keeping inference off GPUs it
 can't use, and large complexes running out of GPU memory. Defaults are sensible; expand below only if
 you hit these.
@@ -262,14 +280,8 @@ you hit these.
   would conflict). It's the practical "fit to GPU" lever: requested host RAM is a separate pool and
   does not size GPU VRAM, but excluding too-small GPUs by length does. Use explicit comma node lists
   (bracket ranges may be glob-expanded by the shell). VRAM-tier routing works *within* the listed
-  partition(s); it excludes nodes by name, so if you span partitions make sure the tier node lists
-  cover every partition you submit to.
-- **Span several partitions** by giving `slurm_partition` more than one name — a comma-separated
-  string (`"gpu-el8,gpu-training"`) or a YAML list. The plugin passes them straight to `sbatch -p`,
-  and SLURM starts each inference job on whichever partition frees up first, so jobs aren't stuck
-  behind one busy queue (e.g. spill onto EMBL's bigger `gpu-training` cards). Every listed partition
-  must accept the job's GPUs, `--mem` and walltime (`structure_inference_max_runtime` ≤ each
-  partition's `MaxTime`); a partition the job doesn't fit is simply skipped by SLURM.
+  partition(s); it excludes nodes by name, so if you span **multiple partitions** (see above) make
+  sure the tier node lists cover every partition you submit to.
 - **Exclude specific nodes** with `slurm_exclude_nodes` → passed verbatim to `sbatch --exclude`
   (e.g. `"gpu50,gpu51"`). Use it as a fallback for nodes whose GPU the container can't use — e.g.
   a CUDA compute capability newer than the container's bundled `ptxas` (fails `ptxas too old` /

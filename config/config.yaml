@@ -149,10 +149,10 @@ alphafold_inference_threads: 8
 #   slurm_partition:                               # YAML list
 #     - gpu-el8
 #     - gpu-training
-# All listed partitions must accept the job's resources (GPUs, --mem, and a walltime
-# within each partition's MaxTime -- see structure_inference_max_runtime); a partition
-# the job cannot fit is simply skipped by SLURM. Only structure_inference uses this;
-# the other (CPU) rules run on the cluster's default partition.
+# SLURM runs the job on the first listed partition that fits its GPUs, --mem and
+# walltime and skips those that don't (e.g. a MaxTime below structure_inference_max_runtime,
+# or no matching GPU), so make sure at least one listed partition can accommodate it.
+# Only structure_inference uses this; the other (CPU) rules run on the default partition.
 slurm_partition: "gpu-el8"
 slurm_qos: "normal"
 structure_inference_gpus_per_task: 1
