@@ -282,6 +282,26 @@ _structure_inference_args = batch_inference_args(
     batch_size=BATCH_SIZE,
     jax_cache_dir=join(config["output_directory"], ".jax_compilation_cache"),
 )
+# Parse-time guard: run_structure_prediction.py aborts the inference job on the first
+# flag its backend does not accept (e.g. --allow_resume on AF3, --jax_compilation_cache_dir
+# on AF2). Warn here -- on the head node, in seconds -- instead of failing deep in a Slurm
+# job. Uses the RAW --fold_backend (so alphalink's --crosslinks is not mis-flagged); a
+# warning only, since the container is the source of truth (see unknown_inference_flags).
+_RAW_FOLD_BACKEND = str(
+    config.get("structure_inference_arguments", {}).get("--fold_backend", DATA_PIPELINE)
+).strip().lower()
+_unknown_inference_flags = unknown_inference_flags(
+    _structure_inference_args, _RAW_FOLD_BACKEND
+)
+if _unknown_inference_flags:
+    logger.warning(
+        f"[inference-flags] structure_inference_arguments has flag(s) the "
+        f"'{_RAW_FOLD_BACKEND}' backend does not recognise: {_unknown_inference_flags}. "
+        f"run_structure_prediction.py will abort the job with a \"not supported by "
+        f"backend\" error -- remove them or change --fold_backend. (If your prediction "
+        f"container is newer than this workflow this may be a false alarm; confirm with "
+        f"`run_structure_prediction.py --help`.)"
+    )
 STRUCTURE_INFERENCE_CLI = " ".join(
     f"{k}={v}" for k, v in _structure_inference_args.items()
 )
