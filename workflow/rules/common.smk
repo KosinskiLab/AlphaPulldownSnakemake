@@ -506,6 +506,38 @@ def prepare_container_binds(
         os.environ.setdefault(var, "1")
 
 
+def batch_inference_args(
+    base_args: dict,
+    *,
+    backend: str,
+    batch_size: int,
+    jax_cache_dir: str,
+) -> dict:
+    """Return inference CLI args with the batch-only flags added, each gated to the
+    backend that accepts them.
+
+    ``run_structure_prediction.py`` validates its flags per backend and hard-errors on
+    any it does not recognise (``ValueError: not supported by backend '<name>'``), so a
+    batch-only flag must ONLY be added for the backend(s) that accept it:
+
+    * ``--allow_resume`` (AlphaFold2 only): a crashed batch re-runs all its folds, so
+      resume the ones already done. AlphaFold3 rejects it.
+    * ``--jax_compilation_cache_dir`` (AlphaFold3 only): lets the per-fold calls in a
+      batch share one on-disk JAX compile cache. This is a JAX/XLA flag; AlphaFold2
+      rejects it (its inference is not JAX-compiled).
+
+    With ``batch_size <= 1`` nothing is added (the unbatched pipeline is untouched). Any
+    value the user already set is preserved (``setdefault``).
+    """
+    args = dict(base_args)
+    if batch_size > 1:
+        if backend == "alphafold2":
+            args.setdefault("--allow_resume", "true")
+        if backend == "alphafold3":
+            args.setdefault("--jax_compilation_cache_dir", jax_cache_dir)
+    return args
+
+
 def normalize_partitions(value: Any) -> str | None:
     """Normalise a ``slurm_partition`` config value to a comma-separated string.
 

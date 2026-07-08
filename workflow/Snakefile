@@ -272,24 +272,16 @@ for fold in kept_folds:
 BATCH_SIZE = int(config.get("batch_size", 1) or 1)
 BATCH_MAX_TOKENS = int(config.get("batch_max_tokens", 0) or 0)
 
-# Inference CLI args (shared by every per-fold call in a batch). Two batch tweaks,
-# both leaving any user-set value untouched:
-#  * --allow_resume: a crashed batch re-runs all its folds, so resume the ones whose
-#    outputs already exist. Only AlphaFold2 accepts it; AlphaFold3 rejects unknown
-#    flags (ValueError "not supported by backend 'alphafold3'"), so AF2 only.
-#  * --jax_compilation_cache_dir: the batch runs one run_structure_prediction.py per
-#    fold (the AF3 backend MERGES folds passed together into one complex, so they must
-#    be predicted separately), which would otherwise recompile per fold. A shared
-#    on-disk JAX cache lets later folds reuse earlier compilations (esp. AF3 buckets),
-#    recovering most of the per-job compile cost the single-process approach would have.
-_structure_inference_args = dict(config.get("structure_inference_arguments", {}))
-if BATCH_SIZE > 1:
-    if INFERENCE_BACKEND == "alphafold2":
-        _structure_inference_args.setdefault("--allow_resume", "true")
-    _structure_inference_args.setdefault(
-        "--jax_compilation_cache_dir",
-        join(config["output_directory"], ".jax_compilation_cache"),
-    )
+# Inference CLI args shared by every per-fold call in a batch. The batch-only flags
+# (--allow_resume for AF2, --jax_compilation_cache_dir for AF3) are BACKEND-SPECIFIC and
+# each backend hard-errors on flags it does not accept, so the gating lives in
+# batch_inference_args (see its docstring / test_batch_inference_args.py).
+_structure_inference_args = batch_inference_args(
+    config.get("structure_inference_arguments", {}),
+    backend=INFERENCE_BACKEND,
+    batch_size=BATCH_SIZE,
+    jax_cache_dir=join(config["output_directory"], ".jax_compilation_cache"),
+)
 STRUCTURE_INFERENCE_CLI = " ".join(
     f"{k}={v}" for k, v in _structure_inference_args.items()
 )
