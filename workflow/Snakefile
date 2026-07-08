@@ -63,7 +63,11 @@ input_files = config.get("input_files", [])
 if isinstance(input_files, (str, Path)):
     input_files = [input_files]
 
-DEFAULT_SLURM_PARTITION = config.get("slurm_partition")
+# slurm_partition may be a single name, a comma/space-separated string or a YAML
+# list; normalize to one comma-separated string (e.g. "gpu-el8,transform") that
+# sbatch -p understands natively (SLURM runs the job on whichever partition frees
+# up first). See config.yaml for usage.
+DEFAULT_SLURM_PARTITION = normalize_partitions(config.get("slurm_partition"))
 DEFAULT_SLURM_GRES = config.get("slurm_gres")
 DEFAULT_SLURM_QOS = config.get("slurm_qos")
 DEFAULT_STRUCTURE_INFERENCE_GPUS = config.get("structure_inference_gpus_per_task", 1)

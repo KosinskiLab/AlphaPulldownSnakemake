@@ -140,6 +140,19 @@ batch_max_tokens: 0
 alphafold_inference_threads: 8
 
 # SLURM resources
+# Partition(s) for the GPU structure_inference jobs. Give ONE partition, or SEVERAL
+# to let SLURM start each job on whichever one frees up first (it schedules onto the
+# soonest-available partition). Accepts a single name, a comma/space-separated string,
+# or a YAML list -- all equivalent:
+#   slurm_partition: "gpu-el8"                     # single partition
+#   slurm_partition: "gpu-el8,gpu-training"        # comma-separated
+#   slurm_partition:                               # YAML list
+#     - gpu-el8
+#     - gpu-training
+# All listed partitions must accept the job's resources (GPUs, --mem, and a walltime
+# within each partition's MaxTime -- see structure_inference_max_runtime); a partition
+# the job cannot fit is simply skipped by SLURM. Only structure_inference uses this;
+# the other (CPU) rules run on the cluster's default partition.
 slurm_partition: "gpu-el8"
 slurm_qos: "normal"
 structure_inference_gpus_per_task: 1

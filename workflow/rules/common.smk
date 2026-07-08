@@ -506,6 +506,41 @@ def prepare_container_binds(
         os.environ.setdefault(var, "1")
 
 
+def normalize_partitions(value: Any) -> str | None:
+    """Normalise a ``slurm_partition`` config value to a comma-separated string.
+
+    SLURM's ``sbatch -p`` natively accepts several partitions as a comma list
+    (``-p gpu-el8,transform``) and schedules the job onto whichever one lets it
+    start soonest. This lets a user list every GPU partition they may run on so
+    inference jobs are not stuck behind one busy queue.
+
+    Accepts any of:
+
+    * a YAML list/tuple: ``[gpu-el8, transform]``
+    * a comma- and/or whitespace-separated string: ``"gpu-el8, transform"``
+    * a single partition string: ``"gpu-el8"`` (unchanged)
+    * ``None`` / empty -> ``None`` (caller supplies its own fallback)
+
+    Returns a de-duplicated, order-preserving comma-joined string (no spaces, so
+    it survives ``shlex.quote`` unquoted and reaches ``sbatch`` verbatim), or
+    ``None`` when no partition is given.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        # A single scalar; split on commas and any surrounding whitespace so both
+        # "a,b", "a, b" and "a b" are accepted.
+        items = str(value).replace(",", " ").split()
+    names: list[str] = []
+    for item in items:
+        name = str(item).strip()
+        if name and name not in names:
+            names.append(name)
+    return ",".join(names) if names else None
+
+
 def linear_resources(
     *,
     mem: int = 800,
