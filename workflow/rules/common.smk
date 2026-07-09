@@ -506,6 +506,127 @@ def prepare_container_binds(
         os.environ.setdefault(var, "1")
 
 
+def batch_inference_args(
+    base_args: dict,
+    *,
+    backend: str,
+    batch_size: int,
+    jax_cache_dir: str,
+) -> dict:
+    """Return inference CLI args with the batch-only flags added, each gated to the
+    backend that accepts them.
+
+    ``run_structure_prediction.py`` validates its flags per backend and hard-errors on
+    any it does not recognise (``ValueError: not supported by backend '<name>'``), so a
+    batch-only flag must ONLY be added for the backend(s) that accept it:
+
+    * ``--allow_resume`` (AlphaFold2 only): a crashed batch re-runs all its folds, so
+      resume the ones already done. AlphaFold3 rejects it.
+    * ``--jax_compilation_cache_dir`` (AlphaFold3 only): lets the per-fold calls in a
+      batch share one on-disk JAX compile cache. This is a JAX/XLA flag; AlphaFold2
+      rejects it (its inference is not JAX-compiled).
+
+    With ``batch_size <= 1`` nothing is added (the unbatched pipeline is untouched). Any
+    value the user already set is preserved (``setdefault``).
+    """
+    args = dict(base_args)
+    if batch_size > 1:
+        if backend == "alphafold2":
+            args.setdefault("--allow_resume", "true")
+        if backend == "alphafold3":
+            args.setdefault("--jax_compilation_cache_dir", jax_cache_dir)
+    return args
+
+
+# Inference flags each backend accepts, mirroring run_structure_prediction.py's
+# ``_validate_flags_for_backend``. Names are WITHOUT the leading ``--``. This is only
+# used for a parse-time WARNING: the container is the source of truth and hard-errors,
+# so if this list drifts (a newer image adds a flag) the worst case is a spurious
+# warning, never a blocked run. Keep in sync with AlphaPulldown when convenient.
+_COMMON_INFERENCE_FLAGS = {
+    "input", "output_directory", "data_directory", "features_directory",
+    "protein_delimiter", "fold_backend", "random_seed", "storage_mode",
+}
+_AF2_LIKE_INFERENCE_FLAGS = {
+    "compress_result_pickles", "remove_result_pickles", "models_to_relax",
+    "relax_best_score_threshold", "remove_keys_from_pickles", "convert_to_modelcif",
+    "allow_resume", "num_cycle", "num_predictions_per_model", "pair_msa",
+    "save_features_for_multimeric_object", "skip_templates", "msa_depth_scan",
+    "multimeric_template", "model_names", "msa_depth", "description_file",
+    "path_to_mmt", "threshold_clashes", "hb_allowance", "plddt_threshold",
+    "desired_num_res", "desired_num_msa", "benchmark", "model_preset",
+    "use_ap_style", "use_gpu_relax", "dropout",
+}
+_AF3_INFERENCE_FLAGS = {
+    "jax_compilation_cache_dir", "buckets", "flash_attention_implementation",
+    "num_diffusion_samples", "num_seeds", "debug_templates", "debug_msas",
+    "num_recycles", "save_embeddings", "save_distogram", "use_ap_style",
+}
+_ALPHALINK_EXTRA_FLAGS = {"crosslinks"}
+
+ALLOWED_INFERENCE_FLAGS = {
+    "alphafold2": _COMMON_INFERENCE_FLAGS | _AF2_LIKE_INFERENCE_FLAGS,
+    "alphalink": _COMMON_INFERENCE_FLAGS | _AF2_LIKE_INFERENCE_FLAGS | _ALPHALINK_EXTRA_FLAGS,
+    "alphafold3": _COMMON_INFERENCE_FLAGS | _AF3_INFERENCE_FLAGS,
+}
+
+
+def unknown_inference_flags(args, backend: str) -> list:
+    """Return the ``structure_inference_arguments`` keys the given backend does not
+    accept (leading ``--`` and any ``=value`` ignored), preserving input order.
+
+    ``run_structure_prediction.py`` aborts the inference job on the first flag outside
+    its per-backend allow set (``ValueError: not supported by backend '<name>'``), deep
+    inside a Slurm job. Calling this at parse time lets the workflow warn on the head
+    node in seconds instead. Returns ``[]`` when the backend name is unrecognised (we
+    cannot judge, so stay silent) or every flag is accepted.
+    """
+    allowed = ALLOWED_INFERENCE_FLAGS.get(str(backend).strip().lower())
+    if allowed is None:
+        return []
+    unknown: list = []
+    for key in (args or {}):
+        name = str(key).lstrip("-").split("=", 1)[0].strip()
+        if name and name not in allowed and name not in unknown:
+            unknown.append(name)
+    return unknown
+
+
+def normalize_partitions(value: Any) -> str | None:
+    """Normalise a ``slurm_partition`` config value to a comma-separated string.
+
+    SLURM's ``sbatch -p`` natively accepts several partitions as a comma list
+    (``-p gpu-el8,transform``) and schedules the job onto whichever one lets it
+    start soonest. This lets a user list every GPU partition they may run on so
+    inference jobs are not stuck behind one busy queue.
+
+    Accepts any of:
+
+    * a YAML list/tuple: ``[gpu-el8, transform]``
+    * a comma- and/or whitespace-separated string: ``"gpu-el8, transform"``
+    * a single partition string: ``"gpu-el8"`` (unchanged)
+    * ``None`` / empty -> ``None`` (caller supplies its own fallback)
+
+    Returns a de-duplicated, order-preserving comma-joined string (no spaces, so
+    it survives ``shlex.quote`` unquoted and reaches ``sbatch`` verbatim), or
+    ``None`` when no partition is given.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        # A single scalar; split on commas and any surrounding whitespace so both
+        # "a,b", "a, b" and "a b" are accepted.
+        items = str(value).replace(",", " ").split()
+    names: list[str] = []
+    for item in items:
+        name = str(item).strip()
+        if name and name not in names:
+            names.append(name)
+    return ",".join(names) if names else None
+
+
 def linear_resources(
     *,
     mem: int = 800,
@@ -563,3 +684,52 @@ def linear_resources(
         "runtime": _runtime,
         "attempt": _attempt,
     }
+
+
+def bin_folds(
+    fold_tokens: Iterable[tuple[str, int]],
+    *,
+    batch_size: int = 1,
+    max_batch_tokens: int = 0,
+) -> list[list[str]]:
+    """Group folds into batches that share a single inference job (issue #48).
+
+    Each batch is run by one ``run_structure_prediction.py`` invocation, which
+    loads the model once and predicts the folds back to back. Batching trades
+    finer-grained retries for far less queue wait and a single model-load per
+    batch instead of one per fold.
+
+    Folds are sorted by token count so a batch holds similarly sized folds: the
+    batch's memory is sized from its largest fold and its walltime from the sum,
+    so keeping sizes close stops a tiny fold from inheriting a huge fold's
+    allocation (and clusters the many small folds the issue is about). The number
+    of folds per batch is capped by ``batch_size``; the optional
+    ``max_batch_tokens`` additionally caps the summed tokens per batch so total
+    walltime stays within the partition limit. A single fold always forms a valid
+    batch even if it alone exceeds ``max_batch_tokens``.
+
+    ``batch_size <= 1`` returns one fold per batch in the original input order,
+    i.e. the unbatched behaviour, so the default path is unchanged.
+    """
+    items = [(str(fold), int(tokens or 0)) for fold, tokens in fold_tokens]
+    if batch_size <= 1:
+        return [[fold] for fold, _ in items]
+
+    ordered = sorted(items, key=lambda ft: (ft[1], ft[0]))
+    cap = int(max_batch_tokens or 0)
+
+    batches: list[list[str]] = []
+    current: list[str] = []
+    current_tokens = 0
+    for fold, tokens in ordered:
+        too_many = len(current) >= batch_size
+        too_big = cap > 0 and bool(current) and (current_tokens + tokens) > cap
+        if current and (too_many or too_big):
+            batches.append(current)
+            current = []
+            current_tokens = 0
+        current.append(fold)
+        current_tokens += tokens
+    if current:
+        batches.append(current)
+    return batches

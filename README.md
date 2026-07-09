@@ -214,7 +214,8 @@ Then open `http://localhost:8501` in your browser.
 Override default values to match your cluster:
 
 ```yaml
-slurm_partition: "gpu"                      # which partition/queue to submit to
+slurm_partition: "gpu"                      # partition(s) to submit inference to; one name,
+                                            # "gpu-el8,gpu-training" or a YAML list for several
 slurm_qos: "normal"                         # optional QoS if your site uses it
 structure_inference_gpus_per_task: 1        # number of GPUs each inference job needs
 structure_inference_gpu_model: ""           # "" lets SLURM pick any GPU in the partition; set a model to pin
@@ -231,6 +232,24 @@ fields keeps the job submission consistent across clusters.
 `structure_inference_tasks_per_gpu` toggles whether the plugin also emits `--ntasks-per-gpu`. Leaving
 the default `0` prevents that flag, which avoids conflicting with the Tres-per-task request on many
 systems. Set it to a positive integer only if your site explicitly requires `--ntasks-per-gpu`.
+
+**Multiple partitions.** `slurm_partition` may name more than one partition — as a comma-separated
+string (`"gpu-el8,gpu-training"`) or a YAML list:
+
+```yaml
+slurm_partition:          # inference runs on whichever of these frees up first
+  - gpu-el8
+  - gpu-training
+```
+
+The value is passed straight to `sbatch -p`, and SLURM starts each inference job on whichever listed
+partition can run it soonest, so jobs aren't stuck behind one busy queue (e.g. they spill onto a
+site's larger `gpu-training` cards when the default GPU partition is full). SLURM runs the job on the
+first listed partition that fits its GPUs, `--mem` and walltime and skips the ones that don't (e.g. a
+partition whose `MaxTime` is below `structure_inference_max_runtime`, or with no matching GPU) — so
+make sure **at least one** listed partition can accommodate the job. Only `structure_inference` uses
+this; the other (CPU) rules run on the cluster's default partition. A single name (the default) is
+unchanged.
 
 The remaining optional fields help with two common cluster issues: keeping inference off GPUs it
 can't use, and large complexes running out of GPU memory. Defaults are sensible; expand below only if
@@ -260,8 +279,9 @@ you hit these.
   When set this drives `--exclude` per job and **overrides** `structure_inference_gpu_model` (the two
   would conflict). It's the practical "fit to GPU" lever: requested host RAM is a separate pool and
   does not size GPU VRAM, but excluding too-small GPUs by length does. Use explicit comma node lists
-  (bracket ranges may be glob-expanded by the shell). Multi-partition routing (e.g. EMBL's bigger
-  `gpu-training` cards) is out of scope — keep one partition and let unified memory spill the tail.
+  (bracket ranges may be glob-expanded by the shell). VRAM-tier routing works *within* the listed
+  partition(s); it excludes nodes by name, so if you span **multiple partitions** (see above) make
+  sure the tier node lists cover every partition you submit to.
 - **Exclude specific nodes** with `slurm_exclude_nodes` → passed verbatim to `sbatch --exclude`
   (e.g. `"gpu50,gpu51"`). Use it as a fallback for nodes whose GPU the container can't use — e.g.
   a CUDA compute capability newer than the container's bundled `ptxas` (fails `ptxas too old` /
@@ -412,6 +432,46 @@ length_filter_fetch_uniprot: true     # set false for fully offline runs
 
 </details>
 
+### Batching small jobs into one SLURM job
+
+Many short, inference-only predictions can spend more time waiting in the SLURM queue
+than running. To amortise that wait, several folds can share a single
+`structure_inference` job: the job runs `run_structure_prediction.py` once per fold in a
+loop, so the folds queue **once** between them instead of once each.
+
+```yaml
+batch_size: 4          # max folds per inference job (1 = one job per fold, the default)
+batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
+```
+
+- Folds are grouped **by size**, so a batch's memory tracks its largest fold and its
+  walltime scales with the number of folds. `batch_max_tokens` keeps a batch's total
+  work within the partition's `MaxTime`; a single oversized fold always runs alone.
+- Works with both AlphaFold2 and AlphaFold3. Each fold is predicted by its own CLI call
+  (a single call with several folds would be **merged into one complex** by the AF3
+  backend), so the per-fold model load is paid each time; a shared
+  `--jax_compilation_cache_dir` is set automatically so later folds reuse earlier
+  compilations (especially AF3 buckets), recovering most of the compile cost.
+- For AlphaFold2 batches, `--allow_resume` is enabled automatically, so if a job is
+  interrupted a rerun skips folds whose outputs already exist (AlphaFold3 does not accept
+  that flag, so its batches recompute the unfinished folds on rerun).
+- Analysis and reports are unaffected — `alphajudge` still runs per fold (one
+  `interfaces.csv` + `report.pdf` each) and the recursive summary still aggregates them.
+- **Trade-off:** a batch is one SLURM job, so a failure reruns the whole batch (minus the
+  folds resume can skip) and the allocation is sized for the batch's largest fold. Keep
+  `batch_size` modest and pair it with `batch_max_tokens` for heterogeneous fold sizes.
+
+> [!NOTE]
+> **AlphaFold3 batching depends on your container + shared filesystem.** A batched AF3 job
+> shares one `--jax_compilation_cache_dir` under `output_directory`. With recent
+> tokamax-based AF3 images this can fail on some cluster setups: the XLA autotune cache
+> write may return `Device or resource busy` on network filesystems (e.g. BeeGFS), and on
+> **H100** the image's bundled tokamax autotuning cache can abort at load. If AF3 jobs
+> crash during compilation, run AF3 with `batch_size: 1` (AlphaFold2 batching is
+> unaffected, and single-fold AF3 avoids the shared cache entirely).
+
+`batch_size: 1` (the default) is exactly the original one-job-per-fold behaviour.
+
 ### Using precomputed features
 
 If you have precomputed protein features, specify the directory:
@@ -465,7 +525,26 @@ structure_inference_arguments:
 
 ### Backend-specific flags
 
-You can pass any backend CLI switches through `structure_inference_arguments`. Common options are listed below; keep or remove lines based on your needs.
+You can pass backend CLI switches through `structure_inference_arguments`. Common options are listed below; keep or remove lines based on your needs.
+
+> [!IMPORTANT]
+> **These flags are backend-exclusive.** `run_structure_prediction.py` validates every flag
+> against the selected `--fold_backend` and aborts the job with
+> `ValueError: The following flags are not supported by backend '<name>'` if you pass one the
+> backend does not accept. Only use flags from **your** backend's list below — e.g.
+> `--allow_resume` is AlphaFold2-only and `--jax_compilation_cache_dir` is AlphaFold3-only.
+> A single wrong flag fails the job immediately (before any prediction runs).
+>
+> When **batching** (`batch_size > 1`) the workflow adds the correct one for you —
+> `--allow_resume` for AlphaFold2, `--jax_compilation_cache_dir` for AlphaFold3 — so you don't
+> set them yourself.
+>
+> The authoritative, always-current list for your image is the backend validation inside the
+> container. Print it with:
+> ```bash
+> singularity exec <prediction_container> run_structure_prediction.py --help
+> ```
+> (`alphalink` accepts the AlphaFold2 flags plus `--crosslinks`.)
 
 <details>
 <summary>AlphaFold2 flags</summary>
@@ -477,7 +556,11 @@ structure_inference_arguments:
   --models_to_relax: None                 # all | best | none
   --remove_keys_from_pickles: True        # strip large tensors from pickle outputs
   --convert_to_modelcif: True             # additionally write ModelCIF files
-  --allow_resume: True                    # resume from partial runs
+  --allow_resume: True                    # resume from partial runs (auto-added when batching)
+  --relax_best_score_threshold: null      # only relax models above this score
+  --threshold_clashes: null               # clash threshold for relaxation
+  --hb_allowance: null                    # H-bond allowance for relaxation
+  --plddt_threshold: null                 # pLDDT cutoff for relaxation
   --num_cycle: 3
   --num_predictions_per_model: 1
   --pair_msa: True
@@ -504,7 +587,7 @@ structure_inference_arguments:
 
 ```yaml
 structure_inference_arguments:
-  --jax_compilation_cache_dir: null
+  --jax_compilation_cache_dir: null       # AF3-only; auto-added when batching
   --buckets: ['64','128','256','512','768','1024','1280','1536','2048','2560','3072','3584','4096','4608','5120']
   --flash_attention_implementation: triton
   --num_diffusion_samples: 5
@@ -514,6 +597,7 @@ structure_inference_arguments:
   --num_recycles: 10
   --save_embeddings: False
   --save_distogram: False
+  --use_ap_style: False                   # shared with AlphaFold2
 ```
 </details>
 

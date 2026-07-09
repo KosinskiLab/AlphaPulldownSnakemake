@@ -123,10 +123,36 @@ max_protein_length: 0
 # have no local FASTA / cached length yet. Set false for fully offline runs.
 length_filter_fetch_uniprot: true
 
+# Small-job batching (issue #48): group several folds into ONE structure_inference
+# Slurm job to amortise queue wait and per-job model loading. The job runs
+# run_structure_prediction.py once over the whole batch (model loaded once, folds
+# predicted back to back). Folds are grouped by size so a batch's memory tracks its
+# largest fold and its walltime the number of folds. batch_size is the max folds per
+# job (1 = today's one-job-per-fold behaviour, fully unchanged). batch_max_tokens
+# optionally caps the summed residues per batch so total walltime stays within the
+# partition MaxTime; 0 disables that cap (a single oversized fold always runs alone).
+# Trade-off: a failed batch reruns all its folds, so keep batches modest; folds whose
+# outputs already exist are skipped on rerun when the backend supports resuming.
+batch_size: 1
+batch_max_tokens: 0
+
 # Number of threads for AlphaFold inference
 alphafold_inference_threads: 8
 
 # SLURM resources
+# Partition(s) for the GPU structure_inference jobs. Give ONE partition, or SEVERAL
+# to let SLURM start each job on whichever one frees up first (it schedules onto the
+# soonest-available partition). Accepts a single name, a comma/space-separated string,
+# or a YAML list -- all equivalent:
+#   slurm_partition: "gpu-el8"                     # single partition
+#   slurm_partition: "gpu-el8,gpu-training"        # comma-separated
+#   slurm_partition:                               # YAML list
+#     - gpu-el8
+#     - gpu-training
+# SLURM runs the job on the first listed partition that fits its GPUs, --mem and
+# walltime and skips those that don't (e.g. a MaxTime below structure_inference_max_runtime,
+# or no matching GPU), so make sure at least one listed partition can accommodate it.
+# Only structure_inference uses this; the other (CPU) rules run on the default partition.
 slurm_partition: "gpu-el8"
 slurm_qos: "normal"
 structure_inference_gpus_per_task: 1
