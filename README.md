@@ -461,6 +461,15 @@ batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
   folds resume can skip) and the allocation is sized for the batch's largest fold. Keep
   `batch_size` modest and pair it with `batch_max_tokens` for heterogeneous fold sizes.
 
+> [!NOTE]
+> **AlphaFold3 batching depends on your container + shared filesystem.** A batched AF3 job
+> shares one `--jax_compilation_cache_dir` under `output_directory`. With recent
+> tokamax-based AF3 images this can fail on some cluster setups: the XLA autotune cache
+> write may return `Device or resource busy` on network filesystems (e.g. BeeGFS), and on
+> **H100** the image's bundled tokamax autotuning cache can abort at load. If AF3 jobs
+> crash during compilation, run AF3 with `batch_size: 1` (AlphaFold2 batching is
+> unaffected, and single-fold AF3 avoids the shared cache entirely).
+
 `batch_size: 1` (the default) is exactly the original one-job-per-fold behaviour.
 
 ### Using precomputed features
