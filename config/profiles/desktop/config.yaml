@@ -2,6 +2,10 @@ executor: local
 cores: 8
 use-singularity: true
 singularity-args: "--nv"
+# Share built .sif images across working directories. Without this Snakemake
+# stores them in <workdir>/.snakemake/singularity, so every new deployment
+# re-pulls the same multi-GB containers. $VARS and ~ are expanded by Snakemake.
+apptainer-prefix: "$HOME/.apptainer/snakemake-images"
 printshellcmds: true
 keep-going: true
 rerun-incomplete: true

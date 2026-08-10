@@ -5,6 +5,37 @@ AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Sn
 **Helpful links:** [AlphaPulldown documentation](https://github.com/KosinskiLab/AlphaPulldown/wiki) · [Precalculated feature databases](https://github.com/KosinskiLab/AlphaPulldown/wiki/Features-Database) · [Downstream analysis guide](https://github.com/KosinskiLab/AlphaPulldown/wiki/Downstream-Analysis)
 
 ## 1. Installation
+
+### Quick install (recommended)
+
+```bash
+curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.5.1/install.sh
+bash install.sh
+conda activate snake
+cd AlphaPulldownSnakemake
+```
+
+This single command creates the `snake` conda environment, deploys the workflow into
+`./AlphaPulldownSnakemake`, and pre-fetches the container images into a **shared** image
+directory (`~/.apptainer/snakemake-images` by default). Because the images live outside the
+working directory, they are downloaded **once per machine** rather than once per project.
+
+Useful options:
+
+| Option | Meaning |
+| --- | --- |
+| `-d, --dest DIR` | working directory to deploy into (default `AlphaPulldownSnakemake`) |
+| `-v, --version TAG` | workflow version to deploy (default `2.5.1`) |
+| `-i, --image-dir DIR` | shared container image directory |
+| `-n, --env-name NAME` | conda environment name (default `snake`) |
+| `--no-pull` | skip container pre-fetch (Snakemake will fetch on first run) |
+
+The script is idempotent: re-running it leaves an existing conda environment, working
+directory and cached images untouched.
+
+<details>
+<summary>Manual installation</summary>
+
 Create and activate the conda environment:
 
 ```bash
@@ -16,13 +47,7 @@ conda activate snake
 
 This environment file installs Snakemake and all required plugins via conda and pulls in `alphapulldown-input-parser>=0.5.1` from PyPI in a single step.
 
-That's it, you're done!
-
-## 2. Configuration
-
-### Create a working directory
-
-Create a new processing directory for your project:
+Then deploy the workflow into a new processing directory for your project:
 
 ```bash
 snakedeploy deploy-workflow \
@@ -31,6 +56,14 @@ snakedeploy deploy-workflow \
   --tag 2.5.1
 cd AlphaPulldownSnakemake
 ```
+
+The shipped profiles set `apptainer-prefix: "$HOME/.apptainer/snakemake-images"`, so container
+images are still shared across projects. See
+[Container image cache](#container-image-cache) to change that location.
+
+</details>
+
+## 2. Configuration
 
 ### Setup protein folding jobs
 
@@ -209,6 +242,41 @@ Then open `http://localhost:8501` in your browser.
 ---
 
 ## Advanced Configuration
+
+### Container image cache
+
+Snakemake stores each container as `<md5-of-container-url>.simg` and skips the download when
+that file already exists. By default it keeps them in `<workdir>/.snakemake/singularity`, which
+means **every new project re-downloads the same multi-GB images**. Both shipped profiles
+therefore set:
+
+```yaml
+apptainer-prefix: "$HOME/.apptainer/snakemake-images"
+```
+
+Environment variables and `~` are expanded, so this stays portable across machines. Point it
+somewhere else — a group-shared directory, or scratch — by editing the profiles, by passing
+`install.sh -i /path/to/images`, or per-run with `snakemake --apptainer-prefix /path/to/images`.
+
+On a cluster the directory must be readable from the compute nodes. If you prefer not to edit
+the profiles, exporting `APPTAINER_CACHEDIR` has the same effect, since Snakemake falls back to
+it when no prefix is configured. Note that `SINGULARITY_CACHEDIR` does **not** work here: it
+only caches the intermediate layers, so the image is still rebuilt for every project.
+
+You can also bypass the registry entirely by building the images once and referencing the
+files directly, which additionally pins the exact image you run:
+
+```bash
+apptainer build /path/to/images/alphafold3-2.5.1.sif docker://kosinskilab/alphafold3:2.5.1
+```
+
+```yaml
+prediction_container: "/path/to/images/alphafold3-2.5.1.sif"
+```
+
+> **Note**: the default config uses the `:latest` tag. Since the cache key is the URL and not
+> the image digest, a cached `:latest` is never refreshed — pin a version tag if you need
+> reproducibility across machines.
 
 ### SLURM defaults for structure inference
 Override default values to match your cluster:

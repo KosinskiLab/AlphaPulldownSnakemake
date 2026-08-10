@@ -11,6 +11,12 @@ default-resources:
 
 use-singularity: true
 
+# Share built .sif images across working directories. Without this Snakemake
+# stores them in <workdir>/.snakemake/singularity, so every new deployment
+# re-pulls the same multi-GB containers. $VARS and ~ are expanded by Snakemake.
+# Must be on a filesystem visible from the compute nodes.
+apptainer-prefix: "$HOME/.apptainer/snakemake-images"
+
 # forward the binds/NV flags your Snakefile computes
 envvars:
   - APPTAINER_BINDPATH
