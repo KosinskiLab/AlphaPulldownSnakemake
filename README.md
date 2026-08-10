@@ -9,7 +9,7 @@ AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Sn
 ### Quick install (recommended)
 
 ```bash
-curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/main/install.sh
+curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.6.1/install.sh
 bash install.sh
 conda activate snake
 cd AlphaPulldownSnakemake
@@ -25,7 +25,7 @@ Useful options:
 | Option | Meaning |
 | --- | --- |
 | `-d, --dest DIR` | working directory to deploy into (default `AlphaPulldownSnakemake`) |
-| `-v, --version TAG` | workflow version to deploy (default `2.5.1`) |
+| `-v, --version TAG` | workflow version to deploy (default `2.6.1`) |
 | `-i, --image-dir DIR` | shared container image directory |
 | `-n, --env-name NAME` | conda environment name (default `snake`) |
 | `--no-pull` | skip container pre-fetch (Snakemake will fetch on first run) |
@@ -41,7 +41,7 @@ Create and activate the conda environment:
 ```bash
 conda env create \
   -n snake \
-  -f https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.5.1/workflow/envs/alphapulldown.yaml
+  -f https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.6.1/workflow/envs/alphapulldown.yaml
 conda activate snake
 ```
 
@@ -53,7 +53,7 @@ Then deploy the workflow into a new processing directory for your project:
 snakedeploy deploy-workflow \
   https://github.com/KosinskiLab/AlphaPulldownSnakemake \
   AlphaPulldownSnakemake \
-  --tag 2.5.1
+  --tag 2.6.1
 cd AlphaPulldownSnakemake
 ```
 
@@ -267,16 +267,16 @@ You can also bypass the registry entirely by building the images once and refere
 files directly, which additionally pins the exact image you run:
 
 ```bash
-apptainer build /path/to/images/alphafold3-2.5.1.sif docker://kosinskilab/alphafold3:2.5.1
+apptainer build /path/to/images/alphafold3-2.5.0.sif docker://kosinskilab/alphafold3:2.5.0
 ```
 
 ```yaml
-prediction_container: "/path/to/images/alphafold3-2.5.1.sif"
+prediction_container: "/path/to/images/alphafold3-2.5.0.sif"
 ```
 
-> **Note**: the default config uses the `:latest` tag. Since the cache key is the URL and not
-> the image digest, a cached `:latest` is never refreshed — pin a version tag if you need
-> reproducibility across machines.
+> **Note**: the cache key is the container URL, not the image digest, so a cached `:latest` is
+> never refreshed. `prediction_container` is pinned to a version tag. `kosinskilab/alphajudge`
+> publishes only `:latest`; pin it with a digest (`@sha256:<digest>`) if you need it fixed.
 
 ### SLURM defaults for structure inference
 Override default values to match your cluster:
