@@ -8,7 +8,7 @@
 #
 #   ./install.sh                       # deploy into ./AlphaPulldownSnakemake
 #   ./install.sh -d my_project         # deploy into ./my_project
-#   ./install.sh -v 2.1.7              # pin a workflow version
+#   ./install.sh -v 2.5.1              # pin a workflow version
 #   ./install.sh -i /g/shared/images   # shared image directory
 #   ./install.sh --no-pull             # skip container pre-fetch
 #

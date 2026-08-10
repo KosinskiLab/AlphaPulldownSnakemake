@@ -9,7 +9,7 @@ AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Sn
 ### Quick install (recommended)
 
 ```bash
-curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.5.1/install.sh
+curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/main/install.sh
 bash install.sh
 conda activate snake
 cd AlphaPulldownSnakemake
