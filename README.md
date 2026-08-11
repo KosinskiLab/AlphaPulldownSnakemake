@@ -270,10 +270,12 @@ you hit these.
   # Example for EMBL gpu-el8 — replace nodes with your cluster's (nothing is hard-coded):
   structure_inference_gpu_vram_headroom: 1.0   # <1.0 tolerates that fraction of host spill
   structure_inference_gpu_tiers:
+    - {min_vram_gb: 16, nodes: "gpu60,gpu61,gpu62,gpu63,gpu64,gpu65,gpu66,gpu67,gpu68"}  # RTX PRO 4500, 16GB MIG
     - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29,gpu30,gpu31,gpu32,gpu33,gpu34,gpu35,gpu36,gpu37"}
     - {min_vram_gb: 40, nodes: "gpu25,gpu26,gpu27,gpu28"}
     - {min_vram_gb: 48, nodes: "gpu40,gpu41,gpu42,gpu43,gpu44,gpu45,gpu46,gpu47,gpu48"}
     - {min_vram_gb: 80, nodes: "gpu38,gpu39"}
+    - {min_vram_gb: 96, nodes: "gpu50,gpu51,gpu52,gpu53"}  # RTX PRO 6000 Blackwell
   ```
 
   When set this drives `--exclude` per job and **overrides** `structure_inference_gpu_model` (the two
@@ -285,15 +287,60 @@ you hit these.
 - **Exclude specific nodes** with `slurm_exclude_nodes` → passed verbatim to `sbatch --exclude`
   (e.g. `"gpu50,gpu51"`). Use it as a fallback for nodes whose GPU the container can't use — e.g.
   a CUDA compute capability newer than the container's bundled `ptxas` (fails `ptxas too old` /
-  `UNIMPLEMENTED`). The RTX PRO 6000 / Blackwell failure mode seen on EMBL `gpu50-53` was an
-  old/pre-Tokamax AlphaFold 3 image issue; updated AF3 v3.0.2/Tokamax images should run on those
-  cards, so excluding them is not proof of RTX compatibility.
+  `UNIMPLEMENTED`). For Blackwell (sm_120) that is purely an image-age problem: AlphaPulldown
+  **2.5.0 containers are verified working** on RTX PRO 6000 (`gpu50-53`) and on the RTX PRO 4500
+  16 GB MIG slices (`gpu60-68`) for both AF3 and AF2 — see [Blackwell GPUs](#blackwell-gpus). Only
+  exclude those nodes while you are still on a pre-2.5.0 image.
   `--exclude` is allowed in `slurm_extra` whereas `--constraint`/`--gres`/`--gpus` are not, so it is
   the supported way to drop a few nodes while keeping the rest of the partition.
 - **`structure_inference_max_runtime`** caps per-job wall time (minutes). Wall time scales as
   `1440 * attempt`, so without a cap enough retries exceed the partition `MaxTime` and SLURM rejects
   the job with `Requested time limit is invalid`. Set it to your partition's `MaxTime`
   (`scontrol show partition <name>`); default 7 days (10080).
+
+</details>
+
+<details>
+<summary>Blackwell GPUs (sm_120) and MIG slices</summary>
+
+#### Blackwell GPUs
+
+Blackwell cards (compute capability 12.0 / sm_120 — RTX PRO 4500 and RTX PRO 6000) need an
+AlphaPulldown **2.5.0 or newer** container. Support comes from the image, not the driver: the
+containers ship their own CUDA runtime as pip `nvidia-*` wheels, and pre-2.5.0 AlphaFold 3 images
+bundle jaxlib 0.4.34 on CUDA 12.6, whose `ptxas` cannot target sm_120. Those images die at the very
+first kernel compilation with `ptxas does not support CC 12.0` / `UNIMPLEMENTED: ptxas too old`,
+before any inference runs. You cannot patch around it from outside the container — jaxlib calls its
+own bundled `ptxas`, so `XLA_FLAGS=--xla_gpu_cuda_data_dir` and `PATH` have no effect, and swapping
+in only a newer `ptxas` still leaves the CUDA runtime and cuDNN too old for the real kernels.
+
+Verified with real inference on 2.5.0 containers, with confidence scores matching the older cards:
+
+| GPU | Compute capability | AlphaFold 3 | AlphaFold 2 |
+|-----|--------------------|-------------|-------------|
+| RTX PRO 4500 Blackwell (16 GB MIG slice) | 12.0 | ✅ | ✅ |
+| RTX PRO 6000 Blackwell (96 GB) | 12.0 | ✅ | ✅ |
+| H100 PCIe | 9.0 | ✅ | — |
+| A100 40 GB | 8.0 | ✅ | ✅ |
+| RTX 3090 | 8.6 | ✅ | ✅ |
+
+For AF3 all three attention implementations (`triton`/Tokamax, `cudnn`, `xla`) work on Blackwell,
+so no `--flash_attention_implementation` override is needed.
+
+#### MIG slices
+
+Nodes sliced with MIG (at EMBL, `gpu60-68` are RTX PRO 4500 cards split into 16 GB `1g.16gb`
+instances) need no special `slurm_gres`: a plain `gpu:1` request lands on one slice and SLURM sets
+`CUDA_VISIBLE_DEVICES=MIG-<uuid>`. Route work to them by size with `structure_inference_gpu_tiers`
+(a `min_vram_gb: 16` tier) — they suit monomers and small complexes, while larger jobs should land
+on the 96 GB RTX PRO 6000 tier.
+
+One MIG caveat this workflow already handles: `nvidia-smi --query-gpu=memory.total` reports the
+**parent card** (e.g. 32623 MiB) rather than the slice (~16 GB). Since `structure_inference_xla_mem_fraction:
+auto` is `host RAM / GPU VRAM`, taking that number at face value would roughly halve the fraction and
+effectively switch off host spill exactly where it is most needed. The workflow therefore reads the
+slice's own profile from `nvidia-smi -L` when `CUDA_VISIBLE_DEVICES` is a MIG UUID, and falls back to
+`--query-gpu` on whole cards.
 
 </details>
 

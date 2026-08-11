@@ -679,9 +679,28 @@ rule structure_inference:
             unset XLA_PYTHON_CLIENT_MEM_FRACTION
             _aj_frac="{params.xla_mem_fraction}"
             if [ "$_aj_frac" = "auto" ]; then
-                _aj_gpu_query=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || true)
-                _aj_gpu_mb="${{_aj_gpu_query%%$'\n'*}}"
-                _aj_gpu_mb="${{_aj_gpu_mb//[!0-9]/}}"
+                # On a MIG slice --query-gpu reports the *parent* card (e.g. 32623 MiB
+                # for a 16 GB 1g.16gb slice), which would roughly halve the fraction and
+                # so switch off host spill exactly where it is most needed. Read the
+                # slice's own profile out of `nvidia-smi -L` first, and fall back to
+                # --query-gpu on whole (non-MIG) cards.
+                _aj_gpu_mb=""
+                case "${{CUDA_VISIBLE_DEVICES:-}}" in
+                    MIG-*)
+                        _aj_mig_gb=$(nvidia-smi -L 2>/dev/null \
+                            | grep -F "${{CUDA_VISIBLE_DEVICES}}" \
+                            | sed -n 's/.*MIG [0-9]\+g\.\([0-9]\+\)gb.*/\1/p' \
+                            | head -1)
+                        if [ -n "$_aj_mig_gb" ]; then
+                            _aj_gpu_mb=$(( _aj_mig_gb * 1024 ))
+                        fi
+                        ;;
+                esac
+                if [ -z "$_aj_gpu_mb" ]; then
+                    _aj_gpu_query=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || true)
+                    _aj_gpu_mb="${{_aj_gpu_query%%$'\n'*}}"
+                    _aj_gpu_mb="${{_aj_gpu_mb//[!0-9]/}}"
+                fi
                 if [ -n "$_aj_gpu_mb" ] && [ "$_aj_gpu_mb" -gt 0 ]; then
                     _aj_frac=$(awk -v r={resources.mem_mb} -v g="$_aj_gpu_mb" 'BEGIN{{printf "%.3f", r/g}}')
                 else

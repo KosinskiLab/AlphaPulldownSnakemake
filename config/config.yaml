@@ -172,19 +172,28 @@ structure_inference_gpu_model: ""
 # gpu-el8 partition - replace nodes with your cluster's; nothing is hard-coded.
 # structure_inference_gpu_vram_headroom: 1.0   # <1.0 tolerates that fraction of host spill
 # structure_inference_gpu_tiers:
+#   - {min_vram_gb: 16, nodes: "gpu60,gpu61,gpu62,gpu63,gpu64,gpu65,gpu66,gpu67,gpu68"}  # RTX PRO 4500 Blackwell, 16GB MIG slices
 #   - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29,gpu30,gpu31,gpu32,gpu33,gpu34,gpu35,gpu36,gpu37"}  # RTX 3090
 #   - {min_vram_gb: 40, nodes: "gpu25,gpu26,gpu27,gpu28"}                                # A100 40GB
 #   - {min_vram_gb: 48, nodes: "gpu40,gpu41,gpu42,gpu43,gpu44,gpu45,gpu46,gpu47,gpu48"}  # L40s/A40 48GB
 #   - {min_vram_gb: 80, nodes: "gpu38,gpu39"}                                            # H100 PCIe 80GB
-# Note: RTX PRO 6000 / Blackwell nodes (gpu50-53, 96GB at EMBL) were incompatible
-# with pre-Tokamax AlphaFold 3 containers that bundled an old JAX/JAX-Triton/ptxas
-# stack. Updated AF3 v3.0.2/Tokamax containers should run there; keep those nodes
-# in slurm_exclude_nodes only when using old images or locally built containers that
-# still fail with "ptxas too old" / UNIMPLEMENTED.
+#   - {min_vram_gb: 96, nodes: "gpu50,gpu51,gpu52,gpu53"}                                # RTX PRO 6000 Blackwell 96GB
+# Blackwell (compute capability 12.0 / sm_120): RTX PRO 6000 (gpu50-53, 96GB) and
+# RTX PRO 4500 (gpu60-68, sliced into 16GB MIG instances) are verified working with
+# AlphaPulldown 2.5.0 containers - AF3 (jax 0.9.1/ptxas 12.9/cuDNN 9.17/Tokamax, all
+# three attention implementations) and AF2 (jax 0.5.3 on ptxas 12.9/cuDNN 9.2x), with
+# confidence scores matching A100/H100/3090. Only PRE-2.5.0 images fail there, at the
+# first kernel compilation with "ptxas too old" / UNIMPLEMENTED; that is an image
+# problem, so exclude those nodes only while you are still on an old image.
+# The 16GB MIG slices suit monomers and small complexes; send bigger jobs to the
+# 96GB RTX PRO 6000 cards via the tiers above. A plain "gpu:1" gres lands on a MIG
+# slice correctly (SLURM sets CUDA_VISIBLE_DEVICES=MIG-...), so no gres change is
+# needed to use them.
 # H100-SXM/H200/B200 live on the separate gpu-training partition (not routed here).
 # Optional: comma-separated nodes to keep structure_inference OFF, passed to sbatch
 # as --exclude. Useful as a fallback for GPUs the prediction container cannot use
-# (e.g. a CUDA compute capability the bundled ptxas is too old for). Example:
+# (e.g. a CUDA compute capability the bundled ptxas is too old for - which for
+# Blackwell means a pre-2.5.0 image; see the note above). Example:
 # slurm_exclude_nodes: "gpu50,gpu51,gpu52,gpu53"
 # slurm_exclude_nodes: ""
 # Cap structure_inference wall time (minutes) so retry scaling (1440 * attempt) cannot
