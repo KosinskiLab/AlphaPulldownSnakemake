@@ -31,7 +31,9 @@ Useful options:
 | `--no-pull` | skip container pre-fetch (Snakemake will fetch on first run) |
 
 The script is idempotent: re-running it leaves an existing conda environment, working
-directory and cached images untouched.
+directory and cached images untouched. Deployment copies the workflow's
+[config/config.yaml](https://github.com/KosinskiLab/AlphaPulldownSnakemake/blob/main/config/config.yaml)
+into your project directory; that copy is the file you edit below.
 
 <details>
 <summary>Manual installation</summary>
@@ -122,6 +124,15 @@ input_files:
   - "config/sample_sheet.csv"
 ```
 
+### Database configuration
+
+Set the paths to the AlphaFold databases and to the backend weights:
+
+```yaml
+databases_directory: "/path/to/alphafold/databases"
+backend_weights_directory: "/path/to/backend/weights"
+```
+
 ### Setup pulldown experiments
 
 If you want to test which proteins from one group interact with proteins from another group, create a second file such as `config/baits.txt`:
@@ -203,7 +214,7 @@ After completion, you'll find:
 - **Optional Jupyter notebook** with 3D visualizations and quality plots
 - **Results table** with confidence scores and interaction metrics
 
-# Recommended: explore results with APLit
+## Recommended: explore results with APLit
 
 [APLit](https://github.com/KosinskiLab/aplit)
  is a Streamlit-based UI for browsing AlphaPulldown runs (AF2 and AF3) and AlphaJudge metrics.
@@ -254,8 +265,11 @@ therefore set:
 apptainer-prefix: "$HOME/.apptainer/snakemake-images"
 ```
 
+<details>
+<summary>Moving the cache, and pinning an exact image</summary>
+
 Environment variables and `~` are expanded, so this stays portable across machines. Point it
-somewhere else — a group-shared directory, or scratch — by editing the profiles, by passing
+somewhere else (a group-shared directory, or scratch) by editing the profiles, by passing
 `install.sh -i /path/to/images`, or per-run with `snakemake --apptainer-prefix /path/to/images`.
 
 On a cluster the directory must be readable from the compute nodes. If you prefer not to edit
@@ -278,7 +292,70 @@ prediction_container: "/path/to/images/alphafold3-2.5.0.sif"
 > never refreshed. `prediction_container` is pinned to a version tag. `kosinskilab/alphajudge`
 > publishes only `:latest`; pin it with a digest (`@sha256:<digest>`) if you need it fixed.
 
+</details>
+
+### GPU compatibility
+
+The containers carry their own CUDA runtime (pip `nvidia-*` wheels), so GPU support depends on the
+image tag, not on the driver installed on the node. Releases 2.5.0 and newer run on every GPU in the
+EMBL cluster, with both AlphaFold 2 and AlphaFold 3:
+
+- RTX 3090, 24 GB, sm_86 (`gpu21-22`, `gpu29-37`)
+- A100, 40 GB, sm_80 (`gpu25-28`)
+- A40, 48 GB, sm_86 (`sb03-05` to `sb03-20`)
+- L40S, 48 GB, sm_89 (`gpu40-48`)
+- H100, 80 GB, sm_90 (`gpu38-39`, and `hgx2-3` in `gpu-training`)
+- H200, 141 GB, sm_90 (`hgx4-5` in `gpu-training`)
+- B200, 180 GB, sm_100 (`bgx1` in `gpu-training`)
+- RTX PRO 4500 Blackwell, 16 GB MIG slices, sm_120 (`gpu60-68`)
+- RTX PRO 6000 Blackwell, 96 GB, sm_120 (`gpu51-53`)
+
+On other clusters the same rule applies by compute capability: sm_80 (Ampere) through sm_120
+(Blackwell) all work with a 2.5.0 or newer image.
+
+<details>
+<summary>Why Blackwell (sm_120) needs a 2.5.0 or newer image</summary>
+
+Pre-2.5.0 AlphaFold 3 images bundle jaxlib 0.4.34 on CUDA 12.6, whose `ptxas` cannot target sm_120.
+They die at the first kernel compilation, before any inference runs:
+
+```
+ptxas does not support CC 12.0
+XlaRuntimeError: UNIMPLEMENTED: ... ptxas too old
+```
+
+This cannot be patched from outside the container. jaxlib calls its own bundled `ptxas`, so
+`XLA_FLAGS=--xla_gpu_cuda_data_dir` and `PATH` have no effect, and bind-mounting a newer `ptxas`
+still leaves the CUDA runtime and cuDNN too old for the real kernels. From 2.5.0 the images ship a
+consistent CUDA >= 12.8 stack (AF3: jax 0.9.1, ptxas 12.9, cuDNN 9.17, Tokamax; AF2: jax 0.5.3,
+ptxas 12.9, cuDNN 9.2x) and return the same confidence scores as the older cards. All three AF3
+attention implementations (`triton`/Tokamax, `cudnn`, `xla`) work, so no
+`--flash_attention_implementation` override is needed.
+
+While you are still on an older image, keep inference off those nodes with `slurm_exclude_nodes`.
+
+</details>
+
+<details>
+<summary>MIG slices (<code>gpu60-68</code>)</summary>
+
+Those nodes are RTX PRO 4500 cards split into 16 GB `1g.16gb` MIG instances. They need no special
+`slurm_gres`: a plain `gpu:1` request lands on one slice and SLURM sets
+`CUDA_VISIBLE_DEVICES=MIG-<uuid>`. Route work to them by size with a `min_vram_gb: 16` tier in
+`structure_inference_gpu_tiers`. They suit monomers and small complexes, while larger jobs belong on
+the 96 GB RTX PRO 6000 tier.
+
+One MIG caveat the workflow already handles: `nvidia-smi --query-gpu=memory.total` reports the parent
+card (32623 MiB) rather than the slice (~16 GB). Since `structure_inference_xla_mem_fraction: auto`
+is `host RAM / GPU VRAM`, taking that number at face value would roughly halve the fraction and
+switch off host spill exactly where it is most needed. The workflow therefore reads the slice profile
+from `nvidia-smi -L` when `CUDA_VISIBLE_DEVICES` holds a MIG UUID, and falls back to `--query-gpu` on
+whole cards.
+
+</details>
+
 ### SLURM defaults for structure inference
+
 Override default values to match your cluster:
 
 ```yaml
@@ -335,7 +412,7 @@ you hit these.
   uses the biggest tier and spills to host RAM via unified memory.
 
   ```yaml
-  # Example for EMBL gpu-el8 — replace nodes with your cluster's (nothing is hard-coded):
+  # Example for the EMBL GPU pool; replace nodes with your cluster's (nothing is hard-coded):
   structure_inference_gpu_vram_headroom: 1.0   # <1.0 tolerates that fraction of host spill
   structure_inference_gpu_tiers:
     - {min_vram_gb: 16, nodes: "gpu60,gpu61,gpu62,gpu63,gpu64,gpu65,gpu66,gpu67,gpu68"}  # RTX PRO 4500, 16GB MIG
@@ -343,7 +420,7 @@ you hit these.
     - {min_vram_gb: 40, nodes: "gpu25,gpu26,gpu27,gpu28"}
     - {min_vram_gb: 48, nodes: "gpu40,gpu41,gpu42,gpu43,gpu44,gpu45,gpu46,gpu47,gpu48"}
     - {min_vram_gb: 80, nodes: "gpu38,gpu39"}
-    - {min_vram_gb: 96, nodes: "gpu50,gpu51,gpu52,gpu53"}  # RTX PRO 6000 Blackwell
+    - {min_vram_gb: 96, nodes: "gpu51,gpu52,gpu53"}  # RTX PRO 6000 Blackwell
   ```
 
   When set this drives `--exclude` per job and **overrides** `structure_inference_gpu_model` (the two
@@ -352,63 +429,15 @@ you hit these.
   (bracket ranges may be glob-expanded by the shell). VRAM-tier routing works *within* the listed
   partition(s); it excludes nodes by name, so if you span **multiple partitions** (see above) make
   sure the tier node lists cover every partition you submit to.
-- **Exclude specific nodes** with `slurm_exclude_nodes` → passed verbatim to `sbatch --exclude`
-  (e.g. `"gpu50,gpu51"`). Use it as a fallback for nodes whose GPU the container can't use — e.g.
-  a CUDA compute capability newer than the container's bundled `ptxas` (fails `ptxas too old` /
-  `UNIMPLEMENTED`). For Blackwell (sm_120) that is purely an image-age problem: AlphaPulldown
-  **2.5.0 containers are verified working** on RTX PRO 6000 (`gpu50-53`) and on the RTX PRO 4500
-  16 GB MIG slices (`gpu60-68`) for both AF3 and AF2 — see [Blackwell GPUs](#blackwell-gpus). Only
-  exclude those nodes while you are still on a pre-2.5.0 image.
-  `--exclude` is allowed in `slurm_extra` whereas `--constraint`/`--gres`/`--gpus` are not, so it is
-  the supported way to drop a few nodes while keeping the rest of the partition.
+- **Exclude specific nodes** with `slurm_exclude_nodes`, passed verbatim to `sbatch --exclude`
+  (e.g. `"gpu51,gpu52"`). `--exclude` is allowed in `slurm_extra` whereas
+  `--constraint`/`--gres`/`--gpus` are not, so it is the supported way to drop a few nodes while
+  keeping the rest of the partition. The usual reason to need it is a GPU the container image is too
+  old for; see [GPU compatibility](#gpu-compatibility).
 - **`structure_inference_max_runtime`** caps per-job wall time (minutes). Wall time scales as
   `1440 * attempt`, so without a cap enough retries exceed the partition `MaxTime` and SLURM rejects
   the job with `Requested time limit is invalid`. Set it to your partition's `MaxTime`
   (`scontrol show partition <name>`); default 7 days (10080).
-
-</details>
-
-<details>
-<summary>Blackwell GPUs (sm_120) and MIG slices</summary>
-
-#### Blackwell GPUs
-
-Blackwell cards (compute capability 12.0 / sm_120 — RTX PRO 4500 and RTX PRO 6000) need an
-AlphaPulldown **2.5.0 or newer** container. Support comes from the image, not the driver: the
-containers ship their own CUDA runtime as pip `nvidia-*` wheels, and pre-2.5.0 AlphaFold 3 images
-bundle jaxlib 0.4.34 on CUDA 12.6, whose `ptxas` cannot target sm_120. Those images die at the very
-first kernel compilation with `ptxas does not support CC 12.0` / `UNIMPLEMENTED: ptxas too old`,
-before any inference runs. You cannot patch around it from outside the container — jaxlib calls its
-own bundled `ptxas`, so `XLA_FLAGS=--xla_gpu_cuda_data_dir` and `PATH` have no effect, and swapping
-in only a newer `ptxas` still leaves the CUDA runtime and cuDNN too old for the real kernels.
-
-Verified with real inference on 2.5.0 containers, with confidence scores matching the older cards:
-
-| GPU | Compute capability | AlphaFold 3 | AlphaFold 2 |
-|-----|--------------------|-------------|-------------|
-| RTX PRO 4500 Blackwell (16 GB MIG slice) | 12.0 | ✅ | ✅ |
-| RTX PRO 6000 Blackwell (96 GB) | 12.0 | ✅ | ✅ |
-| H100 PCIe | 9.0 | ✅ | — |
-| A100 40 GB | 8.0 | ✅ | ✅ |
-| RTX 3090 | 8.6 | ✅ | ✅ |
-
-For AF3 all three attention implementations (`triton`/Tokamax, `cudnn`, `xla`) work on Blackwell,
-so no `--flash_attention_implementation` override is needed.
-
-#### MIG slices
-
-Nodes sliced with MIG (at EMBL, `gpu60-68` are RTX PRO 4500 cards split into 16 GB `1g.16gb`
-instances) need no special `slurm_gres`: a plain `gpu:1` request lands on one slice and SLURM sets
-`CUDA_VISIBLE_DEVICES=MIG-<uuid>`. Route work to them by size with `structure_inference_gpu_tiers`
-(a `min_vram_gb: 16` tier) — they suit monomers and small complexes, while larger jobs should land
-on the 96 GB RTX PRO 6000 tier.
-
-One MIG caveat this workflow already handles: `nvidia-smi --query-gpu=memory.total` reports the
-**parent card** (e.g. 32623 MiB) rather than the slice (~16 GB). Since `structure_inference_xla_mem_fraction:
-auto` is `host RAM / GPU VRAM`, taking that number at face value would roughly halve the fraction and
-effectively switch off host spill exactly where it is most needed. The workflow therefore reads the
-slice's own profile from `nvidia-smi -L` when `CUDA_VISIBLE_DEVICES` is a MIG UUID, and falls back to
-`--query-gpu` on whole cards.
 
 </details>
 
@@ -559,6 +588,9 @@ batch_size: 4          # max folds per inference job (1 = one job per fold, the 
 batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
 ```
 
+<details>
+<summary>What batching changes, and when not to use it</summary>
+
 - Folds are grouped **by size**, so a batch's memory tracks its largest fold and its
   walltime scales with the number of folds. `batch_max_tokens` keeps a batch's total
   work within the partition's `MaxTime`; a single oversized fold always runs alone.
@@ -587,6 +619,8 @@ batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
 
 `batch_size: 1` (the default) is exactly the original one-job-per-fold behaviour.
 
+</details>
+
 ### Using precomputed features
 
 If you have precomputed protein features, specify the directory:
@@ -600,19 +634,31 @@ feature_directory:
 
 ### Feature generation flags (`create_individual_features.py`)
 
-You can tweak the feature-generation step by editing `create_feature_arguments` (or by running the
-script manually). Commonly used flags:
+Tweak the feature-generation step by editing `create_feature_arguments` (or by running the script
+manually).
+
+<details>
+<summary>Commonly used flags</summary>
 
 - `--data_pipeline {alphafold2,alphafold3}` – choose the feature format to emit.
 - `--db_preset {full_dbs,reduced_dbs}` – switch between the full BFD stack or the reduced databases.
 - `--use_mmseqs2` – rely on the remote MMseqs2 API; skips local jackhmmer/HHsearch database lookups.
-- `--use_precomputed_msas` / `--save_msa_files` – reuse stored MSAs or keep new ones for later runs.
+  To reuse a3m files generated locally with `colabfold_search`, also set `--use_precomputed_msas=True`
+  (see the [mmseqs2 manual](https://github.com/KosinskiLab/AlphaPulldown/blob/main/manuals/mmseqs2_manual.md));
+  otherwise the remote API is contacted again and your a3m files are overwritten.
+- `--skip_msa` – generate query-only single-sequence features instead of running bulk MSA searches.
+  Use those feature pickles with `run_structure_prediction.py --pair_msa=False`.
+- `--use_precomputed_msas` / `--save_msa_files` – reuse stored MSAs (`<output_dir>/<protein>.a3m`) or
+  keep new ones for later runs. Required to reuse precomputed MMseqs2/ColabFold a3m files rather
+  than regenerating them.
 - `--compress_features` – zip the generated `*.pkl` files (`.xz` extension) to save space.
 - `--skip_existing` – leave existing feature files untouched (safe for reruns).
 - `--seq_index N` – only process the N‑th sequence from the FASTA list.
 - `--use_hhsearch`, `--re_search_templates_mmseqs2` – toggle template search implementations.
 - `--path_to_mmt`, `--description_file`, `--multiple_mmts` – enable TrueMultimer CSV-driven feature sets.
 - `--max_template_date YYYY-MM-DD` – required cutoff for template structures; keeps runs reproducible.
+
+</details>
 
 
 ### Structure analysis & reporting
@@ -715,15 +761,6 @@ structure_inference_arguments:
   --use_ap_style: False                   # shared with AlphaFold2
 ```
 </details>
-
-### Database configuration
-
-Set the paths to AlphaFold databases and backend weights:
-
-```yaml
-databases_directory: "/path/to/alphafold/databases"
-backend_weights_directory: "/path/to/backend/weights"
-```
 
 ---
 
