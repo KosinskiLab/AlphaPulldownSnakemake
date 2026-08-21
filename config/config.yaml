@@ -210,12 +210,15 @@ structure_inference_unified_memory: true
 structure_inference_xla_mem_fraction: auto
 
 # Specify the backend by changing the prediction container
-# - "docker://kosinskilab/alphafold2:2.5.0" for AlphaFold2
-# - "docker://kosinskilab/alphafold3:2.5.0" for AlphaFold3
+# - "docker://kosinskilab/alphafold2:2.6.2" for AlphaFold2
+#   (2.6.2 ships a patched HHblits 3.3.1; stock 3.3.0 aborts long queries with
+#    "MergeMasterSlave: did not find N match states" - see hh-suite#389)
+# - "docker://kosinskilab/alphafold3:2.6.2" for AlphaFold3
+#   (2.6.2 reads/writes compressed *_af3_input.json.xz features)
 # - "docker://kosinskilab/alphalink:2.1.5" for AlphaLink  (latest published alphalink tag)
 # (you can also use local singularity .sif files)
 # - "/path/to/my/container.sif"
-prediction_container: "docker://kosinskilab/alphafold3:2.5.0"
+prediction_container: "docker://kosinskilab/alphafold3:2.6.2"
 
 # Container for structure analysis. alphajudge publishes only ":latest".
 analysis_container: "docker://kosinskilab/alphajudge:latest"
