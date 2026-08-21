@@ -75,7 +75,7 @@ analyze_structure_arguments:
 # selected automatically from --data_pipeline / --fold_backend:
 #                              feature base   feature /res   infer base   infer /N^2
 #   alphafold2 (AF2 multimer):    64000 MB       40 MB         16000 MB     0.0055
-#   alphafold3 (AF3):             40000 MB       25 MB          8000 MB     0.0045
+#   alphafold3 (AF3):             24000 MB        8 MB          8000 MB     0.0045
 # Inference bases are deliberately modest; the quadratic term dominates at high N, and
 # OOM retries still escalate from this base via `..._ram_scaling ** (attempt - 1)`.
 # Leave the keys below commented to use those backend defaults. Uncomment any key

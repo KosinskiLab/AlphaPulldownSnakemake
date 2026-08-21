@@ -402,9 +402,11 @@ def estimate_inference_mem_mb(
 # (jackhmmer/nhmmer, no HHblits) is lighter. So AF2 gets larger bases and a larger
 # quadratic term. These apply only when the matching config key is unset, so an
 # explicit config value always wins.
+# AF3 sized from measured peak RSS of 19k create_features jobs (median 1.1 GB,
+# p99 17, max 35): 40000/25 asked ~66 GB for that. 24000/8 covers all of them.
 FEATURE_RAM_DEFAULTS = {
     "alphafold2": {"base_mb": 64000, "per_residue_mb": 40},
-    "alphafold3": {"base_mb": 40000, "per_residue_mb": 25},
+    "alphafold3": {"base_mb": 24000, "per_residue_mb": 8},
 }
 INFERENCE_RAM_DEFAULTS = {
     # base_mb: fixed floor; per_token_sq_mb: quadratic coeff in N^2 (total residues).
