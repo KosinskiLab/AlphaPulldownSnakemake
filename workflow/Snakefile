@@ -36,9 +36,15 @@ INFERENCE_BACKEND = normalize_backend(
 )
 
 if IS_AF3:
-    FEATURE_COMPRESSION = None
+    # AF3 feature JSONs honour --compress_features too (AlphaPulldown reads either
+    # spelling), so the expected output name has to follow the flag - otherwise a
+    # compressed feature set looks missing and gets regenerated.
+    FEATURE_COMPRESSION = (
+        "lzma" if config["create_feature_arguments"].get("--compress_features", False) else None
+    )
     FEATURE_SUFFIX = None
-    FEATURE_OUTPUT_PATTERN = "{fasta_basename}_af3_input.json"
+    AF3_FEATURE_EXT = "_af3_input.json" + (".xz" if FEATURE_COMPRESSION else "")
+    FEATURE_OUTPUT_PATTERN = "{fasta_basename}" + AF3_FEATURE_EXT
 else:
     FEATURE_COMPRESSION = (
         "lzma" if config["create_feature_arguments"].get("--compress_features", False) else None
@@ -48,7 +54,7 @@ else:
 
 
 def feature_name(base: str) -> str:
-    return f"{base}_af3_input.json" if IS_AF3 else f"{base}.{FEATURE_SUFFIX}"
+    return f"{base}{AF3_FEATURE_EXT}" if IS_AF3 else f"{base}.{FEATURE_SUFFIX}"
 
 
 # AF3 ``--input`` formatting (protein chains -> generated feature JSON; direct
@@ -68,6 +74,15 @@ if isinstance(input_files, (str, Path)):
 # sbatch -p understands natively (SLURM runs the job on whichever partition frees
 # up first). See config.yaml for usage.
 DEFAULT_SLURM_PARTITION = normalize_partitions(config.get("slurm_partition"))
+# Partition(s) for the CPU rules (feature generation, analysis). Listing several
+# matters more here than for inference: feature jobs are numerous and memory-hungry,
+# so confining them to one partition caps how many can run at once regardless of
+# --jobs. Unset means "cluster default", which keeps behaviour unchanged on sites
+# that have not configured this.
+DEFAULT_SLURM_PARTITION_CPU = normalize_partitions(config.get("slurm_partition_cpu"))
+CPU_PARTITION_RESOURCE = (
+    {"slurm_partition": DEFAULT_SLURM_PARTITION_CPU} if DEFAULT_SLURM_PARTITION_CPU else {}
+)
 DEFAULT_SLURM_GRES = config.get("slurm_gres")
 DEFAULT_SLURM_QOS = config.get("slurm_qos")
 DEFAULT_STRUCTURE_INFERENCE_GPUS = config.get("structure_inference_gpus_per_task", 1)
@@ -553,6 +568,7 @@ rule create_features:
         ),
     resources:
         qos=DEFAULT_SLURM_QOS,
+        **CPU_PARTITION_RESOURCE,
         **linear_resources(
             # Length from the parse-time cache (populated before any job runs) or
             # the staged FASTA, falling back to the rule input. Using the cache

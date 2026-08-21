@@ -152,8 +152,22 @@ alphafold_inference_threads: 8
 # SLURM runs the job on the first listed partition that fits its GPUs, --mem and
 # walltime and skips those that don't (e.g. a MaxTime below structure_inference_max_runtime,
 # or no matching GPU), so make sure at least one listed partition can accommodate it.
-# Only structure_inference uses this; the other (CPU) rules run on the default partition.
+# Only structure_inference uses this; see slurm_partition_cpu for the CPU rules.
 slurm_partition: "gpu-el8"
+
+# Partition(s) for the CPU rules (feature generation). Same syntax as above: one
+# name, a comma-separated string, or a YAML list. Leave unset to use the cluster
+# default partition (previous behaviour).
+#
+# Worth setting on a busy cluster. Feature jobs are numerous and memory-hungry
+# (~100-200 GB each), so confining them to a single partition caps how many can run
+# at once no matter what --jobs says: at EMBL, moving from one partition to five
+# took concurrency from 18 to ~195 with nothing left pending. List only partitions
+# whose nodes have enough RAM for your longest query, and prefer CPU-only ones so
+# GPU nodes stay free for jobs that need them.
+#
+# EMBL example (CPU-only partitions, 251 GB - 12 TB per node):
+# slurm_partition_cpu: "htc-el8,htc-el10,bigmem,bigmem-el10"
 slurm_qos: "normal"
 structure_inference_gpus_per_task: 1
 # Restrict structure_inference to one GPU model (sbatch --gpus=<model>:N), e.g. "3090".
