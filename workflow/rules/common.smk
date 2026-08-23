@@ -405,7 +405,7 @@ def estimate_inference_mem_mb(
 # AF3 sized from measured peak RSS of 19k create_features jobs (median 1.1 GB,
 # p99 17, max 35): 40000/25 asked ~66 GB for that. 24000/8 covers all of them.
 FEATURE_RAM_DEFAULTS = {
-    "alphafold2": {"base_mb": 64000, "per_residue_mb": 40},
+    "alphafold2": {"base_mb": 64000, "per_residue_mb": 120},
     "alphafold3": {"base_mb": 24000, "per_residue_mb": 8},
 }
 INFERENCE_RAM_DEFAULTS = {

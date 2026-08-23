@@ -28,6 +28,11 @@ envvars:
 printshellcmds: true
 rerun-incomplete: true
 keep-going: true
+# The memory model sizes the first attempt and escalates on OOM via
+# `..._ram_scaling ** (attempt - 1)`. That escalation only happens if retries are
+# enabled - without this, an OOM is a permanent loss and the model has to over-request
+# for every job to cover a thin tail.
+retries: 3
 rerun-triggers: mtime
 latency-wait: 600
 slurm-logdir: "slurm-logs"

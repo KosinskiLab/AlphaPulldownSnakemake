@@ -74,7 +74,7 @@ analyze_structure_arguments:
 # The base / per-length coefficients DEFAULT BY BACKEND (AF2 is heavier than AF3),
 # selected automatically from --data_pipeline / --fold_backend:
 #                              feature base   feature /res   infer base   infer /N^2
-#   alphafold2 (AF2 multimer):    64000 MB       40 MB         16000 MB     0.0055
+#   alphafold2 (AF2 multimer):    64000 MB      120 MB         16000 MB     0.0055
 #   alphafold3 (AF3):             24000 MB        8 MB          8000 MB     0.0045
 # Inference bases are deliberately modest; the quadratic term dominates at high N, and
 # OOM retries still escalate from this base via `..._ram_scaling ** (attempt - 1)`.
@@ -90,8 +90,12 @@ max_mem_mb: 0
 # create_features (CPU/MSA) — base is database/MSA-tool dominated (AF2 HHblits is the
 # main OOM source), with a mild linear dependence on query length.
 # feature_create_ram_bytes: 64000        # MB, fixed base (default: backend-specific)
-# feature_create_ram_per_residue_mb: 30  # MB per query residue (default: backend-specific)
+# feature_create_ram_per_residue_mb: 120 # MB per query residue (default: backend-specific)
 feature_create_ram_scaling: 1.1          # per-retry escalation on OOM
+# The AF2 figures above are fitted to 2,825 measured first attempts (99-2261 aa): they
+# cover 98.8% of jobs outright, and the 1.1 escalation covers the rest within the 3
+# retries set in config/profiles/slurm/config.yaml. Retries must stay enabled for that
+# tail to be caught - with retries off, an OOM is a permanent loss.
 
 # structure_inference (GPU host RAM) — base plus a quadratic term in complex size.
 # With unified memory enabled the XLA spill fraction is derived from this host
