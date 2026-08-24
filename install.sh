@@ -8,13 +8,13 @@
 #
 #   ./install.sh                       # deploy into ./AlphaPulldownSnakemake
 #   ./install.sh -d my_project         # deploy into ./my_project
-#   ./install.sh -v 2.6.2              # pin a workflow version
+#   ./install.sh -v 2.7.0              # pin a workflow version
 #   ./install.sh -i /g/shared/images   # shared image directory
 #   ./install.sh --no-pull             # skip container pre-fetch
 #
 set -euo pipefail
 
-VERSION="2.6.2"
+VERSION="2.7.0"
 DEST="AlphaPulldownSnakemake"
 ENV_NAME="snake"
 IMAGE_DIR_DEFAULT="$HOME/.apptainer/snakemake-images"
