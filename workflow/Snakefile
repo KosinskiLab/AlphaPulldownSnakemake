@@ -806,7 +806,7 @@ if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT:
                         fold,
                         "interfaces.csv",
                     )
-                    for fold in dataset.fold_specifications
+                    for fold in kept_folds
                 ],
         output:
                 RECURSIVE_REPORT,
