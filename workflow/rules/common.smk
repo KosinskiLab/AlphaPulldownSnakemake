@@ -579,8 +579,8 @@ def prediction_batch_id(folds: Iterable[str]) -> str:
     if len(members) == 1:
         return members[0]
     payload = json.dumps(members, ensure_ascii=False, separators=(",", ":"))
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
-    return f"{members[0]}--{digest}"
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"batch-{digest}"
 
 
 # Inference flags each backend accepts, mirroring run_structure_prediction.py's

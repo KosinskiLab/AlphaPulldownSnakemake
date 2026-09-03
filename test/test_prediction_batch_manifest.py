@@ -3,6 +3,7 @@
 import importlib.machinery
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 
@@ -21,10 +22,17 @@ def test_batch_identity_changes_with_members_but_preserves_single_fold_identity(
     first = common.prediction_batch_id(["A+B", "C+D"])
     changed = common.prediction_batch_id(["A+B", "E+F"])
 
-    assert first.startswith("A+B--")
-    assert changed.startswith("A+B--")
+    assert first.startswith("batch-")
+    assert changed.startswith("batch-")
     assert first != changed
     assert first == common.prediction_batch_id(["A+B", "C+D"])
+
+
+def test_resident_batch_identity_is_a_bounded_filesystem_component():
+    batch_id = common.prediction_batch_id(["A" * 250, "B" * 250])
+
+    assert re.fullmatch(r"batch-[0-9a-f]{64}", batch_id)
+    assert len(batch_id.encode("utf-8")) < 255
 
 
 def test_manifest_preserves_batch_order_and_uses_manifest_relative_outputs(tmp_path):

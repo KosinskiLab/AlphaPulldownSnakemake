@@ -53,5 +53,5 @@ jobs:
               --dry-run \
               --printshellcmds | tee "${log}"
             grep -q "run_structure_prediction_batch.py" "${log}"
-            grep -Eq '\.prediction_batches/A--[0-9a-f]{32}\.jsonl' "${log}"
+            grep -Eq '\.prediction_batches/batch-[0-9a-f]{64}\.jsonl' "${log}"
           done
