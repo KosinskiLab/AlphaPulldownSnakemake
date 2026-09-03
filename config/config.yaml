@@ -46,6 +46,24 @@ create_feature_arguments:
   --compress_features: true  # Compress generated features
   --data_pipeline: alphafold3 # Use alphafold2 or alphafold3 data pipeline for generating features
 
+# Optional local MMseqs2-GPU MSA backend for AlphaFold 3 protein features. The
+# default false leaves the existing one-protein feature rules unchanged. When
+# enabled, every path and immutable database-build identifier is required; the
+# workflow deliberately does not guess database locations.
+mmseqs2_gpu_features:
+  enabled: false
+#  binary_path: /opt/mmseqs/bin/mmseqs
+#  temp_dir: /local-fast-scratch/mmseqs
+#  batch_max_sequences: 256
+#  batch_max_residues: 100000
+#  sensitivity: 7.5
+#  e_value: 0.0001
+#  databases:
+#    uniref90: {path: /db/mmseqs/uniref90, identifier: uniref90-2026-08, max_sequences: 10000}
+#    mgnify: {path: /db/mmseqs/mgnify, identifier: mgnify-2026-08, max_sequences: 5000}
+#    small_bfd: {path: /db/mmseqs/small_bfd, identifier: small-bfd-2026-08, max_sequences: 5000}
+#    uniprot: {path: /db/mmseqs/uniprot, identifier: uniprot-2026-08, max_sequences: 50000}
+
 # Arguments for structure inference
 structure_inference_arguments:
   --fold_backend: alphafold3 # Options: alphafold2, alphafold3, alphalink

@@ -660,6 +660,36 @@ manually).
 
 </details>
 
+### Batched local MMseqs2-GPU features (AlphaFold 3)
+
+Set `mmseqs2_gpu_features.enabled: true` to submit one GPU feature job for all
+missing protein inputs. AlphaPulldown de-duplicates identical sequences, searches
+them in chunks bounded by both query count and total residues, and writes one
+standard AF3 input JSON per protein. Existing AF2 feature generation and the
+remote `--use_mmseqs2` path are unchanged.
+
+```yaml
+mmseqs2_gpu_features:
+  enabled: true
+  binary_path: /opt/mmseqs/bin/mmseqs
+  temp_dir: /local-fast-scratch/mmseqs
+  batch_max_sequences: 256
+  batch_max_residues: 100000
+  sensitivity: 7.5
+  e_value: 0.0001
+  databases:
+    uniref90: {path: /db/mmseqs/uniref90, identifier: uniref90-2026-08, max_sequences: 10000}
+    mgnify: {path: /db/mmseqs/mgnify, identifier: mgnify-2026-08, max_sequences: 5000}
+    small_bfd: {path: /db/mmseqs/small_bfd, identifier: small-bfd-2026-08, max_sequences: 5000}
+    uniprot: {path: /db/mmseqs/uniprot, identifier: uniprot-2026-08, max_sequences: 50000}
+```
+
+Database `identifier` values are part of each artifact's provenance. Cached MSAs
+are reused only when the sequence, search settings, identifiers, and hit limits
+still match. The local backend supplies unpaired and paired MSAs; AlphaFold 3's
+native template search remains active. All paths are explicit by design, and the
+job requests exactly one GPU from `slurm_partition`.
+
 
 ### Structure analysis & reporting
 

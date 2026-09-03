@@ -477,6 +477,7 @@ def prepare_container_binds(
     config: dict[str, Any],
     feature_directories: Iterable[str | Path] = (),
     input_files: Iterable[str | Path] = (),
+    extra_paths: Iterable[str | Path] = (),
 ) -> None:
     """Populate Singularity/Apptainer bind paths based on config."""
     interest: set[Path] = {
@@ -499,11 +500,19 @@ def prepare_container_binds(
         except (TypeError, OSError, RuntimeError):
             continue
 
+    for path in extra_paths:
+        try:
+            interest.add(Path(path))
+        except (TypeError, OSError, RuntimeError):
+            continue
+
     roots = sorted(_collect_roots(interest))
     bind_spec = ",".join(f"{r}:{r}" for r in roots)
 
     for var in ("APPTAINER_BINDPATH", "SINGULARITY_BINDPATH"):
-        os.environ.setdefault(var, bind_spec)
+        existing = [item for item in os.environ.get(var, "").split(",") if item]
+        required = [item for item in bind_spec.split(",") if item]
+        os.environ[var] = ",".join(dict.fromkeys([*existing, *required]))
     for var in ("APPTAINER_NV", "SINGULARITY_NV"):
         os.environ.setdefault(var, "1")
 

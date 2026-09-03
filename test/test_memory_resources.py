@@ -176,6 +176,36 @@ def test_linear_resources_default_scaling_without_callbacks():
     assert res["attempt"]({}, input=[], attempt=4) == 4
 
 
+def test_prepare_container_binds_accepts_adapter_owned_paths(monkeypatch, tmp_path):
+    monkeypatch.delenv("APPTAINER_BINDPATH", raising=False)
+    monkeypatch.delenv("SINGULARITY_BINDPATH", raising=False)
+
+    common.prepare_container_binds(
+        output_directory=str(tmp_path),
+        config={},
+        extra_paths=(Path("/opt/mmseqs/bin"),),
+    )
+
+    assert "/opt:/opt" in os.environ["APPTAINER_BINDPATH"].split(",")
+
+
+def test_prepare_container_binds_preserves_user_binds_and_adds_required_paths(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("APPTAINER_BINDPATH", "/custom:/custom")
+    monkeypatch.setenv("SINGULARITY_BINDPATH", "/custom:/custom")
+
+    common.prepare_container_binds(
+        output_directory=str(tmp_path),
+        config={},
+        extra_paths=(Path("/opt/mmseqs/bin"),),
+    )
+
+    binds = os.environ["APPTAINER_BINDPATH"].split(",")
+    assert "/custom:/custom" in binds
+    assert "/opt:/opt" in binds
+
+
 # --- length filtering (issue #33 + total caps) -------------------------------
 # Note: fold-spec parsing (name/copies/regions) is owned by `alphapulldown-input-parser`
 # (>=0.5.0) and tested there; APS's `parse_fold_chains` is a thin (name, copies) adapter
