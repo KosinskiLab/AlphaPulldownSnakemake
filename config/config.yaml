@@ -51,15 +51,27 @@ create_feature_arguments:
 # enabled, every database path and immutable build identifier is required; the
 # workflow deliberately does not guess database locations. Prediction images
 # bundle MMseqs2-GPU at /opt/mmseqs/bin/mmseqs. Database prefixes must reference
-# GPU-compatible MMseqs2 databases padded for GPU search.
+# GPU-compatible MMseqs2 databases padded for GPU search. GPU MSA shards release
+# their GPU before independent CPU template/finalization jobs begin.
 mmseqs2_gpu_features:
   enabled: false
-#  binary_path: /opt/mmseqs/bin/mmseqs  # optional alternate in-image path
+#  binary_path: /opt/mmseqs/bin/mmseqs  # only supported path; bundled in the image
+#  binary_id: 8cc5ce367b5638c4306c2d7cfc652dd099a4643f  # update with image
 #  temp_dir: /local-fast-scratch/mmseqs
-#  batch_max_sequences: 256
+#  batch_max_sequences: 256  # maximum queries in one GPU shard / core batch
 #  batch_max_residues: 100000
-#  sensitivity: 7.5
 #  e_value: 0.0001
+#  # Host-RAM and time model for one GPU shard. gpu_database_ram_mb should cover
+#  # the largest padded target database plus MMseqs overhead on your system.
+#  gpu_database_ram_mb: 64000
+#  gpu_chunk_ram_per_residue_mb: 0.02
+#  gpu_ram_scaling: 1.1
+#  gpu_runtime_base_minutes: 15
+#  gpu_runtime_per_sequence_minutes: 0.5
+#  gpu_runtime_per_1000_residues: 1.0
+#  template_database_ids:  # immutable identities for native AF3 template cache
+#    pdb_seqres: pdb-seqres-2026-08
+#    mmcif: pdb-mmcif-2026-08
 #  databases:
 #    uniref90: {path: /db/mmseqs/uniref90, identifier: uniref90-2026-08, max_sequences: 10000}
 #    mgnify: {path: /db/mmseqs/mgnify, identifier: mgnify-2026-08, max_sequences: 5000}
@@ -176,7 +188,8 @@ alphafold_inference_threads: 8
 # SLURM runs the job on the first listed partition that fits its GPUs, --mem and
 # walltime and skips those that don't (e.g. a MaxTime below structure_inference_max_runtime,
 # or no matching GPU), so make sure at least one listed partition can accommodate it.
-# Only structure_inference uses this; see slurm_partition_cpu for the CPU rules.
+# Structure inference and MMseqs2-GPU MSA shards use this; template/finalization
+# and the other CPU feature rules use slurm_partition_cpu.
 slurm_partition: "gpu-el8"
 
 # Partition(s) for the CPU rules (feature generation). Same syntax as above: one
