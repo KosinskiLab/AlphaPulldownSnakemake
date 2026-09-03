@@ -54,4 +54,32 @@ jobs:
               --printshellcmds | tee "${log}"
             grep -q "run_structure_prediction_batch.py" "${log}"
             grep -Eq '\.prediction_batches/batch-[0-9a-f]{64}\.jsonl' "${log}"
+            grep -Eq '/predictions/batch-[0-9a-f]{64}/completed_fold\.txt' "${log}"
           done
+      - name: Reject stale batch artifacts after composition changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="test/fixtures/resident_batch/output-af2"
+          old_id=$(grep -m1 -Eo 'batch-[0-9a-f]{64}' \
+            "${RUNNER_TEMP}/resident-af2.log")
+          mkdir -p "${output}/.prediction_batches" "${output}/predictions/${old_id}"
+          touch "${output}/.prediction_batches/${old_id}.jsonl"
+          touch "${output}/predictions/${old_id}/completed_fold.txt"
+
+          log="${RUNNER_TEMP}/resident-af2-changed.log"
+          snakemake \
+            --snakefile workflow/Snakefile \
+            --configfile test/fixtures/resident_batch/af2.yaml \
+            --config input_files=test/fixtures/resident_batch/changed_sample_sheet.csv \
+            --rerun-triggers mtime \
+            --cores 1 \
+            --dry-run \
+            --printshellcmds | tee "${log}"
+
+          grep -q "rule structure_inference" "${log}"
+          grep -Eq '/predictions/batch-[0-9a-f]{64}/completed_fold\.txt' "${log}"
+          if grep -q "/predictions/${old_id}/completed_fold.txt" "${log}"; then
+            echo "changed composition reused the stale batch sentinel" >&2
+            exit 1
+          fi
