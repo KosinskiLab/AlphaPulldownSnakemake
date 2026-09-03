@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import inspect
 import json
+import lzma
 import os
 import urllib.request
 from collections.abc import Iterable
@@ -62,15 +63,27 @@ def af3_input_residue_count(json_path: str) -> int:
     ``sequences`` (ligands have no sequence and are skipped). Returns 0 if the
     file is missing or not parseable (not cached); used as a fallback for the
     chain length when no ``data/<chain>.fasta`` exists (e.g. precomputed features
-    supplied via ``feature_directory``).
+    supplied via ``feature_directory``). Either spelling is accepted, since
+    ``--compress_features`` writes the file as ``*_af3_input.json.xz``.
     """
     cached = _AF3_INPUT_COUNT_CACHE.get(json_path)
     if cached:
         return cached
-    try:
-        with open(json_path) as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
+    candidates = [json_path]
+    if json_path.endswith(".xz"):
+        candidates.append(json_path[: -len(".xz")])
+    else:
+        candidates.append(json_path + ".xz")
+    data = None
+    for candidate in candidates:
+        opener = lzma.open if candidate.endswith(".xz") else open
+        try:
+            with opener(candidate, "rt") as handle:
+                data = json.load(handle)
+            break
+        except (OSError, ValueError, lzma.LZMAError):
+            continue
+    if data is None:
         return 0
     total = 0
     for entry in data.get("sequences", []):
@@ -162,6 +175,10 @@ def format_af3_requested_fold(fold: str, delimiter: str = "+") -> str:
 
     Rationale:
         - Protein features are generated as ``<base>_af3_input.json``.
+        - The plain spelling is emitted even under ``--compress_features``, where
+          the file on disk is ``<base>_af3_input.json.xz``: the parser resolves
+          either spelling to whichever file exists (needs
+          alphapulldown-input-parser >= 0.5.2).
         - JSON inputs are already AF3 inputs and must not get a second suffix.
         - Copy numbers / region ranges apply to the logical chain, not the file
           name; ``alphapulldown-input-parser`` accepts them after the JSON filename.

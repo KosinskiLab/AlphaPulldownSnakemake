@@ -255,6 +255,27 @@ def test_af3_input_residue_count_skips_ligands():
         assert common.af3_input_residue_count(p) == 100  # ligand contributes 0
 
 
+def test_af3_input_residue_count_reads_compressed_features():
+    """`--compress_features` writes `*_af3_input.json.xz`; callers pass the plain
+    name, and resolving only that spelling returned 0 (no length-aware sizing)."""
+    import lzma
+
+    common._AF3_INPUT_COUNT_CACHE.clear()
+    payload = {"sequences": [{"protein": {"id": "A", "sequence": "M" * 250}}]}
+    with tempfile.TemporaryDirectory() as d:
+        plain = os.path.join(d, "A_af3_input.json")
+        with lzma.open(plain + ".xz", "wt", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        # asked for the plain name, only the compressed file exists
+        assert common.af3_input_residue_count(plain) == 250
+        common._AF3_INPUT_COUNT_CACHE.clear()
+        # and the compressed name works directly
+        assert common.af3_input_residue_count(plain + ".xz") == 250
+        common._AF3_INPUT_COUNT_CACHE.clear()
+        # a genuinely absent feature is still 0, in either spelling
+        assert common.af3_input_residue_count(os.path.join(d, "B_af3_input.json")) == 0
+
+
 def test_required_gpu_vram_gb():
     # 0.0045 MB/token^2: N=4836 -> ~105 GB; headroom scales it
     assert round(common.required_gpu_vram_gb(4836, 0.0045)) == 105
