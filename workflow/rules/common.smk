@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import inspect
 import json
 import os
@@ -563,6 +564,23 @@ def prediction_batch_manifest(jobs, manifest_path) -> str:
             )
         )
     return "\n".join(records) + ("\n" if records else "")
+
+
+def prediction_batch_id(folds: Iterable[str]) -> str:
+    """Return the stable identity used by a structure-inference batch.
+
+    Single-fold jobs retain their historical fold identity. Resident batches add
+    a digest of the complete ordered membership, so changing any member changes
+    both the manifest path and the completion sentinel selected by the Snakefile.
+    """
+    members = [str(fold) for fold in folds]
+    if not members:
+        raise ValueError("an inference batch must contain at least one fold")
+    if len(members) == 1:
+        return members[0]
+    payload = json.dumps(members, ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+    return f"{members[0]}--{digest}"
 
 
 # Inference flags each backend accepts, mirroring run_structure_prediction.py's

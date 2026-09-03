@@ -277,11 +277,13 @@ for fold in kept_folds:
 # model runners are initialized once while every manifest row remains an independent
 # fold. Older containers fall back to the established per-fold shell loop. A shared
 # --jax_compilation_cache_dir also persists compiled AF3 buckets. Composition is
-# decided here at parse time (sequence lengths
-# are already resolved above for length filtering / memory sizing), so no checkpoint
-# is needed. A batch's id is its first member: with batch_size <= 1 every batch is one
-# fold whose id IS the fold, giving identical prediction paths and DAG to the unbatched
-# pipeline. Folds are grouped by size; AF2 monomers and multimers are binned
+# decided here at parse time (sequence lengths are already resolved above for length
+# filtering / memory sizing), so no checkpoint is needed. A resident batch's id
+# includes a digest of its complete ordered membership, so changing composition
+# selects a new manifest and completion sentinel even with mtime-only rerun triggers.
+# With batch_size <= 1 every batch is one fold whose id IS the fold, giving identical
+# prediction paths and DAG to the unbatched pipeline. Folds are grouped by size; AF2
+# monomers and multimers are binned
 # separately because their runner configurations differ. batch_max_tokens optionally
 # caps the summed tokens per batch so a batch's total walltime stays within the
 # partition limit.
@@ -361,14 +363,14 @@ if BATCH_SIZE > 1 and kept_folds:
 else:
     _fold_batches = [[fold] for fold in kept_folds]
 
-# batch_id -> [fold, ...] and the inverse fold -> batch_id. The batch id is the
-# first fold of the batch, so the sentinel predictions/<batch_id>/completed_fold.txt
-# lives in a real prediction directory (no synthetic dirs); singletons reduce to
-# the original predictions/<fold>/completed_fold.txt.
+# batch_id -> [fold, ...] and the inverse fold -> batch_id. A resident batch id is
+# content-addressed from all members, making its manifest and sentinel invalidation
+# independent of Snakemake's rerun-trigger policy. Singletons retain the original
+# fold id and predictions/<fold>/completed_fold.txt target.
 BATCH_FOLDS = {}
 FOLD_BATCH = {}
 for _batch_members in _fold_batches:
-    _batch_id = _batch_members[0]
+    _batch_id = prediction_batch_id(_batch_members)
     BATCH_FOLDS[_batch_id] = _batch_members
     for _member in _batch_members:
         FOLD_BATCH[_member] = _batch_id
@@ -701,8 +703,9 @@ rule structure_inference:
         ),
         tasks_per_gpu=DEFAULT_STRUCTURE_INFERENCE_TASKS_PER_GPU,
         **linear_resources(
-            # Peak host RAM is the largest fold in the batch (folds run one at a
-            # time in the loop, memory released between calls).
+            # Only one fold executes at a time, so the current request uses the
+            # largest member's established per-fold estimate. Resident JAX/XLA
+            # allocator retention has not yet been calibrated; see the README.
             mem_fn=lambda wildcards, attempt: estimate_inference_mem_mb(
                 batch_max_tokens_for(wildcards.batch),
                 base_mb=structure_inference_base_ram,

@@ -15,6 +15,18 @@ common = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(common)
 
 
+def test_batch_identity_changes_with_members_but_preserves_single_fold_identity():
+    assert common.prediction_batch_id(["A+B"]) == "A+B"
+
+    first = common.prediction_batch_id(["A+B", "C+D"])
+    changed = common.prediction_batch_id(["A+B", "E+F"])
+
+    assert first.startswith("A+B--")
+    assert changed.startswith("A+B--")
+    assert first != changed
+    assert first == common.prediction_batch_id(["A+B", "C+D"])
+
+
 def test_manifest_preserves_batch_order_and_uses_manifest_relative_outputs(tmp_path):
     manifest = tmp_path / "output" / ".prediction_batches" / "small.jsonl"
     prediction_root = tmp_path / "output" / "predictions"

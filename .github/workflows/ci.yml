@@ -18,14 +18,40 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install alphapulldown-input-parser
+      - name: Install test dependencies
         # common.smk imports parse_fold_chains from the parser package; >=0.5.1
         # is required (public helper + ".json" preservation for AF3 inputs, #41).
-        run: pip install --quiet "alphapulldown-input-parser>=0.5.1"
+        run: pip install --quiet pytest "alphapulldown-input-parser>=0.5.1"
       - name: Byte-compile common.smk
         # common.smk carries the memory/length logic; delegates parsing to the parser.
         run: python -m py_compile workflow/rules/common.smk
-      - name: Run resource/length unit tests
-        # The suite loads common.smk directly; the SLURM-plugin integration test
+      - name: Run complete unit test suite
+        # Tests load common.smk directly; the SLURM-plugin integration test
         # self-skips when the plugin is absent.
-        run: python test/test_memory_resources.py
+        run: python -m pytest test/ -q
+
+  resident-batch-dry-runs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install workflow dependencies
+        run: pip install --quiet "snakemake==9.*" "alphapulldown-input-parser>=0.5.1"
+      - name: Dry-run resident AlphaFold 2 and AlphaFold 3 batches
+        shell: bash
+        run: |
+          set -euo pipefail
+          for backend in af2 af3; do
+            log="${RUNNER_TEMP}/resident-${backend}.log"
+            snakemake \
+              --snakefile workflow/Snakefile \
+              --configfile "test/fixtures/resident_batch/${backend}.yaml" \
+              --cores 1 \
+              --dry-run \
+              --printshellcmds | tee "${log}"
+            grep -q "run_structure_prediction_batch.py" "${log}"
+            grep -Eq '\.prediction_batches/A--[0-9a-f]{32}\.jsonl' "${log}"
+          done

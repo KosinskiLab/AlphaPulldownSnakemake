@@ -594,9 +594,14 @@ batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
 <details>
 <summary>What batching changes, and when not to use it</summary>
 
-- Folds are grouped **by size**, so a batch's memory tracks its largest fold and its
-  walltime scales with the number of folds. `batch_max_tokens` keeps a batch's total
-  work within the partition's `MaxTime`; a single oversized fold always runs alone.
+- Folds are grouped **by size**. Because folds execute sequentially, the workflow
+  requests memory from the largest member's existing per-fold estimate, while
+  walltime scales with the number of folds. Resident JAX/XLA allocators may retain
+  memory between folds; that retention has not yet been calibrated across backends,
+  models, and GPU types. Start with modest batches and measure peak host/GPU memory
+  on your cluster before increasing `batch_size`. `batch_max_tokens` keeps a batch's
+  total work within the partition's `MaxTime`; a single oversized fold always runs
+  alone.
   AlphaFold2 monomers and multimers are grouped separately because they use different
   model runners; AlphaFold3 retains size-only grouping.
 - Works with both AlphaFold2 and AlphaFold3. A JSONL manifest distinguishes independent
@@ -610,9 +615,11 @@ batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
   `interfaces.csv` + `report.pdf` each) and the recursive summary still aggregates them.
 - **Trade-off:** a batch is one SLURM job, so a failure reruns the whole batch (minus the
   folds resume can skip), although the resident command attempts the remaining folds
-  before returning a failure summary. The allocation is sized for the batch's largest
-  fold. Keep `batch_size` modest and pair it with `batch_max_tokens` for heterogeneous
-  fold sizes.
+  before returning a failure summary. Keep `batch_size` modest and pair it with
+  `batch_max_tokens` for heterogeneous fold sizes.
+- Resident batch manifests and completion sentinels include a digest of the complete
+  ordered membership. Changing a batch therefore schedules the new composition even
+  when Snakemake uses `rerun-triggers: mtime`; single-fold paths remain unchanged.
 
 > [!NOTE]
 > **AlphaFold3 batching depends on your container + shared filesystem.** A batched AF3 job

@@ -131,8 +131,10 @@ length_filter_fetch_uniprot: true
 # Slurm job to amortise queue wait and per-job model loading. The job runs
 # run_structure_prediction_batch.py once over the whole batch (model loaded once,
 # folds predicted back to back). Older containers without the batch command fall
-# back to the existing per-fold loop. Folds are grouped by size so memory tracks its
-# largest fold and its walltime the number of folds; AF2 monomers and multimers are
+# back to the existing per-fold loop. Folds are grouped by size and run sequentially;
+# the request uses the largest fold's existing memory estimate, but resident allocator
+# retention has not yet been calibrated, so measure peak host/GPU memory before using
+# large batches. Walltime scales with the fold count. AF2 monomers and multimers are
 # grouped separately because they use different model runners. batch_size is the max
 # folds per job (1 = today's one-job-per-fold behaviour, fully unchanged).
 # batch_max_tokens optionally caps the summed residues per batch so total walltime

@@ -66,6 +66,10 @@ Images
 .pickle
 .snakemake
 
+# Outputs created while parsing the self-contained resident-batch dry-run fixtures.
+test/fixtures/resident_batch/output-af2/
+test/fixtures/resident_batch/output-af3/
+
 *html
 *ipynb
 .snakemake

@@ -8,4 +8,8 @@
   initialized while it executes every fold in an inference batch.
 - **Batch manifest**: the JSONL handoff from the workflow to AlphaPulldown; one
   record represents one fold and its output directory.
-- **Batch sentinel**: the existing completion marker for an inference batch.
+- **Batch identity**: a singleton's historical fold name, or for a resident batch,
+  the first fold plus a digest of its complete ordered membership. Composition
+  changes therefore select new workflow artifacts under mtime-only rerun triggers.
+- **Batch sentinel**: the completion marker named by the batch identity. A resident
+  sentinel may live in a synthetic prediction directory; singleton paths are unchanged.
