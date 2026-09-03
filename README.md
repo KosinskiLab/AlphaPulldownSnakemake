@@ -668,10 +668,19 @@ them in chunks bounded by both query count and total residues, and writes one
 standard AF3 input JSON per protein. Existing AF2 feature generation and the
 remote `--use_mmseqs2` path are unchanged.
 
+The AlphaFold 3 prediction image bundles the verified MMseqs2-GPU `18-8cc5c`
+release at `/opt/mmseqs/bin/mmseqs`, which is the default `binary_path`; it is a
+standalone executable rather than a Python/PyPI dependency. The AlphaFold 2
+image carries the identical pinned binary so both maintained prediction images
+have one reproducible runtime toolchain, although local-MMseqs feature support
+is deliberately AF3-only until a separate AF2 interface is designed. Each
+database path must be an MMseqs2 database prepared for GPU search, including the
+required GPU padding. Host binary directories are not mounted into the image.
+
 ```yaml
 mmseqs2_gpu_features:
   enabled: true
-  binary_path: /opt/mmseqs/bin/mmseqs
+  # binary_path: /opt/mmseqs/bin/mmseqs  # bundled default
   temp_dir: /local-fast-scratch/mmseqs
   batch_max_sequences: 256
   batch_max_residues: 100000
@@ -684,11 +693,12 @@ mmseqs2_gpu_features:
     uniprot: {path: /db/mmseqs/uniprot, identifier: uniprot-2026-08, max_sequences: 50000}
 ```
 
-Database `identifier` values are part of each artifact's provenance. Cached MSAs
-are reused only when the sequence, search settings, identifiers, and hit limits
-still match. The local backend supplies unpaired and paired MSAs; AlphaFold 3's
-native template search remains active. All paths are explicit by design, and the
-job requests exactly one GPU from `slurm_partition`.
+Database `identifier` values and the detected MMseqs2 executable version are part
+of each artifact's provenance. Cached MSAs are reused only when the sequence,
+executable version, search settings, identifiers, and hit limits still match. The
+local backend supplies unpaired and paired MSAs; AlphaFold 3's native template
+search remains active. All paths are explicit by design, and the job requests
+exactly one GPU from `slurm_partition`.
 
 
 ### Structure analysis & reporting

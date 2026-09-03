@@ -176,17 +176,19 @@ def test_linear_resources_default_scaling_without_callbacks():
     assert res["attempt"]({}, input=[], attempt=4) == 4
 
 
-def test_prepare_container_binds_accepts_adapter_owned_paths(monkeypatch, tmp_path):
+def test_prepare_container_binds_accepts_exact_adapter_owned_paths(monkeypatch, tmp_path):
     monkeypatch.delenv("APPTAINER_BINDPATH", raising=False)
     monkeypatch.delenv("SINGULARITY_BINDPATH", raising=False)
 
     common.prepare_container_binds(
         output_directory=str(tmp_path),
         config={},
-        extra_paths=(Path("/opt/mmseqs/bin"),),
+        extra_paths=(Path("/external/mmseqs-databases"),),
     )
 
-    assert "/opt:/opt" in os.environ["APPTAINER_BINDPATH"].split(",")
+    binds = os.environ["APPTAINER_BINDPATH"].split(",")
+    assert "/external/mmseqs-databases:/external/mmseqs-databases" in binds
+    assert "/opt:/opt" not in binds
 
 
 def test_prepare_container_binds_preserves_user_binds_and_adds_required_paths(
@@ -198,12 +200,34 @@ def test_prepare_container_binds_preserves_user_binds_and_adds_required_paths(
     common.prepare_container_binds(
         output_directory=str(tmp_path),
         config={},
-        extra_paths=(Path("/opt/mmseqs/bin"),),
+        extra_paths=(Path("/external/mmseqs-databases"),),
     )
 
     binds = os.environ["APPTAINER_BINDPATH"].split(",")
     assert "/custom:/custom" in binds
-    assert "/opt:/opt" in binds
+    assert "/external/mmseqs-databases:/external/mmseqs-databases" in binds
+    assert "/opt:/opt" not in binds
+
+
+def test_prepare_container_binds_includes_resolved_extra_directory(
+    monkeypatch, tmp_path
+):
+    monkeypatch.delenv("APPTAINER_BINDPATH", raising=False)
+    monkeypatch.delenv("SINGULARITY_BINDPATH", raising=False)
+    target = tmp_path / "real-mmseqs"
+    target.mkdir()
+    link = tmp_path / "mmseqs-link"
+    link.symlink_to(target, target_is_directory=True)
+
+    common.prepare_container_binds(
+        output_directory=str(tmp_path),
+        config={},
+        extra_paths=(link,),
+    )
+
+    binds = os.environ["APPTAINER_BINDPATH"].split(",")
+    assert f"{link}:{link}" in binds
+    assert f"{target}:{target}" in binds
 
 
 # --- length filtering (issue #33 + total caps) -------------------------------

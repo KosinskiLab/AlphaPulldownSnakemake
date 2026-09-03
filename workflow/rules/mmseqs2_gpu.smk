@@ -12,6 +12,7 @@ from typing import Any, Mapping
 
 
 _DATABASE_NAMES = ("uniref90", "mgnify", "small_bfd", "uniprot")
+_BUNDLED_MMSEQS_BINARY = Path("/opt/mmseqs/bin/mmseqs")
 
 
 def _enabled(value: Any) -> bool:
@@ -99,7 +100,10 @@ class LocalMmseqsFeatureConfig:
                 )
         return cls(
             enabled=True,
-            binary_path=Path(_required(values, "binary_path", "configuration")),
+            binary_path=Path(
+                values.get("binary_path", _BUNDLED_MMSEQS_BINARY)
+                or _BUNDLED_MMSEQS_BINARY
+            ),
             temp_dir=Path(_required(values, "temp_dir", "configuration")),
             batch_max_sequences=batch_max_sequences,
             batch_max_residues=batch_max_residues,
@@ -135,8 +139,20 @@ class LocalMmseqsFeatureConfig:
         """Host paths that must be visible inside the prediction container."""
         if not self.enabled or self.binary_path is None or self.temp_dir is None:
             return ()
-        candidates = [self.binary_path.parent, self.temp_dir]
-        candidates.extend(
-            database.path.parent for database in (self.databases or {}).values()
-        )
+
+        def parent_and_target(path: Path) -> tuple[Path, ...]:
+            candidates = [path.parent]
+            try:
+                candidates.append(path.resolve().parent)
+            except (OSError, RuntimeError):
+                pass
+            return tuple(candidates)
+
+        candidates = [self.temp_dir]
+        try:
+            candidates.append(self.temp_dir.resolve())
+        except (OSError, RuntimeError):
+            pass
+        for database in (self.databases or {}).values():
+            candidates.extend(parent_and_target(database.path))
         return tuple(dict.fromkeys(candidates))

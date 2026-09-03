@@ -11,12 +11,13 @@ The workflow adapter supplies the ordered set of required protein FASTAs to Alph
 ## Required behavior
 
 1. The mode is opt-in and valid only for the AlphaFold 3 data pipeline.
-2. UniRef90, MGnify, small-BFD, and paired UniProt paths and database identifiers are explicit configuration; no database discovery occurs.
+2. The prediction image supplies a pinned GPU-capable MMseqs2 executable by default. GPU-compatible, padded UniRef90, MGnify, small-BFD, and paired UniProt paths and database identifiers are explicit configuration; no database discovery occurs.
 3. The batch operation requests one GPU, configured feature threads, and memory sized for its peak query chunk.
 4. Existing precomputed feature symlinks remain outside generated batches.
 5. The normal one-FASTA `create_features` rule remains unchanged when the mode is disabled.
 6. The adapter supplies output compression, local temporary storage, and both chunk limits to AlphaPulldown.
-7. AlphaPulldown decides cache validity and skips only matching artifacts; every required named artifact remains an observable Snakemake output.
+7. AlphaPulldown decides cache validity and skips only matching artifacts; every required named cache artifact is declared as a batch output and remains an observable Snakemake dependency.
+8. Only external database, cache, and temporary directories are bound; the bundled binary and other image content remain visible.
 
 ## Acceptance criteria
 

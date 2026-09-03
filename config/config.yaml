@@ -48,11 +48,13 @@ create_feature_arguments:
 
 # Optional local MMseqs2-GPU MSA backend for AlphaFold 3 protein features. The
 # default false leaves the existing one-protein feature rules unchanged. When
-# enabled, every path and immutable database-build identifier is required; the
-# workflow deliberately does not guess database locations.
+# enabled, every database path and immutable build identifier is required; the
+# workflow deliberately does not guess database locations. Prediction images
+# bundle MMseqs2-GPU at /opt/mmseqs/bin/mmseqs. Database prefixes must reference
+# GPU-compatible MMseqs2 databases padded for GPU search.
 mmseqs2_gpu_features:
   enabled: false
-#  binary_path: /opt/mmseqs/bin/mmseqs
+#  binary_path: /opt/mmseqs/bin/mmseqs  # optional alternate in-image path
 #  temp_dir: /local-fast-scratch/mmseqs
 #  batch_max_sequences: 256
 #  batch_max_residues: 100000

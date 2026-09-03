@@ -453,6 +453,10 @@ LOCAL_MMSEQS2_GPU_CACHE = join(
 LOCAL_MMSEQS2_GPU_SENTINEL = join(
     config["output_directory"], "features", ".mmseqs2_gpu.complete"
 )
+LOCAL_MMSEQS2_GPU_CACHE_ARTIFACTS = tuple(
+    join(LOCAL_MMSEQS2_GPU_CACHE, feature_name(protein))
+    for protein in LOCAL_MMSEQS2_GPU_PROTEINS
+)
 
 
 def local_mmseqs2_gpu_peak_residues(input_files=()):
@@ -590,7 +594,8 @@ if LOCAL_MMSEQS2_GPU.enabled:
                 for protein in LOCAL_MMSEQS2_GPU_PROTEINS
             ],
         output:
-            touch(LOCAL_MMSEQS2_GPU_SENTINEL),
+            cache_artifacts=LOCAL_MMSEQS2_GPU_CACHE_ARTIFACTS,
+            sentinel=touch(LOCAL_MMSEQS2_GPU_SENTINEL),
         params:
             data_directory=config["databases_directory"],
             output_directory=LOCAL_MMSEQS2_GPU_CACHE,
@@ -637,26 +642,24 @@ if LOCAL_MMSEQS2_GPU.enabled:
 
     rule create_features:
         input:
-            LOCAL_MMSEQS2_GPU_SENTINEL,
+            source=lambda wildcards: join(
+                LOCAL_MMSEQS2_GPU_CACHE,
+                feature_name(wildcards.fasta_basename),
+            ),
         output:
             join(
                 config["output_directory"],
                 "features",
                 FEATURE_OUTPUT_PATTERN,
             ),
-        params:
-            source=lambda wildcards: join(
-                LOCAL_MMSEQS2_GPU_CACHE,
-                feature_name(wildcards.fasta_basename),
-            ),
         resources:
             qos=DEFAULT_SLURM_QOS,
             **linear_resources(mem=800, runtime=10),
         run:
-            source = realpath(params.source)
+            source = realpath(str(input.source))
             if not exists(source):
                 raise ValueError(
-                    f"Batched MMseqs2-GPU output is missing {params.source}"
+                    f"Batched MMseqs2-GPU output is missing {input.source}"
                 )
             destination = abspath(str(output[0]))
             temporary_link = destination + ".tmp"
