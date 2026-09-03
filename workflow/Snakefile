@@ -133,7 +133,7 @@ dataset = FoldDataset.from_fold_specifications(
 
 local_sequences = tuple(dataset.sequences_by_origin.get("local", ()))
 
-localrules: symlink_local_files, download_uniprot, symlink_features
+localrules: symlink_local_files, download_uniprot, symlink_features, prediction_batch_manifest
 ruleorder: symlink_local_files > download_uniprot > symlink_features > create_features
 
 # --- Length filtering (issue #33 + backend total-length caps) ----------------
@@ -272,13 +272,12 @@ for fold in kept_folds:
             required_feature_files.append(_json)
 
 # --- Small-job batching (issue #48) ------------------------------------------
-# Group folds into batches that share ONE structure_inference Slurm job. The job
-# runs run_structure_prediction.py once per fold (see the rule's shell loop), so the
-# folds wait in the queue once between them instead of once each -- the main cost for
-# many short inference jobs. A per-fold loop (rather than one call with all folds) is
-# required because the AlphaFold3 backend merges folds passed together into a single
-# combined complex; a shared --jax_compilation_cache_dir recovers most of the
-# per-call compile cost. Composition is decided here at parse time (sequence lengths
+# Group folds into batches that share ONE structure_inference Slurm job. Current
+# AlphaPulldown containers consume an explicit manifest in one resident process, so
+# model runners are initialized once while every manifest row remains an independent
+# fold. Older containers fall back to the established per-fold shell loop. A shared
+# --jax_compilation_cache_dir also persists compiled AF3 buckets. Composition is
+# decided here at parse time (sequence lengths
 # are already resolved above for length filtering / memory sizing), so no checkpoint
 # is needed. A batch's id is its first member: with batch_size <= 1 every batch is one
 # fold whose id IS the fold, giving identical prediction paths and DAG to the unbatched
@@ -376,6 +375,27 @@ def batch_prediction_dirs(batch_id):
         join(config["output_directory"], "predictions", fold)
         for fold in BATCH_FOLDS[batch_id]
     ]
+
+
+def batch_manifest_path(batch_id):
+    return join(
+        config["output_directory"], ".prediction_batches", f"{batch_id}.jsonl"
+    )
+
+
+def resident_batch_manifest(wildcards):
+    if len(BATCH_FOLDS[wildcards.batch]) <= 1:
+        return []
+    return batch_manifest_path(wildcards.batch)
+
+
+def resident_batch_jobs(batch_id):
+    folds = BATCH_FOLDS[batch_id]
+    inputs = [
+        format_af3_requested_fold(fold, protein_delimiter) if IS_AF3 else fold
+        for fold in folds
+    ]
+    return list(zip(folds, inputs, batch_prediction_dirs(batch_id)))
 
 
 def batch_max_tokens_for(batch_id):
@@ -619,9 +639,22 @@ def lookup_batch_features(wildcards):
                 )
     return feature_files
 
+
+rule prediction_batch_manifest:
+    output:
+        join(config["output_directory"], ".prediction_batches", "{batch}.jsonl"),
+    params:
+        contents=lambda wc, output: prediction_batch_manifest(
+            resident_batch_jobs(wc.batch), output[0]
+        ),
+    run:
+        Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
+        Path(output[0]).write_text(params.contents, encoding="utf-8")
+
 rule structure_inference:
     input:
         features=lookup_batch_features,
+        manifest=resident_batch_manifest,
     output:
         join(config["output_directory"], "predictions", "{batch}", "completed_fold.txt"),
     params:
@@ -643,6 +676,7 @@ rule structure_inference:
         cli_parameters=STRUCTURE_INFERENCE_CLI,
         unified_memory="true" if STRUCTURE_INFERENCE_UNIFIED_MEMORY else "false",
         xla_mem_fraction=STRUCTURE_INFERENCE_XLA_MEM_FRACTION,
+        resident=lambda wc: "true" if len(BATCH_FOLDS[wc.batch]) > 1 else "false",
     resources:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
         qos=DEFAULT_SLURM_QOS,
@@ -726,22 +760,29 @@ rule structure_inference:
             fi
             export XLA_CLIENT_MEM_FRACTION="$_aj_frac"
         fi
-        # One run_structure_prediction.py call per fold in the batch (a single call
-        # with several folds would be merged into one complex by the AF3 backend).
-        # The folds share this one Slurm allocation -- the queue is waited on once --
-        # and a shared --jax_compilation_cache_dir lets later folds reuse earlier
-        # compilations. Arrays split on spaces (fold specs / paths contain none).
-        read -ra _aj_inputs <<< "{params.requested_folds}"
-        read -ra _aj_outdirs <<< "{params.fold_output_dirs}"
-        for _aj_i in "${{!_aj_inputs[@]}}"; do
-            run_structure_prediction.py \
-                --input "${{_aj_inputs[$_aj_i]}}" \
-                --output_directory="${{_aj_outdirs[$_aj_i]}}" \
+        if [ "{params.resident}" = "true" ] && command -v run_structure_prediction_batch.py >/dev/null 2>&1; then
+            run_structure_prediction_batch.py \
+                --manifest="{input.manifest}" \
                 --protein_delimiter={params.protein_delimiter} \
                 --data_directory={params.data_directory} \
                 --features_directory={params.feature_directory} \
                 {params.cli_parameters}
-        done
+        else
+            if [ "{params.resident}" = "true" ]; then
+                echo "[resident-inference] batch command unavailable; using the legacy per-fold loop"
+            fi
+            read -ra _aj_inputs <<< "{params.requested_folds}"
+            read -ra _aj_outdirs <<< "{params.fold_output_dirs}"
+            for _aj_i in "${{!_aj_inputs[@]}}"; do
+                run_structure_prediction.py \
+                    --input "${{_aj_inputs[$_aj_i]}}" \
+                    --output_directory="${{_aj_outdirs[$_aj_i]}}" \
+                    --protein_delimiter={params.protein_delimiter} \
+                    --data_directory={params.data_directory} \
+                    --features_directory={params.feature_directory} \
+                    {params.cli_parameters}
+            done
+        fi
 
         mkdir -p "$(dirname "{output}")"
         echo "Completed" > "{output}"

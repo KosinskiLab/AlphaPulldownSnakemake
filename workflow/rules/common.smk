@@ -540,6 +540,31 @@ def batch_inference_args(
     return args
 
 
+def prediction_batch_manifest(jobs, manifest_path) -> str:
+    """Serialize ordered inference jobs for AlphaPulldown resident inference.
+
+    Output directories are relative to the manifest so the handoff remains
+    relocatable when the workflow output tree is mounted into a container.
+    """
+    manifest_parent = Path(manifest_path).expanduser().resolve().parent
+    records = []
+    for job_id, fold_input, output_directory in jobs:
+        relative_output = os.path.relpath(
+            Path(output_directory).expanduser().resolve(), manifest_parent
+        )
+        records.append(
+            json.dumps(
+                {
+                    "job_id": str(job_id),
+                    "input": str(fold_input),
+                    "output_directory": relative_output,
+                },
+                separators=(",", ":"),
+            )
+        )
+    return "\n".join(records) + ("\n" if records else "")
+
+
 # Inference flags each backend accepts, mirroring run_structure_prediction.py's
 # ``_validate_flags_for_backend``. Names are WITHOUT the leading ``--``. This is only
 # used for a parse-time WARNING: the container is the source of truth and hard-errors,

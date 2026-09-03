@@ -129,8 +129,9 @@ length_filter_fetch_uniprot: true
 
 # Small-job batching (issue #48): group several folds into ONE structure_inference
 # Slurm job to amortise queue wait and per-job model loading. The job runs
-# run_structure_prediction.py once over the whole batch (model loaded once, folds
-# predicted back to back). Folds are grouped by size so a batch's memory tracks its
+# run_structure_prediction_batch.py once over the whole batch (model loaded once,
+# folds predicted back to back). Older containers without the batch command fall
+# back to the existing per-fold loop. Folds are grouped by size so memory tracks its
 # largest fold and its walltime the number of folds. batch_size is the max folds per
 # job (1 = today's one-job-per-fold behaviour, fully unchanged). batch_max_tokens
 # optionally caps the summed residues per batch so total walltime stays within the
