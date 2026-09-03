@@ -597,6 +597,8 @@ batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
 - Folds are grouped **by size**, so a batch's memory tracks its largest fold and its
   walltime scales with the number of folds. `batch_max_tokens` keeps a batch's total
   work within the partition's `MaxTime`; a single oversized fold always runs alone.
+  AlphaFold2 monomers and multimers are grouped separately because they use different
+  model runners; AlphaFold3 retains size-only grouping.
 - Works with both AlphaFold2 and AlphaFold3. A JSONL manifest distinguishes independent
   folds from the chains inside each fold, so AF3 does not merge separate folds. The
   backend and model runners are initialized once per batch. Containers predating the

@@ -132,10 +132,12 @@ length_filter_fetch_uniprot: true
 # run_structure_prediction_batch.py once over the whole batch (model loaded once,
 # folds predicted back to back). Older containers without the batch command fall
 # back to the existing per-fold loop. Folds are grouped by size so memory tracks its
-# largest fold and its walltime the number of folds. batch_size is the max folds per
-# job (1 = today's one-job-per-fold behaviour, fully unchanged). batch_max_tokens
-# optionally caps the summed residues per batch so total walltime stays within the
-# partition MaxTime; 0 disables that cap (a single oversized fold always runs alone).
+# largest fold and its walltime the number of folds; AF2 monomers and multimers are
+# grouped separately because they use different model runners. batch_size is the max
+# folds per job (1 = today's one-job-per-fold behaviour, fully unchanged).
+# batch_max_tokens optionally caps the summed residues per batch so total walltime
+# stays within the partition MaxTime; 0 disables that cap (a single oversized fold
+# always runs alone).
 # Trade-off: a failed batch reruns all its folds, so keep batches modest; folds whose
 # outputs already exist are skipped on rerun when the backend supports resuming.
 batch_size: 1

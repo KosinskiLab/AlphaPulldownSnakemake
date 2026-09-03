@@ -718,6 +718,8 @@ def bin_folds(
     *,
     batch_size: int = 1,
     max_batch_tokens: int = 0,
+    backend: str | None = None,
+    delimiter: str = "+",
 ) -> list[list[str]]:
     """Group folds into batches that share a single inference job (issue #48).
 
@@ -725,6 +727,10 @@ def bin_folds(
     loads the model once and predicts the folds back to back. Batching trades
     finer-grained retries for far less queue wait and a single model-load per
     batch instead of one per fold.
+
+    AlphaFold2 monomers and multimers require different model runners, so they
+    are binned separately when ``backend`` is ``alphafold2``. AlphaFold3 uses a
+    shared runner configuration and retains the configuration-agnostic grouping.
 
     Folds are sorted by token count so a batch holds similarly sized folds: the
     batch's memory is sized from its largest fold and its walltime from the sum,
@@ -745,18 +751,29 @@ def bin_folds(
     ordered = sorted(items, key=lambda ft: (ft[1], ft[0]))
     cap = int(max_batch_tokens or 0)
 
-    batches: list[list[str]] = []
-    current: list[str] = []
-    current_tokens = 0
+    groups: dict[str, list[tuple[str, int]]] = {}
     for fold, tokens in ordered:
-        too_many = len(current) >= batch_size
-        too_big = cap > 0 and bool(current) and (current_tokens + tokens) > cap
-        if current and (too_many or too_big):
+        configuration = "shared"
+        if str(backend or "").strip().lower() in ("alphafold2", "af2"):
+            chain_count = sum(
+                copies for _name, copies in parse_fold_chains(fold, delimiter)
+            )
+            configuration = "multimer" if chain_count > 1 else "monomer"
+        groups.setdefault(configuration, []).append((fold, tokens))
+
+    batches: list[list[str]] = []
+    for group in groups.values():
+        current: list[str] = []
+        current_tokens = 0
+        for fold, tokens in group:
+            too_many = len(current) >= batch_size
+            too_big = cap > 0 and bool(current) and (current_tokens + tokens) > cap
+            if current and (too_many or too_big):
+                batches.append(current)
+                current = []
+                current_tokens = 0
+            current.append(fold)
+            current_tokens += tokens
+        if current:
             batches.append(current)
-            current = []
-            current_tokens = 0
-        current.append(fold)
-        current_tokens += tokens
-    if current:
-        batches.append(current)
     return batches

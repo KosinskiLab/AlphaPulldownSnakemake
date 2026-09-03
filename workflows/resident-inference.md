@@ -8,7 +8,8 @@ existing order and invoke `run_structure_prediction_batch.py` once in the
 `structure_inference` Slurm allocation. Preserve token sorting,
 `batch_max_tokens`, largest-fold memory and GPU-tier sizing, count-scaled runtime,
 all backend flags, per-fold output directories, retry behavior, and the existing
-batch sentinel.
+batch sentinel. AlphaFold2 monomer and multimer folds require different model
+runners and are therefore size-binned separately; AlphaFold3 grouping is unchanged.
 
 For `batch_size <= 1`, invoke `run_structure_prediction.py` exactly as before so
 the default remains compatible with older prediction containers.

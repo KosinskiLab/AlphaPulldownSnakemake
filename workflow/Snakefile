@@ -281,8 +281,10 @@ for fold in kept_folds:
 # are already resolved above for length filtering / memory sizing), so no checkpoint
 # is needed. A batch's id is its first member: with batch_size <= 1 every batch is one
 # fold whose id IS the fold, giving identical prediction paths and DAG to the unbatched
-# pipeline. Folds are grouped by size; batch_max_tokens optionally caps the summed
-# tokens per batch so a batch's total walltime stays within the partition limit.
+# pipeline. Folds are grouped by size; AF2 monomers and multimers are binned
+# separately because their runner configurations differ. batch_max_tokens optionally
+# caps the summed tokens per batch so a batch's total walltime stays within the
+# partition limit.
 BATCH_SIZE = int(config.get("batch_size", 1) or 1)
 BATCH_MAX_TOKENS = int(config.get("batch_max_tokens", 0) or 0)
 
@@ -353,6 +355,8 @@ if BATCH_SIZE > 1 and kept_folds:
         [(fold, _fold_grouping_tokens(fold)) for fold in kept_folds],
         batch_size=BATCH_SIZE,
         max_batch_tokens=BATCH_MAX_TOKENS,
+        backend=_RAW_FOLD_BACKEND,
+        delimiter=protein_delimiter,
     )
 else:
     _fold_batches = [[fold] for fold in kept_folds]
