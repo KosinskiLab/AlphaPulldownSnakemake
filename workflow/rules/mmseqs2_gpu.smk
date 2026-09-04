@@ -299,10 +299,14 @@ class LocalMmseqsFeatureConfig:
     batch_max_sequences: int = 256
     batch_max_residues: int = 100_000
     e_value: float = 1e-4
-    gpu_database_ram_mb: int = 64_000
-    gpu_chunk_ram_per_residue_mb: float = 0.02
+    use_gpu: bool = True
+    search_ram_mb: int = 160_000
     gpu_ram_scaling: float = 1.1
-    gpu_runtime_base_minutes: float = 15
+    search_runtime_base_minutes: float = 90
+    cpu_runtime_multiplier: float = 2.5
+    finalize_base_ram_mb: int = 2_000
+    finalize_ram_per_residue_mb: float = 1.0
+    finalize_runtime_minutes_base: float = 30
     gpu_runtime_per_sequence_minutes: float = 0.5
     gpu_runtime_per_1000_residues: float = 1.0
     template_database_ids: Mapping[str, str] | None = None
@@ -363,13 +367,19 @@ class LocalMmseqsFeatureConfig:
         batch_max_sequences = int(values.get("batch_max_sequences", 256))
         batch_max_residues = int(values.get("batch_max_residues", 100_000))
         e_value = float(values.get("e_value", 1e-4))
-        gpu_database_ram_mb = int(values.get("gpu_database_ram_mb", 64_000))
-        gpu_chunk_ram_per_residue_mb = float(
-            values.get("gpu_chunk_ram_per_residue_mb", 0.02)
-        )
+        use_gpu = _enabled(values.get("use_gpu", True))
+        search_ram_mb = int(values.get("search_ram_mb", 160_000))
         gpu_ram_scaling = float(values.get("gpu_ram_scaling", 1.1))
-        gpu_runtime_base_minutes = float(
-            values.get("gpu_runtime_base_minutes", 15)
+        search_runtime_base_minutes = float(
+            values.get("search_runtime_base_minutes", 90)
+        )
+        cpu_runtime_multiplier = float(values.get("cpu_runtime_multiplier", 2.5))
+        finalize_base_ram_mb = int(values.get("finalize_base_ram_mb", 2_000))
+        finalize_ram_per_residue_mb = float(
+            values.get("finalize_ram_per_residue_mb", 1.0)
+        )
+        finalize_runtime_minutes_base = float(
+            values.get("finalize_runtime_minutes_base", 30)
         )
         gpu_runtime_per_sequence_minutes = float(
             values.get("gpu_runtime_per_sequence_minutes", 0.5)
@@ -381,10 +391,13 @@ class LocalMmseqsFeatureConfig:
             ("batch_max_sequences", batch_max_sequences),
             ("batch_max_residues", batch_max_residues),
             ("e_value", e_value),
-            ("gpu_database_ram_mb", gpu_database_ram_mb),
-            ("gpu_chunk_ram_per_residue_mb", gpu_chunk_ram_per_residue_mb),
+            ("search_ram_mb", search_ram_mb),
             ("gpu_ram_scaling", gpu_ram_scaling),
-            ("gpu_runtime_base_minutes", gpu_runtime_base_minutes),
+            ("search_runtime_base_minutes", search_runtime_base_minutes),
+            ("cpu_runtime_multiplier", cpu_runtime_multiplier),
+            ("finalize_base_ram_mb", finalize_base_ram_mb),
+            ("finalize_ram_per_residue_mb", finalize_ram_per_residue_mb),
+            ("finalize_runtime_minutes_base", finalize_runtime_minutes_base),
             ("gpu_runtime_per_sequence_minutes", gpu_runtime_per_sequence_minutes),
             ("gpu_runtime_per_1000_residues", gpu_runtime_per_1000_residues),
         ):
@@ -412,10 +425,14 @@ class LocalMmseqsFeatureConfig:
             batch_max_sequences=batch_max_sequences,
             batch_max_residues=batch_max_residues,
             e_value=e_value,
-            gpu_database_ram_mb=gpu_database_ram_mb,
-            gpu_chunk_ram_per_residue_mb=gpu_chunk_ram_per_residue_mb,
+            use_gpu=use_gpu,
+            search_ram_mb=search_ram_mb,
             gpu_ram_scaling=gpu_ram_scaling,
-            gpu_runtime_base_minutes=gpu_runtime_base_minutes,
+            search_runtime_base_minutes=search_runtime_base_minutes,
+            cpu_runtime_multiplier=cpu_runtime_multiplier,
+            finalize_base_ram_mb=finalize_base_ram_mb,
+            finalize_ram_per_residue_mb=finalize_ram_per_residue_mb,
+            finalize_runtime_minutes_base=finalize_runtime_minutes_base,
             gpu_runtime_per_sequence_minutes=gpu_runtime_per_sequence_minutes,
             gpu_runtime_per_1000_residues=gpu_runtime_per_1000_residues,
             template_database_ids=template_database_ids,
@@ -432,6 +449,7 @@ class LocalMmseqsFeatureConfig:
             "mmseqs_batch_max_sequences": self.batch_max_sequences,
             "mmseqs_batch_max_residues": self.batch_max_residues,
             "mmseqs_e_value": self.e_value,
+            "mmseqs_use_gpu": "true" if self.use_gpu else "false",
             "mmseqs_threads": threads,
         }
         for name, database in (self.databases or {}).items():
@@ -488,26 +506,54 @@ class LocalMmseqsFeatureConfig:
             }
         )
 
-    def gpu_memory_mb(
-        self, residues: int, *, safety: float, attempt: int, cap_mb: int = 0
-    ) -> int:
-        """Host RAM for one GPU search shard, not the complete dataset."""
-        chunk_residues = min(max(int(residues), 0), self.batch_max_residues)
-        estimate = safety * (
-            self.gpu_database_ram_mb
-            + self.gpu_chunk_ram_per_residue_mb * chunk_residues
-        )
+    def search_memory_mb(self, *, safety: float, attempt: int, cap_mb: int = 0) -> int:
+        """Host RAM for one search shard.
+
+        Measured flat in the shard size: 1, 8, 32 and 128 queries against the full
+        AlphaFold 3 database set all peaked at the same 149 GB, because the cost is
+        streaming the padded databases and not the queries. So this takes no residue
+        term - adding one would only pretend to a precision the measurement denies.
+        """
+        estimate = safety * self.search_ram_mb
         value = math.ceil(
             estimate * (self.gpu_ram_scaling ** max(int(attempt) - 1, 0))
         )
         return min(value, cap_mb) if cap_mb else value
 
-    def gpu_runtime_minutes(
+    def finalize_memory_mb(
+        self, residues: int, *, safety: float, attempt: int, cap_mb: int = 0
+    ) -> int:
+        """Host RAM for finalizing one protein: template search plus artifact writing.
+
+        Measured 0.24 GB at 117 residues and 0.57 GB at 887 (shard of eight), i.e. a
+        small constant with a shallow slope - two orders of magnitude below the
+        MSA-generation model this stage used to borrow.
+        """
+        estimate = safety * (
+            self.finalize_base_ram_mb
+            + self.finalize_ram_per_residue_mb * max(int(residues), 0)
+        )
+        value = math.ceil(estimate * (self.gpu_ram_scaling ** max(int(attempt) - 1, 0)))
+        return min(value, cap_mb) if cap_mb else value
+
+    def finalize_runtime_minutes(self, *, attempt: int) -> int:
+        """Wall time for one finalization. Measured ~14 s per protein."""
+        return math.ceil(self.finalize_runtime_minutes_base * max(int(attempt), 1))
+
+    def search_runtime_minutes(
         self, sequences: int, residues: int, *, attempt: int
     ) -> int:
-        """Wall time scaled by the amount of work in one shard."""
+        """Wall time for one search shard.
+
+        Also dominated by the database scan: 1 query took 65 min and 128 took 66 min on
+        one L40S, so the base term carries the estimate and the per-query terms are a
+        small margin. CPU search measured 2.4x slower than GPU on the same shard.
+        """
+        base = self.search_runtime_base_minutes
+        if not self.use_gpu:
+            base *= self.cpu_runtime_multiplier
         estimate = (
-            self.gpu_runtime_base_minutes
+            base
             + self.gpu_runtime_per_sequence_minutes * max(int(sequences), 0)
             + self.gpu_runtime_per_1000_residues
             * math.ceil(max(int(residues), 0) / 1000)

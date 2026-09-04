@@ -53,22 +53,39 @@ create_feature_arguments:
 # bundle MMseqs2-GPU at /opt/mmseqs/bin/mmseqs. Database prefixes must reference
 # GPU-compatible MMseqs2 databases padded for GPU search. GPU MSA shards release
 # their GPU before independent CPU template/finalization jobs begin.
-mmseqs2_gpu_features:
+mmseqs2_features:
+  # OFF by default. MSA depth from this backend has not been shown equivalent to the
+  # native jackhmmer pipeline - measured recall against it was 90% overall but 54-68%
+  # on the shallowest families - so treat it as opt-in until you have benchmarked it
+  # for your own targets. README: "Local MMseqs2 features".
   enabled: false
+  # WHICH SEARCH RUNS. true: MMseqs2 on a GPU, one GPU per search shard, on
+  # slurm_partition. false: the same search on CPU, no GPU requested, on
+  # slurm_partition_cpu. GPU measured 2.4x faster and used 3.4x less host RAM on an
+  # identical shard. Either way the databases must be GPU-padded (makepaddedseqdb).
+  use_gpu: true
 #  binary_path: /opt/mmseqs/bin/mmseqs  # only supported path; bundled in the image
 #  binary_id: 8cc5ce367b5638c4306c2d7cfc652dd099a4643f  # update with image
 #  temp_dir: /local-fast-scratch/mmseqs
-#  batch_max_sequences: 256  # maximum queries in one GPU shard / core batch
+#  # Queries per shard. Cost is the database scan, not the queries: 1 and 128 queries
+#  # took 65 and 66 minutes and the same memory, so larger shards are close to free.
+#  batch_max_sequences: 256
 #  batch_max_residues: 100000
 #  e_value: 0.0001
-#  # Host-RAM and time model for one GPU shard. gpu_database_ram_mb should cover
-#  # the largest padded target database plus MMseqs overhead on your system.
-#  gpu_database_ram_mb: 64000
-#  gpu_chunk_ram_per_residue_mb: 0.02
+#  # Search stage. Memory measured FLAT in shard size (149 GB for 1 and for 128
+#  # queries against the full AF3 database set), hence a single figure and no
+#  # per-residue term. Lower it only if you search smaller databases.
+#  search_ram_mb: 160000
 #  gpu_ram_scaling: 1.1
-#  gpu_runtime_base_minutes: 15
+#  search_runtime_base_minutes: 90
+#  cpu_runtime_multiplier: 2.5          # CPU search is ~2.4x slower than GPU
 #  gpu_runtime_per_sequence_minutes: 0.5
 #  gpu_runtime_per_1000_residues: 1.0
+#  # Finalization stage (CPU): AF3 template search over an MSA that already exists.
+#  # Measured 0.24 GB / 13 s for one protein, 0.57 GB / 110 s for eight.
+#  finalize_base_ram_mb: 2000
+#  finalize_ram_per_residue_mb: 1.0
+#  finalize_runtime_minutes_base: 30
 #  template_database_ids:  # immutable identities for native AF3 template cache
 #    pdb_seqres: pdb-seqres-2026-08
 #    mmcif: pdb-mmcif-2026-08

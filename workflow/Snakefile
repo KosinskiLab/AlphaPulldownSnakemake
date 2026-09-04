@@ -27,8 +27,8 @@ if isinstance(feature_directories, (str, Path)):
 # decide AF2 vs AF3 outputs
 DATA_PIPELINE = config["create_feature_arguments"].get("--data_pipeline", "alphafold2").lower()
 IS_AF3 = DATA_PIPELINE in ("alphafold3", "af3")
-LOCAL_MMSEQS2_GPU = LocalMmseqsFeatureConfig.from_mapping(
-    config.get("mmseqs2_gpu_features"), data_pipeline=DATA_PIPELINE
+LOCAL_MMSEQS2 = LocalMmseqsFeatureConfig.from_mapping(
+    config.get("mmseqs2_features"), data_pipeline=DATA_PIPELINE
 )
 
 # Backend identity (feature stage = data pipeline; inference stage = fold backend,
@@ -122,7 +122,7 @@ prepare_container_binds(
     config=config,
     feature_directories=feature_directories,
     input_files=input_files,
-    extra_paths=LOCAL_MMSEQS2_GPU.bind_paths,
+    extra_paths=LOCAL_MMSEQS2.bind_paths,
 )
 
 fold_specifications = generate_fold_specifications(
@@ -442,7 +442,7 @@ for feature_directory in feature_directories:
         precomputed_features.append(available_feature_path)
 
 _precomputed_feature_basenames = {basename(path) for path in precomputed_features}
-LOCAL_MMSEQS2_GPU_PROTEINS = tuple(
+LOCAL_MMSEQS2_PROTEINS = tuple(
     protein
     for protein in kept_proteins
     if feature_name(protein) not in _precomputed_feature_basenames
@@ -450,50 +450,50 @@ LOCAL_MMSEQS2_GPU_PROTEINS = tuple(
 _MMSEQS2_GPU_MAX_TEMPLATE_DATE = str(
     config["create_feature_arguments"].get("--max_template_date", "")
 )
-_MMSEQS2_GPU_MSA_CACHE_KEY = LOCAL_MMSEQS2_GPU.msa_cache_key(
+_MMSEQS2_GPU_MSA_CACHE_KEY = LOCAL_MMSEQS2.msa_cache_key(
     str(config["prediction_container"])
-) if LOCAL_MMSEQS2_GPU.enabled else "disabled"
-_MMSEQS2_GPU_FEATURE_CACHE_KEY = LOCAL_MMSEQS2_GPU.feature_cache_key(
+) if LOCAL_MMSEQS2.enabled else "disabled"
+_MMSEQS2_GPU_FEATURE_CACHE_KEY = LOCAL_MMSEQS2.feature_cache_key(
     _MMSEQS2_GPU_MAX_TEMPLATE_DATE,
     str(config["prediction_container"]),
-) if LOCAL_MMSEQS2_GPU.enabled else "disabled"
-LOCAL_MMSEQS2_GPU_MSA_CACHE = join(
+) if LOCAL_MMSEQS2.enabled else "disabled"
+LOCAL_MMSEQS2_MSA_CACHE = join(
     config["output_directory"],
     "features",
     ".mmseqs2_gpu_msa_cache",
     _MMSEQS2_GPU_MSA_CACHE_KEY,
 )
-LOCAL_MMSEQS2_GPU_CACHE = join(
+LOCAL_MMSEQS2_CACHE = join(
     config["output_directory"],
     "features",
     ".mmseqs2_gpu_cache",
     _MMSEQS2_GPU_FEATURE_CACHE_KEY,
 )
-_LOCAL_MMSEQS2_GPU_LENGTHS = {
+_LOCAL_MMSEQS2_LENGTHS = {
     protein: (
         int(sequence_length_cache.get(protein, 0) or 0)
         or residue_count(
             join(config["output_directory"], "data", f"{protein}.fasta")
         )
     )
-    for protein in LOCAL_MMSEQS2_GPU_PROTEINS
+    for protein in LOCAL_MMSEQS2_PROTEINS
 }
-LOCAL_MMSEQS2_GPU_SHARDS = plan_feature_shards(
-    LOCAL_MMSEQS2_GPU_PROTEINS,
-    _LOCAL_MMSEQS2_GPU_LENGTHS,
-    max_sequences=LOCAL_MMSEQS2_GPU.batch_max_sequences,
-    max_residues=LOCAL_MMSEQS2_GPU.batch_max_residues,
+LOCAL_MMSEQS2_SHARDS = plan_feature_shards(
+    LOCAL_MMSEQS2_PROTEINS,
+    _LOCAL_MMSEQS2_LENGTHS,
+    max_sequences=LOCAL_MMSEQS2.batch_max_sequences,
+    max_residues=LOCAL_MMSEQS2.batch_max_residues,
 )
-LOCAL_MMSEQS2_GPU_SCHEDULED_SHARDS = schedule_feature_shards(
-    LOCAL_MMSEQS2_GPU_SHARDS,
-    Path(LOCAL_MMSEQS2_GPU_MSA_CACHE),
+LOCAL_MMSEQS2_SCHEDULED_SHARDS = schedule_feature_shards(
+    LOCAL_MMSEQS2_SHARDS,
+    Path(LOCAL_MMSEQS2_MSA_CACHE),
 )
-LOCAL_MMSEQS2_GPU_SHARD_JOB = {
-    job.identifier: job.shard for job in LOCAL_MMSEQS2_GPU_SCHEDULED_SHARDS
+LOCAL_MMSEQS2_SHARD_JOB = {
+    job.identifier: job.shard for job in LOCAL_MMSEQS2_SCHEDULED_SHARDS
 }
-LOCAL_MMSEQS2_GPU_COMPLETION_BY_PROTEIN = {
+LOCAL_MMSEQS2_COMPLETION_BY_PROTEIN = {
     protein: str(job.summary_path)
-    for job in LOCAL_MMSEQS2_GPU_SCHEDULED_SHARDS
+    for job in LOCAL_MMSEQS2_SCHEDULED_SHARDS
     for protein in job.shard.proteins
 }
 
@@ -612,51 +612,55 @@ rule symlink_features:
                 remove(out_file)
             symlink(source, out_file)
 
-if LOCAL_MMSEQS2_GPU.enabled:
+if LOCAL_MMSEQS2.enabled:
     rule create_mmseqs2_gpu_msa_shard:
         input:
             fastas=lambda wildcards: [
                 join(config["output_directory"], "data", f"{protein}.fasta")
-                for protein in LOCAL_MMSEQS2_GPU_SHARD_JOB[
+                for protein in LOCAL_MMSEQS2_SHARD_JOB[
                     wildcards.mmseqs_shard
                 ].proteins
             ],
         output:
             summary=join(
-                LOCAL_MMSEQS2_GPU_MSA_CACHE,
+                LOCAL_MMSEQS2_MSA_CACHE,
                 ".completed",
                 "{mmseqs_shard}.json",
             ),
         params:
-            msa_output_directory=LOCAL_MMSEQS2_GPU_MSA_CACHE,
+            msa_output_directory=LOCAL_MMSEQS2_MSA_CACHE,
             fasta_paths=lambda wildcards, input: ",".join(
                 str(path) for path in input.fastas
             ),
             mmseqs_cli_parameters=" ".join(
-                LOCAL_MMSEQS2_GPU.msa_cli_arguments(threads=feature_threads)
+                LOCAL_MMSEQS2.msa_cli_arguments(threads=feature_threads)
             ),
         resources:
-            slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
+            # A CPU search needs no GPU and belongs on the CPU partitions.
+            **(
+                {
+                    "slurm_partition": (DEFAULT_SLURM_PARTITION or "gpu"),
+                    "gpu": 1,
+                    "tasks_per_gpu": 0,
+                }
+                if LOCAL_MMSEQS2.use_gpu
+                else dict(CPU_PARTITION_RESOURCE)
+            ),
             qos=DEFAULT_SLURM_QOS,
-            gpu=1,
-            tasks_per_gpu=0,
             **linear_resources(
-                mem_fn=lambda wildcards, attempt: LOCAL_MMSEQS2_GPU.gpu_memory_mb(
-                    LOCAL_MMSEQS2_GPU_SHARD_JOB[
-                        wildcards.mmseqs_shard
-                    ].total_residues,
+                mem_fn=lambda wildcards, attempt: LOCAL_MMSEQS2.search_memory_mb(
                     safety=MEM_SAFETY_FACTOR,
                     attempt=attempt,
                     cap_mb=MAX_MEM_MB,
                 ),
                 runtime_fn=lambda wildcards, attempt: (
-                    LOCAL_MMSEQS2_GPU.gpu_runtime_minutes(
+                    LOCAL_MMSEQS2.search_runtime_minutes(
                         len(
-                            LOCAL_MMSEQS2_GPU_SHARD_JOB[
+                            LOCAL_MMSEQS2_SHARD_JOB[
                                 wildcards.mmseqs_shard
                             ].proteins
                         ),
-                        LOCAL_MMSEQS2_GPU_SHARD_JOB[
+                        LOCAL_MMSEQS2_SHARD_JOB[
                             wildcards.mmseqs_shard
                         ].total_residues,
                         attempt=attempt,
@@ -675,7 +679,7 @@ if LOCAL_MMSEQS2_GPU.enabled:
                 {params.mmseqs_cli_parameters}
             """
 
-    rule finalize_mmseqs2_gpu_features:
+    rule finalize_mmseqs2_features:
         input:
             fasta=join(
                 config["output_directory"],
@@ -683,18 +687,18 @@ if LOCAL_MMSEQS2_GPU.enabled:
                 "{fasta_basename}.fasta",
             ),
             msa_complete=lambda wildcards: (
-                LOCAL_MMSEQS2_GPU_COMPLETION_BY_PROTEIN[
+                LOCAL_MMSEQS2_COMPLETION_BY_PROTEIN[
                     wildcards.fasta_basename
                 ]
             ),
         output:
-            join(LOCAL_MMSEQS2_GPU_CACHE, FEATURE_OUTPUT_PATTERN),
+            join(LOCAL_MMSEQS2_CACHE, FEATURE_OUTPUT_PATTERN),
         wildcard_constraints:
             fasta_basename="[^/]+",
         params:
             data_directory=config["databases_directory"],
-            output_directory=LOCAL_MMSEQS2_GPU_CACHE,
-            msa_output_directory=LOCAL_MMSEQS2_GPU_MSA_CACHE,
+            output_directory=LOCAL_MMSEQS2_CACHE,
+            msa_output_directory=LOCAL_MMSEQS2_MSA_CACHE,
             compress_features=str(
                 config["create_feature_arguments"].get(
                     "--compress_features", False
@@ -702,27 +706,31 @@ if LOCAL_MMSEQS2_GPU.enabled:
             ).lower(),
             max_template_date=_MMSEQS2_GPU_MAX_TEMPLATE_DATE,
             finalize_cli_parameters=" ".join(
-                LOCAL_MMSEQS2_GPU.finalize_cli_arguments()
+                LOCAL_MMSEQS2.finalize_cli_arguments()
             ),
         resources:
             qos=DEFAULT_SLURM_QOS,
             **CPU_PARTITION_RESOURCE,
+            # NOT estimate_feature_mem_mb: those constants were fitted to jackhmmer and
+            # HHblits building an MSA from scratch. This stage does not build MSAs - they
+            # arrive in the bundle - it runs AF3's native template search and writes the
+            # artifact. Measured at 0.24 GB / 13 s for one protein and 0.57 GB / 110 s for
+            # eight, against the 24 GB and 24 h the old model asked for.
             **linear_resources(
-                mem_fn=lambda wildcards, input, attempt: estimate_feature_mem_mb(
+                mem_fn=lambda wildcards, input, attempt: LOCAL_MMSEQS2.finalize_memory_mb(
                     chain_residue_count(
                         wildcards.fasta_basename,
                         join(config["output_directory"], "data"),
                         length_cache=sequence_length_cache,
                     )
                     or residue_count(str(input.fasta)),
-                    base_mb=base_feature_ram,
-                    per_residue_mb=feature_ram_per_residue,
-                    scaling=feature_scaling,
                     safety=MEM_SAFETY_FACTOR,
                     attempt=attempt,
                     cap_mb=MAX_MEM_MB,
                 ),
-                runtime_fn=lambda wildcards, attempt: 1440 * attempt,
+                runtime_fn=lambda wildcards, attempt: (
+                    LOCAL_MMSEQS2.finalize_runtime_minutes(attempt=attempt)
+                ),
             ),
         threads: feature_threads,
         container:
@@ -743,7 +751,7 @@ if LOCAL_MMSEQS2_GPU.enabled:
     rule create_features:
         input:
             source=lambda wildcards: join(
-                LOCAL_MMSEQS2_GPU_CACHE,
+                LOCAL_MMSEQS2_CACHE,
                 feature_name(wildcards.fasta_basename),
             ),
         output:

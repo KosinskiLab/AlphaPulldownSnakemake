@@ -73,7 +73,7 @@ def _workflow_case(tmp_path, proteins, *, mmseqs_config=None):
             "only_generate_features": True,
             "enable_structure_analysis": False,
             "max_total_length": 0,
-            "mmseqs2_gpu_features": mmseqs_config or _config(),
+            "mmseqs2_features": mmseqs_config or _config(),
         }
     )
     config["create_feature_arguments"]["--compress_features"] = False
@@ -371,25 +371,48 @@ def test_non_object_completion_summary_schedules_repair(tmp_path, summary):
     assert scheduled.identifier.startswith(f"{shard.identifier}-repair-")
 
 
-def test_gpu_resources_depend_on_one_shard_not_all_dataset_residues():
+def test_search_memory_is_flat_in_shard_size():
+    """Measured: 1, 8, 32 and 128 queries against the full database set all peaked at
+    the same 149 GB, so the estimate must not grow with the query load."""
     adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
-        _config(
-            batch_max_residues=100_000,
-            gpu_database_ram_mb=64_000,
-            gpu_chunk_ram_per_residue_mb=0.02,
-            gpu_ram_scaling=1.2,
-            gpu_runtime_base_minutes=15,
-            gpu_runtime_per_sequence_minutes=0.5,
-            gpu_runtime_per_1000_residues=1.0,
-        ),
+        _config(batch_max_residues=100_000, search_ram_mb=160_000, gpu_ram_scaling=1.2),
         data_pipeline="alphafold3",
     )
+    assert adapter.search_memory_mb(safety=1.0, attempt=1) == 160_000
+    assert adapter.search_memory_mb(safety=1.0, attempt=2) == 192_000
 
-    # One maximum-size 100k-residue chunk needs 66 GB before the global safety
-    # factor. It must not become 64 GB + 8 MB * every residue (~864 GB).
-    assert adapter.gpu_memory_mb(100_000, safety=1.0, attempt=1) == 66_000
-    assert adapter.gpu_memory_mb(100_000, safety=1.0, attempt=2) == 79_200
-    assert adapter.gpu_runtime_minutes(200, 100_000, attempt=1) == 215
+
+def test_cpu_search_is_allowed_more_wall_time_than_gpu():
+    """CPU search measured 2.4x slower than GPU on the same shard."""
+    gpu = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(search_runtime_base_minutes=90), data_pipeline="alphafold3"
+    )
+    cpu = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(search_runtime_base_minutes=90, use_gpu=False),
+        data_pipeline="alphafold3",
+    )
+    assert gpu.use_gpu is True and cpu.use_gpu is False
+    assert cpu.search_runtime_minutes(8, 1_000, attempt=1) > (
+        gpu.search_runtime_minutes(8, 1_000, attempt=1)
+    )
+
+
+def test_finalization_is_sized_far_below_msa_generation():
+    """Measured 0.24 GB / 13 s for one protein; the old model asked for 24 GB and 24 h."""
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(), data_pipeline="alphafold3"
+    )
+    assert adapter.finalize_memory_mb(400, safety=1.0, attempt=1) < 6_000
+    assert adapter.finalize_runtime_minutes(attempt=1) <= 60
+
+
+def test_use_gpu_reaches_the_core_command():
+    for use_gpu, expected in ((True, "true"), (False, "false")):
+        adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+            _config(use_gpu=use_gpu), data_pipeline="alphafold3"
+        )
+        args = adapter.msa_cli_arguments(threads=8)
+        assert f"--mmseqs_use_gpu={expected}" in args
 
 
 def test_cache_namespaces_change_with_search_and_template_provenance():
@@ -427,7 +450,7 @@ def test_partial_msa_cache_schedules_shard_retry_and_cpu_finalization(tmp_path):
     config, config_path, output_directory = _workflow_case(tmp_path, ("alpha",))
     feature_directory = output_directory / "features"
     adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
-        config["mmseqs2_gpu_features"], data_pipeline="alphafold3"
+        config["mmseqs2_features"], data_pipeline="alphafold3"
     )
     msa_cache = (
         feature_directory
@@ -440,7 +463,7 @@ def test_partial_msa_cache_schedules_shard_retry_and_cpu_finalization(tmp_path):
     completed = _run_snakemake(config_path, extra_args=("--dry-run",))
 
     assert "create_mmseqs2_gpu_msa_shard" in completed.stdout
-    assert "finalize_mmseqs2_gpu_features" in completed.stdout
+    assert "finalize_mmseqs2_features" in completed.stdout
     assert partial_bundle.read_text(encoding="utf-8") == '{"durable": true}\n'
     cache_artifact = (
         feature_directory
@@ -457,7 +480,7 @@ def test_partial_msa_cache_schedules_shard_retry_and_cpu_finalization(tmp_path):
 def test_missing_bundle_after_completion_schedules_automatic_gpu_repair(tmp_path):
     config, config_path, output_directory = _workflow_case(tmp_path, ("alpha",))
     adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
-        config["mmseqs2_gpu_features"], data_pipeline="alphafold3"
+        config["mmseqs2_features"], data_pipeline="alphafold3"
     )
     msa_cache = (
         output_directory
@@ -493,7 +516,7 @@ def test_dry_run_schedules_bounded_gpu_shards_then_parallel_cpu_jobs(tmp_path):
     completed = _run_snakemake(config_path, extra_args=("--dry-run",))
 
     assert completed.stdout.count("rule create_mmseqs2_gpu_msa_shard:") == 2
-    assert completed.stdout.count("rule finalize_mmseqs2_gpu_features:") == 3
+    assert completed.stdout.count("rule finalize_mmseqs2_features:") == 3
     assert "gpu=1" in completed.stdout
 
 
@@ -509,7 +532,7 @@ def test_failed_gpu_shard_preserves_completed_msa_bundles_for_retry(tmp_path):
     )
 
     adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
-        config["mmseqs2_gpu_features"], data_pipeline="alphafold3"
+        config["mmseqs2_features"], data_pipeline="alphafold3"
     )
     msa_cache = (
         output_directory

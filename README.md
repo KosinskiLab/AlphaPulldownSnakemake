@@ -662,7 +662,7 @@ manually).
 
 ### Batched local MMseqs2-GPU features (AlphaFold 3)
 
-Set `mmseqs2_gpu_features.enabled: true` to split missing proteins into bounded
+Set `mmseqs2_features.enabled: true` to split missing proteins into bounded
 GPU MSA shards. Each shard performs exactly one AlphaPulldown MSA batch and then
 releases its GPU. Independent CPU jobs run native AlphaFold 3 template search and
 finalize one standard AF3 JSON per protein, so template work can use the CPU and
@@ -679,7 +679,7 @@ multimer-pairing semantics have a separate interface. The adapter accepts only
 the bundled path; arbitrary host executables are not visible inside the image.
 
 ```yaml
-mmseqs2_gpu_features:
+mmseqs2_features:
   enabled: true
   # binary_path: /opt/mmseqs/bin/mmseqs  # only supported path
   binary_id: 8cc5ce367b5638c4306c2d7cfc652dd099a4643f
