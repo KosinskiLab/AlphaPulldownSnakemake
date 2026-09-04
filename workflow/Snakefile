@@ -344,7 +344,9 @@ def inference_cli_for(batch_id):
         return STRUCTURE_INFERENCE_CLI
     args = dict(_resident_inference_args)
     args.update(
-        batch_padding_args(folds, backend=_RAW_FOLD_BACKEND, token_fn=_fold_tokens)
+        batch_padding_args(
+            folds, backend=_RAW_FOLD_BACKEND, token_fn=_fold_grouping_tokens
+        )
     )
     return " ".join(f"{k}={v}" for k, v in args.items())
 

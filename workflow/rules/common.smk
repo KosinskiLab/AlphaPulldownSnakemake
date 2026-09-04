@@ -559,7 +559,9 @@ def batch_padding_args(folds, *, backend: str, token_fn) -> dict:
     if len(multimers) < 2:
         return {}
     tokens = [int(token_fn(fold) or 0) for fold in folds]
-    if not any(tokens):
+    # Every fold must contribute a length: padding to less than the largest fold in the
+    # batch would make pad_input_features shrink it. An unresolved length disables padding.
+    if not all(tokens):
         return {}
     return {"--desired_num_res": str(max(tokens))}
 
