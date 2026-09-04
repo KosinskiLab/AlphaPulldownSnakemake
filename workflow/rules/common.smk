@@ -608,11 +608,17 @@ def prediction_batch_id(folds: Iterable[str]) -> str:
     return f"batch-{digest}"
 
 
-# Inference flags each backend accepts, mirroring run_structure_prediction.py's
-# ``_validate_flags_for_backend``. Names are WITHOUT the leading ``--``. This is only
-# used for a parse-time WARNING: the container is the source of truth and hard-errors,
-# so if this list drifts (a newer image adds a flag) the worst case is a spurious
-# warning, never a blocked run. Keep in sync with AlphaPulldown when convenient.
+# Inference flags each backend accepts. Names are WITHOUT the leading ``--``.
+#
+# SOURCE OF TRUTH: ``alphapulldown/inference_flags.py`` in AlphaPulldown. This is a copy
+# because the workflow parses on the head node, where AlphaPulldown is not importable -
+# it only lives inside the prediction container. The copy exists solely to turn a queue
+# round-trip into a parse-time WARNING; the container still hard-errors, so drift costs
+# a spurious warning, never a blocked run.
+#
+# It HAS drifted before (``convert_to_modelcif`` was missing from the AF3 set and users
+# were told a valid flag was unsupported), so ``test_inference_flag_tables`` pins these
+# sets. When a new AlphaPulldown release changes them, update both the sets and that test.
 _COMMON_INFERENCE_FLAGS = {
     "input", "output_directory", "data_directory", "features_directory",
     "protein_delimiter", "fold_backend", "random_seed", "storage_mode",
@@ -634,6 +640,7 @@ _AF3_INFERENCE_FLAGS = {
     "jax_compilation_cache_dir", "buckets", "flash_attention_implementation",
     "num_diffusion_samples", "num_seeds", "debug_templates", "debug_msas",
     "num_recycles", "save_embeddings", "save_distogram", "use_ap_style",
+    "convert_to_modelcif",
 }
 _ALPHALINK_EXTRA_FLAGS = {"crosslinks"}
 
