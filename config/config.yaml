@@ -72,11 +72,13 @@ mmseqs2_gpu_features:
 #  template_database_ids:  # immutable identities for native AF3 template cache
 #    pdb_seqres: pdb-seqres-2026-08
 #    mmcif: pdb-mmcif-2026-08
+#  # GPU-padded MMseqs2 databases built from the AlphaFold 3.0.0 FASTAs. The paths
+#  # below are the shared EMBL build - uncomment as-is there, or repoint elsewhere.
 #  databases:
-#    uniref90: {path: /db/mmseqs/uniref90, identifier: uniref90-2026-08, max_sequences: 10000}
-#    mgnify: {path: /db/mmseqs/mgnify, identifier: mgnify-2026-08, max_sequences: 5000}
-#    small_bfd: {path: /db/mmseqs/small_bfd, identifier: small-bfd-2026-08, max_sequences: 5000}
-#    uniprot: {path: /db/mmseqs/uniprot, identifier: uniprot-2026-08, max_sequences: 50000}
+#    uniref90: {path: /g/alphafold/AlphaFold_DBs/mmseqs/uniref90_gpu, identifier: uniref90-2022_05-padded, max_sequences: 10000}
+#    mgnify: {path: /g/alphafold/AlphaFold_DBs/mmseqs/mgnify_gpu, identifier: mgy_clusters-2022_05-padded, max_sequences: 5000}
+#    small_bfd: {path: /g/alphafold/AlphaFold_DBs/mmseqs/small_bfd_gpu, identifier: small-bfd-padded, max_sequences: 5000}
+#    uniprot: {path: /g/alphafold/AlphaFold_DBs/mmseqs/uniprot_gpu, identifier: uniprot_all-2021_04-padded, max_sequences: 50000}
 
 # Arguments for structure inference
 structure_inference_arguments:
