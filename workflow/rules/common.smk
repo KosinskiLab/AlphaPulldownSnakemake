@@ -515,6 +515,7 @@ def batch_inference_args(
     backend: str,
     batch_size: int,
     jax_cache_dir: str,
+    resident: bool = False,
 ) -> dict:
     """Return inference CLI args with the batch-only flags added, each gated to the
     backend that accepts them.
@@ -525,9 +526,13 @@ def batch_inference_args(
 
     * ``--allow_resume`` (AlphaFold2 only): a crashed batch re-runs all its folds, so
       resume the ones already done. AlphaFold3 rejects it.
-    * ``--jax_compilation_cache_dir`` (AlphaFold3 only): lets the per-fold calls in a
-      batch share one on-disk JAX compile cache. This is a JAX/XLA flag; AlphaFold2
-      rejects it (its inference is not JAX-compiled).
+    * ``--jax_compilation_cache_dir`` (AlphaFold3, per-fold path only): lets the separate
+      per-fold processes share one on-disk JAX compile cache. A resident batch loads and
+      compiles once in memory, so it does not need the cache, and XLA's autotune cache
+      cannot be written safely to every shared filesystem. AlphaFold2 is JAX-compiled too
+      and benefits just as much, but the flag is only accepted by newer prediction
+      containers, so set it yourself in ``structure_inference_arguments`` rather than
+      having it added automatically.
 
     With ``batch_size <= 1`` nothing is added (the unbatched pipeline is untouched). Any
     value the user already set is preserved (``setdefault``).
@@ -536,9 +541,27 @@ def batch_inference_args(
     if batch_size > 1:
         if backend == "alphafold2":
             args.setdefault("--allow_resume", "true")
-        if backend == "alphafold3":
+        if backend == "alphafold3" and not resident:
             args.setdefault("--jax_compilation_cache_dir", jax_cache_dir)
     return args
+
+
+def batch_padding_args(folds, *, backend: str, token_fn) -> dict:
+    """Pad every AlphaFold2 multimer in a batch to one shape.
+
+    AlphaFold2 compiles per input shape, so a resident batch whose folds differ in
+    length recompiles for each one and the batch saves nothing. ``pad_input_features``
+    removes that, but it applies to multimers only and needs both bounds set.
+    """
+    if str(backend or "").strip().lower() not in ("alphafold2", "af2"):
+        return {}
+    multimers = [fold for fold in folds if "+" in str(fold)]
+    if len(multimers) < 2:
+        return {}
+    tokens = [int(token_fn(fold) or 0) for fold in folds]
+    if not any(tokens):
+        return {}
+    return {"--desired_num_res": str(max(tokens))}
 
 
 def prediction_batch_manifest(jobs, manifest_path) -> str:
@@ -593,6 +616,9 @@ _COMMON_INFERENCE_FLAGS = {
     "protein_delimiter", "fold_backend", "random_seed", "storage_mode",
 }
 _AF2_LIKE_INFERENCE_FLAGS = {
+    # AF2 inference is JAX-compiled, so a persistent compile cache helps it as much as
+    # AF3; newer prediction containers accept the flag.
+    "jax_compilation_cache_dir",
     "compress_result_pickles", "remove_result_pickles", "models_to_relax",
     "relax_best_score_threshold", "remove_keys_from_pickles", "convert_to_modelcif",
     "allow_resume", "num_cycle", "num_predictions_per_model", "pair_msa",

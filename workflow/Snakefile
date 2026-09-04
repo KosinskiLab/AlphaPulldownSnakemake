@@ -300,6 +300,14 @@ _structure_inference_args = batch_inference_args(
     batch_size=BATCH_SIZE,
     jax_cache_dir=join(config["output_directory"], ".jax_compilation_cache"),
 )
+# A resident batch keeps its compiled model in memory, so it needs no on-disk cache.
+_resident_inference_args = batch_inference_args(
+    config.get("structure_inference_arguments", {}),
+    backend=INFERENCE_BACKEND,
+    batch_size=BATCH_SIZE,
+    jax_cache_dir=join(config["output_directory"], ".jax_compilation_cache"),
+    resident=True,
+)
 # Parse-time guard: run_structure_prediction.py aborts the inference job on the first
 # flag its backend does not accept (e.g. --allow_resume on AF3, --jax_compilation_cache_dir
 # on AF2). Warn here -- on the head node, in seconds -- instead of failing deep in a Slurm
@@ -323,6 +331,22 @@ if _unknown_inference_flags:
 STRUCTURE_INFERENCE_CLI = " ".join(
     f"{k}={v}" for k, v in _structure_inference_args.items()
 )
+RESIDENT_INFERENCE_CLI = " ".join(
+    f"{k}={v}" for k, v in _resident_inference_args.items()
+)
+
+
+def inference_cli_for(batch_id):
+    """CLI for one batch: the resident command drops the on-disk compile cache and, for
+    AlphaFold2 multimers, pads the batch to one shape so it compiles once."""
+    folds = BATCH_FOLDS[batch_id]
+    if len(folds) <= 1:
+        return STRUCTURE_INFERENCE_CLI
+    args = dict(_resident_inference_args)
+    args.update(
+        batch_padding_args(folds, backend=_RAW_FOLD_BACKEND, token_fn=_fold_tokens)
+    )
+    return " ".join(f"{k}={v}" for k, v in args.items())
 
 
 def _fold_tokens(fold):
@@ -679,7 +703,7 @@ rule structure_inference:
             batch_prediction_dirs(wildcards.batch)
         ),
         protein_delimiter=protein_delimiter,
-        cli_parameters=STRUCTURE_INFERENCE_CLI,
+        cli_parameters=lambda wc: inference_cli_for(wc.batch),
         unified_memory="true" if STRUCTURE_INFERENCE_UNIFIED_MEMORY else "false",
         xla_mem_fraction=STRUCTURE_INFERENCE_XLA_MEM_FRACTION,
         resident=lambda wc: "true" if len(BATCH_FOLDS[wc.batch]) > 1 else "false",
