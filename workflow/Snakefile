@@ -632,8 +632,10 @@ if LOCAL_MMSEQS2.enabled:
             fasta_paths=lambda wildcards, input: ",".join(
                 str(path) for path in input.fastas
             ),
-            mmseqs_cli_parameters=" ".join(
-                LOCAL_MMSEQS2.msa_cli_arguments(threads=feature_threads)
+            mmseqs_cli_parameters=lambda wildcards, resources: " ".join(
+                LOCAL_MMSEQS2.msa_cli_arguments(
+                    threads=feature_threads, memory_mb=resources.mem_mb
+                )
             ),
         resources:
             # A CPU search needs no GPU and belongs on the CPU partitions.

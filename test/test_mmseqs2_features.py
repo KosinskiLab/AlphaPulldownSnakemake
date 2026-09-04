@@ -156,7 +156,7 @@ def test_cli_arguments_pass_every_explicit_search_input_to_alphapulldown():
         _config(), data_pipeline="af3"
     )
 
-    arguments = adapter.msa_cli_arguments(threads=12)
+    arguments = adapter.msa_cli_arguments(threads=12, memory_mb=160000)
 
     assert "--mmseqs_binary_path=/opt/mmseqs/bin/mmseqs" in arguments
     assert "--mmseqs_temp_dir=/scratch/mmseqs" in arguments
@@ -411,7 +411,7 @@ def test_use_gpu_reaches_the_core_command():
         adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
             _config(use_gpu=use_gpu), data_pipeline="alphafold3"
         )
-        args = adapter.msa_cli_arguments(threads=8)
+        args = adapter.msa_cli_arguments(threads=8, memory_mb=160000)
         assert f"--mmseqs_use_gpu={expected}" in args
 
 
@@ -640,3 +640,14 @@ summary.write_text(json.dumps({
         env=environment,
     )
     assert "Nothing to be done" in settled.stdout
+
+
+def test_split_memory_limit_follows_the_slurm_allocation():
+    """MMseqs2 otherwise sizes splits from physical node memory and ignores the cgroup,
+    so on a large node with a small allocation it is OOM-killed instead of splitting."""
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(), data_pipeline="alphafold3"
+    )
+    args = adapter.msa_cli_arguments(threads=8, memory_mb=120_000)
+    limit = next(a for a in args if a.startswith("--mmseqs_split_memory_limit="))
+    assert limit.split("=", 1)[1].strip("'\"") == "108000M"

@@ -439,7 +439,7 @@ class LocalMmseqsFeatureConfig:
             databases=databases,
         )
 
-    def msa_cli_arguments(self, *, threads: int) -> tuple[str, ...]:
+    def msa_cli_arguments(self, *, threads: int, memory_mb: int) -> tuple[str, ...]:
         """Arguments owned by the GPU MSA stage."""
         if not self.enabled or self.binary_path is None or self.temp_dir is None:
             return ()
@@ -450,6 +450,10 @@ class LocalMmseqsFeatureConfig:
             "mmseqs_batch_max_residues": self.batch_max_residues,
             "mmseqs_e_value": self.e_value,
             "mmseqs_use_gpu": "true" if self.use_gpu else "false",
+            # Without this MMseqs2 sizes its database splits from 90% of the PHYSICAL
+            # node memory and ignores the cgroup, so on a large node with a small
+            # allocation it declines to split and is OOM-killed. Tell it the allocation.
+            "mmseqs_split_memory_limit": f"{max(int(memory_mb * 0.9), 1)}M",
             "mmseqs_threads": threads,
         }
         for name, database in (self.databases or {}).items():

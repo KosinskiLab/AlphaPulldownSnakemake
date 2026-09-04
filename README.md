@@ -704,6 +704,37 @@ mmseqs2_features:
     uniprot: {path: /db/mmseqs/uniprot, identifier: uniprot-2026-08, max_sequences: 50000}
 ```
 
+#### How the MSAs compare to the native pipeline
+
+MMseqs2 has been used to build AlphaFold MSAs for years (ColabFold does exactly
+this), so this is an established approach rather than a new one. It is not, however,
+the *same* search as the jackhmmer pipeline AlphaFold 3 ships with, and the
+difference is worth seeing before you switch.
+
+Measured on eight *B. subtilis* proteins, searching the **same four databases** as the
+native pipeline, counting unique sequences:
+
+| protein | unpaired recall | paired recall |
+| --- | --- | --- |
+| P0CI78 | 99.2% | 98.8% |
+| O32142 | 98.5% | 99.6% |
+| O30472 | 99.5% | 101.3% |
+| P80870 | 86.0% | 103.2% |
+| O31537 | 83.8% | 81.7% |
+| O31843 | 82.8% | 87.1% |
+| O07542 | 68.1% | 78.3% |
+| O31580 | 53.7% | 61.5% |
+| **overall** | **90.2%** | **98.0%** |
+
+Template counts were identical (32 vs 32). Paired MSAs, which drive species pairing
+for complexes, are essentially equivalent. Unpaired recall is close to complete on
+well-populated families and falls off on shallow ones, which is the expected shape for
+a single-pass search against jackhmmer's iterative profile search.
+
+What this does *not* tell you is whether that costs prediction accuracy; that needs
+matched inference and DockQ against experimental structures. Treat the table as a
+reason to spot-check your own targets, not as a verdict either way.
+
 MMseqs2 GPU search always runs at its maximum sensitivity, so there is no
 `sensitivity` setting. Each configured path must name a padded target database;
 prepare all four from existing MMseqs2 databases as follows:
