@@ -5,6 +5,8 @@ owns the workflow-facing configuration, stable shard plan, resource model,
 cache namespaces, and required container bind paths.
 """
 
+import glob
+import os
 from dataclasses import dataclass
 import hashlib
 import json
@@ -511,14 +513,22 @@ class LocalMmseqsFeatureConfig:
         )
 
     def search_memory_mb(self, *, safety: float, attempt: int, cap_mb: int = 0) -> int:
-        """Host RAM for one search shard.
+        """Host RAM for one search shard, sized from the largest configured database.
 
-        Measured flat in the shard size: 1, 8, 32 and 128 queries against the full
-        AlphaFold 3 database set all peaked at the same 149 GB, because the cost is
-        streaming the padded databases and not the queries. So this takes no residue
-        term - adding one would only pretend to a precision the measurement denies.
+        Measured flat in shard size (1, 8, 32 and 128 queries all peaked identically)
+        and flat in query length (1144 and 8268 residues likewise), because the cost is
+        the target database, not the queries. MMseqs2's own estimator takes no query
+        argument at all. So there is no per-residue or per-query term here.
+
+        Databases are searched one after another, so the peak tracks the LARGEST
+        database rather than their total: measured 128.7 GB for mgnify alone against
+        149.4 GB for all four, where the sum of the individual peaks was 283.2 GB.
+        Peak RSS ran 0.69-0.85x the padded size on disk, so when the configured
+        databases are readable the estimate is derived from them and search_ram_mb is
+        only the fallback for when they are not.
         """
-        estimate = safety * self.search_ram_mb
+        derived = self._largest_database_mb()
+        estimate = safety * (derived or self.search_ram_mb)
         value = math.ceil(
             estimate * (self.gpu_ram_scaling ** max(int(attempt) - 1, 0))
         )
@@ -543,6 +553,23 @@ class LocalMmseqsFeatureConfig:
     def finalize_runtime_minutes(self, *, attempt: int) -> int:
         """Wall time for one finalization. Measured ~14 s per protein."""
         return math.ceil(self.finalize_runtime_minutes_base * max(int(attempt), 1))
+
+    def _largest_database_mb(self) -> int:
+        """Expected peak from the largest configured database, or 0 if unreadable."""
+        largest = 0
+        for database in (self.databases or {}).values():
+            total = 0
+            for path in glob.glob(f"{database.path}*"):
+                try:
+                    total += os.path.getsize(path)
+                except OSError:
+                    return 0
+            largest = max(largest, total)
+        if not largest:
+            return 0
+        # 0.85 covers the highest measured RSS/disk ratio; 1.16 is the observed
+        # overhead of chaining several databases in one process.
+        return math.ceil(largest / 1024**2 * 0.85 * 1.16)
 
     def search_runtime_minutes(
         self, sequences: int, residues: int, *, attempt: int

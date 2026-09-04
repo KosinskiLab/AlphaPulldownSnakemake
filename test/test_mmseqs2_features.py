@@ -651,3 +651,30 @@ def test_split_memory_limit_follows_the_slurm_allocation():
     args = adapter.msa_cli_arguments(threads=8, memory_mb=120_000)
     limit = next(a for a in args if a.startswith("--mmseqs_split_memory_limit="))
     assert limit.split("=", 1)[1].strip("'\"") == "108000M"
+
+
+def test_search_memory_is_derived_from_the_largest_database(tmp_path):
+    """Databases are searched one after another, so the peak tracks the largest, not
+    the sum: measured 128.7 GB for mgnify alone vs 149.4 GB for all four, where the
+    individual peaks summed to 283.2 GB."""
+    sizes = {"uniref90": 8, "mgnify": 40, "small_bfd": 2, "uniprot": 20}
+    databases = {}
+    for name, mib in sizes.items():
+        path = tmp_path / name
+        path.write_bytes(b"\0" * (mib * 1024 * 1024))
+        databases[name] = {
+            "path": str(path), "identifier": f"{name}-fixture", "max_sequences": 10,
+        }
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(databases=databases, search_ram_mb=999_999), data_pipeline="alphafold3"
+    )
+    estimate = adapter.search_memory_mb(safety=1.0, attempt=1)
+    # from the 40 MiB database, not the 70 MiB total, and not the fallback constant
+    assert 35 < estimate < 60, estimate
+
+
+def test_search_memory_falls_back_when_databases_are_unreadable(tmp_path):
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(search_ram_mb=123_000), data_pipeline="alphafold3"
+    )
+    assert adapter.search_memory_mb(safety=1.0, attempt=1) == 123_000
