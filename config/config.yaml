@@ -45,7 +45,11 @@ create_feature_arguments:
   --save_msa_files: false  # Do not save multiple sequence alignment (MSA) files
   --use_precomputed_msas: true  # Use precomputed MSA files if available
   --max_template_date: "2050-01-01"  # Quote it: unquoted YAML parses as a date object that is not JSON serializable
-  --compress_features: true  # Compress generated features
+  # Compress generated features (AF2 -> *.pkl.xz, AF3 -> *_af3_input.json.xz).
+  # AF3 compression needs a prediction_container with alphapulldown-input-parser
+  # >= 0.5.2; older images index only *.json and fail inference with
+  # "['<ID>_af3_input.json'] not found in [...]".
+  --compress_features: true
   --data_pipeline: alphafold3 # alphafold2 or alphafold3 data pipeline
 
 # Inference flags. Must match the backend in prediction_container.
