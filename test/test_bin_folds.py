@@ -41,6 +41,49 @@ def test_max_batch_tokens_caps_summed_work():
     assert batches == [["a", "b"], ["c", "d"]]
 
 
+def test_af2_batches_do_not_mix_monomer_and_multimer_runners():
+    folds = [
+        ("complex_small+partner", 100),
+        ("monomer_small", 110),
+        ("complex_large+partner", 300),
+        ("monomer_large", 200),
+    ]
+
+    batches = bin_folds(
+        folds,
+        batch_size=4,
+        max_batch_tokens=350,
+        backend="alphafold2",
+        delimiter="+",
+    )
+
+    # Each resident batch has one runner configuration. Size order and the token
+    # cap still apply independently inside those configuration groups.
+    assert batches == [
+        ["complex_small+partner"],
+        ["complex_large+partner"],
+        ["monomer_small", "monomer_large"],
+    ]
+    assert bin_folds(
+        folds,
+        batch_size=4,
+        max_batch_tokens=350,
+        backend="af2",
+        delimiter="+",
+    ) == batches
+
+
+def test_af3_batching_remains_configuration_agnostic():
+    folds = [("complex+partner", 100), ("monomer", 110)]
+
+    assert bin_folds(
+        folds,
+        batch_size=2,
+        backend="alphafold3",
+        delimiter="+",
+    ) == [["complex+partner", "monomer"]]
+
+
 def test_single_oversized_fold_still_forms_a_batch():
     folds = [("huge", 5000), ("small", 50)]
     batches = bin_folds(folds, batch_size=5, max_batch_tokens=1000)

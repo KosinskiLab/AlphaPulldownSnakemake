@@ -1,0 +1,24 @@
+input_files:
+  - test/fixtures/resident_batch/sample_sheet.csv
+output_directory: test/fixtures/resident_batch/output-af2
+databases_directory: test/fixtures/resident_batch/databases
+backend_weights_directory: test/fixtures/resident_batch/weights
+feature_directory:
+  - test/fixtures/resident_batch/features-af2
+only_generate_features: false
+enable_structure_analysis: false
+generate_recursive_report: false
+create_feature_arguments:
+  --compress_features: false
+  --data_pipeline: alphafold2
+structure_inference_arguments:
+  --fold_backend: alphafold2
+analyze_structure_arguments: {}
+batch_size: 2
+batch_max_tokens: 0
+max_total_length: 0
+max_protein_length: 0
+length_filter_fetch_uniprot: false
+alphafold_inference_threads: 1
+prediction_container: docker://example.invalid/alphafold2:test
+analysis_container: docker://example.invalid/alphajudge:test

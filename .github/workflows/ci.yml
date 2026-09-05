@@ -35,3 +35,4 @@ jobs:
         # Includes AF2/AF3 DAG dry-runs and MMseqs GPU shard/retry contracts. The
         # optional SLURM-plugin integration test self-skips when unavailable.
         run: python -m pytest -q test
+

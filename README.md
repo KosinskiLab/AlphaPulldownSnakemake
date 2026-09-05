@@ -67,6 +67,17 @@ images are still shared across projects. See
 
 ## 2. Configuration
 
+`config/config.yaml` is organised in three sections:
+
+| section | what it holds |
+| --- | --- |
+| **REQUIRED** | inputs, output directory, databases, weights, prediction container |
+| **COMMON** | features, backend flags, analysis, batching, SLURM partition |
+| **ADVANCED** | memory sizing, length filtering, GPU routing, spilling, CPU partitions |
+
+Each key carries a one-line comment naming the section below that documents it in full.
+A first run normally only needs the REQUIRED section.
+
 ### Setup protein folding jobs
 
 Create or edit the sample sheet `config/sample_sheet.csv` listing the proteins you want to fold. The simplest format uses one folding specification per line, for example UniProt IDs:
@@ -581,7 +592,10 @@ length_filter_fetch_uniprot: true     # set false for fully offline runs
 Many short, inference-only predictions can spend more time waiting in the SLURM queue
 than running. To amortise that wait, several folds can share a single
 `structure_inference` job: the job runs `run_structure_prediction.py` once per fold in a
-loop, so the folds queue **once** between them instead of once each.
+loop, so the folds queue **once** between them instead of once each. With a current
+AlphaPulldown container, batches of two or more instead use
+`run_structure_prediction_batch.py`: one resident process loads the model once and keeps
+the folds independent.
 
 ```yaml
 batch_size: 4          # max folds per inference job (1 = one job per fold, the default)
@@ -591,31 +605,41 @@ batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
 <details>
 <summary>What batching changes, and when not to use it</summary>
 
-- Folds are grouped **by size**, so a batch's memory tracks its largest fold and its
+- Folds are grouped **by size**. Because folds execute sequentially, the workflow
+  requests memory from the largest member's existing per-fold estimate, while
   walltime scales with the number of folds. `batch_max_tokens` keeps a batch's total
   work within the partition's `MaxTime`; a single oversized fold always runs alone.
-- Works with both AlphaFold2 and AlphaFold3. Each fold is predicted by its own CLI call
-  (a single call with several folds would be **merged into one complex** by the AF3
-  backend), so the per-fold model load is paid each time; a shared
-  `--jax_compilation_cache_dir` is set automatically so later folds reuse earlier
-  compilations (especially AF3 buckets), recovering most of the compile cost.
+  AlphaFold2 monomers and multimers are grouped separately because they use different
+  model runners; AlphaFold3 retains size-only grouping.
+- **AlphaFold2 compiles per input shape**, so a batch whose folds differ in length
+  would recompile for each one and save nothing. For AF2 multimer batches the workflow
+  therefore adds `--desired_num_res`, sized from the batch's largest fold, so every
+  fold shares one shape and the batch compiles once. Padding applies to multimers
+  only; a batch of AF2 monomers of differing lengths gains little.
+- Works with both AlphaFold2 and AlphaFold3. A JSONL manifest distinguishes independent
+  folds from the chains inside each fold, so AF3 does not merge separate folds. The
+  backend and model runners are initialized once per batch. Containers predating the
+  batch command automatically fall back to the per-fold loop.
 - For AlphaFold2 batches, `--allow_resume` is enabled automatically, so if a job is
   interrupted a rerun skips folds whose outputs already exist (AlphaFold3 does not accept
   that flag, so its batches recompute the unfinished folds on rerun).
 - Analysis and reports are unaffected — `alphajudge` still runs per fold (one
   `interfaces.csv` + `report.pdf` each) and the recursive summary still aggregates them.
 - **Trade-off:** a batch is one SLURM job, so a failure reruns the whole batch (minus the
-  folds resume can skip) and the allocation is sized for the batch's largest fold. Keep
-  `batch_size` modest and pair it with `batch_max_tokens` for heterogeneous fold sizes.
+  folds resume can skip), although the resident command attempts the remaining folds
+  before returning a failure summary. Keep `batch_size` modest and pair it with
+  `batch_max_tokens` for heterogeneous fold sizes.
+- Resident batch manifests and completion sentinels include a digest of the complete
+  ordered membership. Changing a batch therefore schedules the new composition even
+  when Snakemake uses `rerun-triggers: mtime`; single-fold paths remain unchanged.
 
 > [!NOTE]
-> **AlphaFold3 batching depends on your container + shared filesystem.** A batched AF3 job
-> shares one `--jax_compilation_cache_dir` under `output_directory`. With recent
-> tokamax-based AF3 images this can fail on some cluster setups: the XLA autotune cache
-> write may return `Device or resource busy` on network filesystems (e.g. BeeGFS), and on
-> **H100** the image's bundled tokamax autotuning cache can abort at load. If AF3 jobs
-> crash during compilation, run AF3 with `batch_size: 1` (AlphaFold2 batching is
-> unaffected, and single-fold AF3 avoids the shared cache entirely).
+> **`--jax_compilation_cache_dir` and network filesystems.** XLA's autotune cache write
+> can fail with `Device or resource busy` on some network filesystems (BeeGFS in
+> particular), which aborts the process during compilation. A resident batch compiles
+> once in memory and is not given the flag at all, so batches are unaffected. If you set
+> it yourself, point it at node-local storage rather than `output_directory` when that
+> lives on such a filesystem.
 
 `batch_size: 1` (the default) is exactly the original one-job-per-fold behaviour.
 
@@ -818,12 +842,18 @@ You can pass backend CLI switches through `structure_inference_arguments`. Commo
 > against the selected `--fold_backend` and aborts the job with
 > `ValueError: The following flags are not supported by backend '<name>'` if you pass one the
 > backend does not accept. Only use flags from **your** backend's list below — e.g.
-> `--allow_resume` is AlphaFold2-only and `--jax_compilation_cache_dir` is AlphaFold3-only.
-> A single wrong flag fails the job immediately (before any prediction runs).
+> `--allow_resume` is AlphaFold2-only. A single wrong flag fails the job immediately
+> (before any prediction runs).
 >
-> When **batching** (`batch_size > 1`) the workflow adds the correct one for you —
-> `--allow_resume` for AlphaFold2, `--jax_compilation_cache_dir` for AlphaFold3 — so you don't
-> set them yourself.
+> When **batching** (`batch_size > 1`) the workflow adds what each backend needs —
+> `--allow_resume` for AlphaFold2, and `--desired_num_res` for AlphaFold2 multimer
+> batches — so you don't set them yourself.
+>
+> `--jax_compilation_cache_dir` is accepted by **both** backends: AlphaFold2 inference is
+> JAX-compiled too, and a persistent cache removes most of the per-process compilation
+> cost even at `batch_size: 1`. Older prediction images accept it for AlphaFold3 only, so
+> the workflow does not add it for AlphaFold2 automatically — set it yourself once your
+> image supports it, pointing at node-local storage.
 >
 > The authoritative, always-current list for your image is the backend validation inside the
 > container. Print it with:
@@ -858,8 +888,9 @@ structure_inference_arguments:
   --msa_depth: None
   --description_file: None
   --path_to_mmt: None
-  --desired_num_res: None
-  --desired_num_msa: None
+  --desired_num_res: None          # pad every fold in a batch to this many residues
+  --desired_num_msa: None          # optional; defaults to the fold's own MSA depth
+  --jax_compilation_cache_dir: None
   --benchmark: False
   --model_preset: monomer
   --use_ap_style: False
