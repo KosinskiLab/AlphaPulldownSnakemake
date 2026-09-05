@@ -627,8 +627,10 @@ batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
   `interfaces.csv` + `report.pdf` each) and the recursive summary still aggregates them.
 - **Trade-off:** a batch is one SLURM job, so a failure reruns the whole batch (minus the
   folds resume can skip), although the resident command attempts the remaining folds
-  before returning a failure summary. Keep `batch_size` modest and pair it with
-  `batch_max_tokens` for heterogeneous fold sizes.
+  before returning a failure summary. A native CUDA/XLA abort, process termination,
+  or a backend left unusable after an error cannot be isolated and may stop the rest
+  of the batch. Keep `batch_size` modest and pair it with `batch_max_tokens` for
+  heterogeneous fold sizes.
 - Resident batch manifests and completion sentinels include a digest of the complete
   ordered membership. Changing a batch therefore schedules the new composition even
   when Snakemake uses `rerun-triggers: mtime`; single-fold paths remain unchanged.
