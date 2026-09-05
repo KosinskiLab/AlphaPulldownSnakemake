@@ -763,9 +763,10 @@ reason to spot-check your own targets, not as a verdict either way.
 
 MMseqs2 GPU search always runs at its maximum sensitivity, so there is no
 `sensitivity` setting. Each configured path must name a padded target database.
-`scripts/setup_databases.sh` builds all four, fetching MMseqs2 itself if needed:
+AlphaPulldown ships a script that builds all four:
 
 ```bash
+# in an AlphaPulldown checkout
 ./scripts/setup_databases.sh \
   --dest /scratch/AlphaFold_DBs/3.0.0 \
   --mmseqs
@@ -773,8 +774,8 @@ MMseqs2 GPU search always runs at its maximum sensitivity, so there is no
 
 It skips databases that already exist, prints the `databases:` block to paste into
 `config.yaml`, and reports build times and sizes. The same script fetches the
-AlphaFold 2 and AlphaFold 3 databases (`--alphafold2`, `--alphafold3`, or `--all`) by
-delegating to the download scripts those projects ship.
+AlphaFold 2 and AlphaFold 3 databases (`--alphafold2`, `--alphafold3`, or `--all`).
+See [Setting up databases](https://github.com/KosinskiLab/AlphaPulldown#setting-up-databases).
 
 To build them by hand instead:
 
