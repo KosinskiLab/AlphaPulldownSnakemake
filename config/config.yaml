@@ -80,8 +80,8 @@ mmseqs2_features:
   enabled: false
   # WHICH SEARCH RUNS. true: MMseqs2 on a GPU, one GPU per search shard, on
   # slurm_partition. false: the same search on CPU, no GPU requested, on
-  # slurm_partition_cpu. GPU measured 2.4x faster and used 3.4x less host RAM on an
-  # identical shard. Either way the databases must be GPU-padded (makepaddedseqdb).
+  # slurm_partition_cpu. Either way the databases must be GPU-padded
+  # (makepaddedseqdb).
   use_gpu: true
 
 # Arguments for structure inference
@@ -163,21 +163,17 @@ structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
 #  batch_max_sequences: 256
 #  batch_max_residues: 100000
 #  e_value: 0.0001
-#  # Search stage memory is DERIVED from the largest configured database (peak RSS
-#  # measured at 0.69-0.85x its padded size on disk) because databases are searched one
-#  # after another: mgnify alone peaked at 128.7 GB, all four at 149.4 GB, while the
-#  # individual peaks summed to 283.2 GB. Memory is flat in both shard size and query
-#  # length, so there is no per-query or per-residue term. search_ram_mb is only the
-#  # fallback used when the configured database paths cannot be read at parse time.
+#  # Search memory is DERIVED from the largest configured database, because the
+#  # databases are searched one after another rather than together, and it does not
+#  # depend on shard size or query length. search_ram_mb is only the fallback used
+#  # when the database paths cannot be read at parse time.
 #  search_ram_mb: 160000
-#  # MMseqs2 touches the whole target database into RSS unless db_load_mode is 2.
-#  # Measured on mgnify: 128.7 -> 92.5 GB and, unexpectedly, 21% faster. NOT made the
-#  # default: those runs followed others over the same databases, so the page cache was
-#  # warm and the comparison is confounded. Try it, but measure on a cold cache.
+#  # MMseqs2 touches the whole target database into RSS unless db_load_mode is 2,
+#  # which lowers memory but is not the default -- try it on your own data.
 #  db_load_mode: 2
 #  gpu_ram_scaling: 1.1
 #  search_runtime_base_minutes: 90
-#  cpu_runtime_multiplier: 2.5          # CPU search is ~2.4x slower than GPU
+#  cpu_runtime_multiplier: 2.5          # walltime allowance for CPU vs GPU search
 #  gpu_runtime_per_sequence_minutes: 0.5
 #  gpu_runtime_per_1000_residues: 1.0
 #  # Finalization stage (CPU): AF3 template search over an MSA that already exists.
