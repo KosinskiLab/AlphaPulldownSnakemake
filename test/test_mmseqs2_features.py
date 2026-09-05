@@ -678,3 +678,18 @@ def test_search_memory_falls_back_when_databases_are_unreadable(tmp_path):
         _config(search_ram_mb=123_000), data_pipeline="alphafold3"
     )
     assert adapter.search_memory_mb(safety=1.0, attempt=1) == 123_000
+
+
+def test_split_memory_limit_is_omitted_when_the_resource_is_unresolved():
+    """Snakemake passes a TBDString for mem_mb during a dry run; int() on it raises,
+    which used to abort the whole DAG evaluation."""
+    class TBDString(str):
+        def __int__(self):
+            raise TypeError("__int__ returned non-int (type TBDString)")
+
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(), data_pipeline="alphafold3"
+    )
+    args = adapter.msa_cli_arguments(threads=8, memory_mb=TBDString("<TBD>"))
+    assert not any(a.startswith("--mmseqs_split_memory_limit") for a in args)
+    assert any(a.startswith("--mmseqs_threads") for a in args)

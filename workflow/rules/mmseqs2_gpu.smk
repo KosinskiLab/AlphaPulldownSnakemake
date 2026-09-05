@@ -452,12 +452,21 @@ class LocalMmseqsFeatureConfig:
             "mmseqs_batch_max_residues": self.batch_max_residues,
             "mmseqs_e_value": self.e_value,
             "mmseqs_use_gpu": "true" if self.use_gpu else "false",
-            # Without this MMseqs2 sizes its database splits from 90% of the PHYSICAL
-            # node memory and ignores the cgroup, so on a large node with a small
-            # allocation it declines to split and is OOM-killed. Tell it the allocation.
-            "mmseqs_split_memory_limit": f"{max(int(memory_mb * 0.9), 1)}M",
             "mmseqs_threads": threads,
         }
+        # Without this MMseqs2 sizes its database splits from 90% of the PHYSICAL node
+        # memory and ignores the cgroup, so on a large node with a small allocation it
+        # declines to split and is OOM-killed. Tell it the allocation instead.
+        #
+        # Snakemake passes a TBDString here during a dry run, and on a real run before
+        # the resource is resolved, so accept only a genuine number and otherwise leave
+        # the option out - MMseqs2 then behaves as it did before.
+        try:
+            limit_mb = int(memory_mb)
+        except (TypeError, ValueError):
+            limit_mb = 0
+        if limit_mb > 0:
+            values["mmseqs_split_memory_limit"] = f"{max(int(limit_mb * 0.9), 1)}M"
         for name, database in (self.databases or {}).items():
             values[f"mmseqs_{name}_database_path"] = database.path
             values[f"mmseqs_{name}_database_id"] = database.identifier
