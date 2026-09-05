@@ -762,14 +762,25 @@ matched inference and DockQ against experimental structures. Treat the table as 
 reason to spot-check your own targets, not as a verdict either way.
 
 MMseqs2 GPU search always runs at its maximum sensitivity, so there is no
-`sensitivity` setting. Each configured path must name a padded target database;
-prepare all four from existing MMseqs2 databases as follows:
+`sensitivity` setting. Each configured path must name a padded target database.
+`scripts/setup_databases.sh` builds all four, fetching MMseqs2 itself if needed:
 
 ```bash
-mmseqs makepaddedseqdb /source/uniref90  /db/mmseqs/uniref90
-mmseqs makepaddedseqdb /source/mgnify    /db/mmseqs/mgnify
-mmseqs makepaddedseqdb /source/small_bfd /db/mmseqs/small_bfd
-mmseqs makepaddedseqdb /source/uniprot   /db/mmseqs/uniprot
+./scripts/setup_databases.sh \
+  --dest /scratch/AlphaFold_DBs/3.0.0 \
+  --mmseqs
+```
+
+It skips databases that already exist, prints the `databases:` block to paste into
+`config.yaml`, and reports build times and sizes. The same script fetches the
+AlphaFold 2 and AlphaFold 3 databases (`--alphafold2`, `--alphafold3`, or `--all`) by
+delegating to the download scripts those projects ship.
+
+To build them by hand instead:
+
+```bash
+mmseqs createdb          /source/uniref90.fa /db/mmseqs/uniref90
+mmseqs makepaddedseqdb   /db/mmseqs/uniref90 /db/mmseqs/uniref90_gpu
 ```
 
 Keep the source and destination prefixes different. A padded database consists
