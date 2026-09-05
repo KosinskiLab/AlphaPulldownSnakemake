@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 _COMMON = Path(__file__).resolve().parents[1] / "workflow" / "rules" / "common.smk"
@@ -174,6 +175,81 @@ def test_linear_resources_default_scaling_without_callbacks():
     assert res["mem_mb"]({}, input=[], attempt=3) == 2400
     assert res["runtime"]({}, input=[], attempt=2) == 20
     assert res["attempt"]({}, input=[], attempt=4) == 4
+
+
+@contextmanager
+def _preserve_container_bind_environment():
+    names = ("APPTAINER_BINDPATH", "SINGULARITY_BINDPATH")
+    previous = {name: os.environ[name] for name in names if name in os.environ}
+    try:
+        yield
+    finally:
+        for name in names:
+            os.environ.pop(name, None)
+        os.environ.update(previous)
+
+
+def test_prepare_container_binds_accepts_exact_adapter_owned_paths():
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        _preserve_container_bind_environment(),
+    ):
+        os.environ.pop("APPTAINER_BINDPATH", None)
+        os.environ.pop("SINGULARITY_BINDPATH", None)
+
+        common.prepare_container_binds(
+            output_directory=directory,
+            config={},
+            extra_paths=(Path("/external/mmseqs-databases"),),
+        )
+
+        binds = os.environ["APPTAINER_BINDPATH"].split(",")
+        assert "/external/mmseqs-databases:/external/mmseqs-databases" in binds
+        assert "/opt:/opt" not in binds
+
+
+def test_prepare_container_binds_preserves_user_binds_and_adds_required_paths():
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        _preserve_container_bind_environment(),
+    ):
+        os.environ["APPTAINER_BINDPATH"] = "/custom:/custom"
+        os.environ["SINGULARITY_BINDPATH"] = "/custom:/custom"
+
+        common.prepare_container_binds(
+            output_directory=directory,
+            config={},
+            extra_paths=(Path("/external/mmseqs-databases"),),
+        )
+
+        binds = os.environ["APPTAINER_BINDPATH"].split(",")
+        assert "/custom:/custom" in binds
+        assert "/external/mmseqs-databases:/external/mmseqs-databases" in binds
+        assert "/opt:/opt" not in binds
+
+
+def test_prepare_container_binds_includes_resolved_extra_directory():
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        _preserve_container_bind_environment(),
+    ):
+        os.environ.pop("APPTAINER_BINDPATH", None)
+        os.environ.pop("SINGULARITY_BINDPATH", None)
+        tmp_path = Path(directory)
+        target = tmp_path / "real-mmseqs"
+        target.mkdir()
+        link = tmp_path / "mmseqs-link"
+        link.symlink_to(target, target_is_directory=True)
+
+        common.prepare_container_binds(
+            output_directory=directory,
+            config={},
+            extra_paths=(link,),
+        )
+
+        binds = os.environ["APPTAINER_BINDPATH"].split(",")
+        assert f"{link}:{link}" in binds
+        assert f"{target}:{target}" in binds
 
 
 # --- length filtering (issue #33 + total caps) -------------------------------

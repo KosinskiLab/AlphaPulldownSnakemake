@@ -9,9 +9,10 @@ from __future__ import annotations
 
 configfile: "config/config.yaml"
 include: "rules/common.smk"
+include: "rules/mmseqs2_gpu.smk"
 
 from pathlib import Path
-from os import makedirs, listdir, symlink, remove
+from os import makedirs, listdir, symlink, remove, replace
 from os.path import abspath, join, splitext, basename, exists, lexists, realpath
 
 from alphapulldown_input_parser.parser import FoldDataset, generate_fold_specifications
@@ -26,6 +27,9 @@ if isinstance(feature_directories, (str, Path)):
 # decide AF2 vs AF3 outputs
 DATA_PIPELINE = config["create_feature_arguments"].get("--data_pipeline", "alphafold2").lower()
 IS_AF3 = DATA_PIPELINE in ("alphafold3", "af3")
+LOCAL_MMSEQS2 = LocalMmseqsFeatureConfig.from_mapping(
+    config.get("mmseqs2_features"), data_pipeline=DATA_PIPELINE
+)
 
 # Backend identity (feature stage = data pipeline; inference stage = fold backend,
 # falling back to the data pipeline). Defined early because length filtering and
@@ -118,6 +122,7 @@ prepare_container_binds(
     config=config,
     feature_directories=feature_directories,
     input_files=input_files,
+    extra_paths=LOCAL_MMSEQS2.bind_paths,
 )
 
 fold_specifications = generate_fold_specifications(
@@ -488,6 +493,62 @@ for feature_directory in feature_directories:
             continue
         precomputed_features.append(available_feature_path)
 
+_precomputed_feature_basenames = {basename(path) for path in precomputed_features}
+LOCAL_MMSEQS2_PROTEINS = tuple(
+    protein
+    for protein in kept_proteins
+    if feature_name(protein) not in _precomputed_feature_basenames
+)
+_MMSEQS2_GPU_MAX_TEMPLATE_DATE = str(
+    config["create_feature_arguments"].get("--max_template_date", "")
+)
+_MMSEQS2_GPU_MSA_CACHE_KEY = LOCAL_MMSEQS2.msa_cache_key(
+    str(config["prediction_container"])
+) if LOCAL_MMSEQS2.enabled else "disabled"
+_MMSEQS2_GPU_FEATURE_CACHE_KEY = LOCAL_MMSEQS2.feature_cache_key(
+    _MMSEQS2_GPU_MAX_TEMPLATE_DATE,
+    str(config["prediction_container"]),
+) if LOCAL_MMSEQS2.enabled else "disabled"
+LOCAL_MMSEQS2_MSA_CACHE = join(
+    config["output_directory"],
+    "features",
+    ".mmseqs2_gpu_msa_cache",
+    _MMSEQS2_GPU_MSA_CACHE_KEY,
+)
+LOCAL_MMSEQS2_CACHE = join(
+    config["output_directory"],
+    "features",
+    ".mmseqs2_gpu_cache",
+    _MMSEQS2_GPU_FEATURE_CACHE_KEY,
+)
+_LOCAL_MMSEQS2_LENGTHS = {
+    protein: (
+        int(sequence_length_cache.get(protein, 0) or 0)
+        or residue_count(
+            join(config["output_directory"], "data", f"{protein}.fasta")
+        )
+    )
+    for protein in LOCAL_MMSEQS2_PROTEINS
+}
+LOCAL_MMSEQS2_SHARDS = plan_feature_shards(
+    LOCAL_MMSEQS2_PROTEINS,
+    _LOCAL_MMSEQS2_LENGTHS,
+    max_sequences=LOCAL_MMSEQS2.batch_max_sequences,
+    max_residues=LOCAL_MMSEQS2.batch_max_residues,
+)
+LOCAL_MMSEQS2_SCHEDULED_SHARDS = schedule_feature_shards(
+    LOCAL_MMSEQS2_SHARDS,
+    Path(LOCAL_MMSEQS2_MSA_CACHE),
+)
+LOCAL_MMSEQS2_SHARD_JOB = {
+    job.identifier: job.shard for job in LOCAL_MMSEQS2_SCHEDULED_SHARDS
+}
+LOCAL_MMSEQS2_COMPLETION_BY_PROTEIN = {
+    protein: str(job.summary_path)
+    for job in LOCAL_MMSEQS2_SCHEDULED_SHARDS
+    for protein in job.shard.proteins
+}
+
 rule all:
     input:
         required_targets,
@@ -603,56 +664,228 @@ rule symlink_features:
                 remove(out_file)
             symlink(source, out_file)
 
-rule create_features:
-    input:
-        join(config["output_directory"], "data", "{fasta_basename}.fasta"),
-    output:
-        join(
-            config["output_directory"],
-            "features",
-            FEATURE_OUTPUT_PATTERN,
-        ),
-    params:
-        data_directory=config["databases_directory"],
-        output_directory=join(config["output_directory"], "features"),
-        cli_parameters=" ".join(
-            [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
-        ),
-    resources:
-        qos=DEFAULT_SLURM_QOS,
-        **CPU_PARTITION_RESOURCE,
-        **linear_resources(
-            # Length from the parse-time cache (populated before any job runs) or
-            # the staged FASTA, falling back to the rule input. Using the cache
-            # avoids depending on when Snakemake evaluates the resource relative to
-            # the upstream download.
-            mem_fn=lambda wildcards, input, attempt: estimate_feature_mem_mb(
-                chain_residue_count(
-                    wildcards.fasta_basename,
-                    join(config["output_directory"], "data"),
-                    length_cache=sequence_length_cache,
-                )
-                or (residue_count(str(input[0])) if input else 0),
-                base_mb=base_feature_ram,
-                per_residue_mb=feature_ram_per_residue,
-                scaling=feature_scaling,
-                safety=MEM_SAFETY_FACTOR,
-                attempt=attempt,
-                cap_mb=MAX_MEM_MB,
+if LOCAL_MMSEQS2.enabled:
+    rule create_mmseqs2_gpu_msa_shard:
+        input:
+            fastas=lambda wildcards: [
+                join(config["output_directory"], "data", f"{protein}.fasta")
+                for protein in LOCAL_MMSEQS2_SHARD_JOB[
+                    wildcards.mmseqs_shard
+                ].proteins
+            ],
+        output:
+            summary=join(
+                LOCAL_MMSEQS2_MSA_CACHE,
+                ".completed",
+                "{mmseqs_shard}.json",
             ),
-            runtime_fn=lambda wc, attempt: 1440 * attempt,
-        ),
-    threads: feature_threads,
-    container:
-        config["prediction_container"],
-    shell:
-        r"""
-        create_individual_features.py \
-            --fasta_paths={input} \
-            --data_dir={params.data_directory} \
-            --output_dir={params.output_directory} \
-            {params.cli_parameters}
-        """
+        params:
+            msa_output_directory=LOCAL_MMSEQS2_MSA_CACHE,
+            fasta_paths=lambda wildcards, input: ",".join(
+                str(path) for path in input.fastas
+            ),
+            mmseqs_cli_parameters=lambda wildcards, resources: " ".join(
+                LOCAL_MMSEQS2.msa_cli_arguments(
+                    threads=feature_threads, memory_mb=resources.mem_mb
+                )
+            ),
+        resources:
+            # A CPU search needs no GPU and belongs on the CPU partitions.
+            **(
+                {
+                    "slurm_partition": (DEFAULT_SLURM_PARTITION or "gpu"),
+                    "gpu": 1,
+                    "tasks_per_gpu": 0,
+                }
+                if LOCAL_MMSEQS2.use_gpu
+                else dict(CPU_PARTITION_RESOURCE)
+            ),
+            qos=DEFAULT_SLURM_QOS,
+            **linear_resources(
+                mem_fn=lambda wildcards, attempt: LOCAL_MMSEQS2.search_memory_mb(
+                    safety=MEM_SAFETY_FACTOR,
+                    attempt=attempt,
+                    cap_mb=MAX_MEM_MB,
+                ),
+                runtime_fn=lambda wildcards, attempt: (
+                    LOCAL_MMSEQS2.search_runtime_minutes(
+                        len(
+                            LOCAL_MMSEQS2_SHARD_JOB[
+                                wildcards.mmseqs_shard
+                            ].proteins
+                        ),
+                        LOCAL_MMSEQS2_SHARD_JOB[
+                            wildcards.mmseqs_shard
+                        ].total_residues,
+                        attempt=attempt,
+                    )
+                ),
+            ),
+        threads: feature_threads,
+        container:
+            config["prediction_container"],
+        shell:
+            r"""
+            create_batch_msas.py \
+                --fasta_paths="{params.fasta_paths}" \
+                --msa_output_dir={params.msa_output_directory} \
+                --summary_path={output.summary} \
+                {params.mmseqs_cli_parameters}
+            """
+
+    rule finalize_mmseqs2_features:
+        input:
+            fasta=join(
+                config["output_directory"],
+                "data",
+                "{fasta_basename}.fasta",
+            ),
+            msa_complete=lambda wildcards: (
+                LOCAL_MMSEQS2_COMPLETION_BY_PROTEIN[
+                    wildcards.fasta_basename
+                ]
+            ),
+        output:
+            join(LOCAL_MMSEQS2_CACHE, FEATURE_OUTPUT_PATTERN),
+        wildcard_constraints:
+            fasta_basename="[^/]+",
+        params:
+            data_directory=config["databases_directory"],
+            output_directory=LOCAL_MMSEQS2_CACHE,
+            msa_output_directory=LOCAL_MMSEQS2_MSA_CACHE,
+            compress_features=str(
+                config["create_feature_arguments"].get(
+                    "--compress_features", False
+                )
+            ).lower(),
+            max_template_date=_MMSEQS2_GPU_MAX_TEMPLATE_DATE,
+            finalize_cli_parameters=" ".join(
+                LOCAL_MMSEQS2.finalize_cli_arguments()
+            ),
+        resources:
+            qos=DEFAULT_SLURM_QOS,
+            **CPU_PARTITION_RESOURCE,
+            # NOT estimate_feature_mem_mb: those constants were fitted to jackhmmer and
+            # HHblits building an MSA from scratch. This stage does not build MSAs - they
+            # arrive in the bundle - it runs AF3's native template search and writes the
+            # artifact. Measured at 0.24 GB / 13 s for one protein and 0.57 GB / 110 s for
+            # eight, against the 24 GB and 24 h the old model asked for.
+            **linear_resources(
+                mem_fn=lambda wildcards, input, attempt: LOCAL_MMSEQS2.finalize_memory_mb(
+                    chain_residue_count(
+                        wildcards.fasta_basename,
+                        join(config["output_directory"], "data"),
+                        length_cache=sequence_length_cache,
+                    )
+                    or residue_count(str(input.fasta)),
+                    safety=MEM_SAFETY_FACTOR,
+                    attempt=attempt,
+                    cap_mb=MAX_MEM_MB,
+                ),
+                runtime_fn=lambda wildcards, attempt: (
+                    LOCAL_MMSEQS2.finalize_runtime_minutes(attempt=attempt)
+                ),
+            ),
+        threads: feature_threads,
+        container:
+            config["prediction_container"],
+        shell:
+            r"""
+            finalize_batch_features.py \
+                --fasta_paths={input.fasta} \
+                --msa_input_dir={params.msa_output_directory} \
+                --data_pipeline=alphafold3 \
+                --data_dir={params.data_directory} \
+                --output_dir={params.output_directory} \
+                --max_template_date={params.max_template_date} \
+                --compress_features={params.compress_features} \
+                {params.finalize_cli_parameters}
+            """
+
+    rule create_features:
+        input:
+            source=lambda wildcards: join(
+                LOCAL_MMSEQS2_CACHE,
+                feature_name(wildcards.fasta_basename),
+            ),
+        output:
+            join(
+                config["output_directory"],
+                "features",
+                FEATURE_OUTPUT_PATTERN,
+            ),
+        wildcard_constraints:
+            fasta_basename="[^/]+",
+        resources:
+            qos=DEFAULT_SLURM_QOS,
+            **linear_resources(mem=800, runtime=10),
+        run:
+            source = realpath(str(input.source))
+            if not exists(source):
+                raise ValueError(
+                    f"Batched MMseqs2-GPU output is missing {input.source}"
+                )
+            destination = abspath(str(output[0]))
+            temporary_link = destination + ".tmp"
+            if lexists(temporary_link):
+                remove(temporary_link)
+            symlink(source, temporary_link)
+            replace(temporary_link, destination)
+
+    localrules: create_features
+else:
+    rule create_features:
+        input:
+            join(config["output_directory"], "data", "{fasta_basename}.fasta"),
+        output:
+            join(
+                config["output_directory"],
+                "features",
+                FEATURE_OUTPUT_PATTERN,
+            ),
+        wildcard_constraints:
+            fasta_basename="[^/]+",
+        params:
+            data_directory=config["databases_directory"],
+            output_directory=join(config["output_directory"], "features"),
+            cli_parameters=" ".join(
+                [f"{k}={v}" for k, v in config["create_feature_arguments"].items()]
+            ),
+        resources:
+            qos=DEFAULT_SLURM_QOS,
+            **CPU_PARTITION_RESOURCE,
+            **linear_resources(
+                # Length from the parse-time cache (populated before any job runs) or
+                # the staged FASTA, falling back to the rule input. Using the cache
+                # avoids depending on when Snakemake evaluates the resource relative to
+                # the upstream download.
+                mem_fn=lambda wildcards, input, attempt: estimate_feature_mem_mb(
+                    chain_residue_count(
+                        wildcards.fasta_basename,
+                        join(config["output_directory"], "data"),
+                        length_cache=sequence_length_cache,
+                    )
+                    or (residue_count(str(input[0])) if input else 0),
+                    base_mb=base_feature_ram,
+                    per_residue_mb=feature_ram_per_residue,
+                    scaling=feature_scaling,
+                    safety=MEM_SAFETY_FACTOR,
+                    attempt=attempt,
+                    cap_mb=MAX_MEM_MB,
+                ),
+                runtime_fn=lambda wc, attempt: 1440 * attempt,
+            ),
+        threads: feature_threads,
+        container:
+            config["prediction_container"],
+        shell:
+            r"""
+            create_individual_features.py \
+                --fasta_paths={input} \
+                --data_dir={params.data_directory} \
+                --output_dir={params.output_directory} \
+                {params.cli_parameters}
+            """
 
 def lookup_batch_features(wildcards):
     # Inputs for inference: generated/precomputed protein features plus any direct

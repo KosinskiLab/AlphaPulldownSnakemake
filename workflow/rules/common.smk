@@ -495,8 +495,14 @@ def prepare_container_binds(
     config: dict[str, Any],
     feature_directories: Iterable[str | Path] = (),
     input_files: Iterable[str | Path] = (),
+    extra_paths: Iterable[str | Path] = (),
 ) -> None:
-    """Populate Singularity/Apptainer bind paths based on config."""
+    """Populate Singularity/Apptainer bind paths based on config.
+
+    Existing workflow inputs retain broad first-level root binds. Adapter-owned
+    ``extra_paths`` are directory seams and are bound exactly so adding an
+    executable below ``/opt`` cannot mask unrelated container content there.
+    """
     interest: set[Path] = {
         Path(__file__).parent,
         Path.cwd(),
@@ -518,10 +524,25 @@ def prepare_container_binds(
             continue
 
     roots = sorted(_collect_roots(interest))
-    bind_spec = ",".join(f"{r}:{r}" for r in roots)
+    exact_directories: set[str] = set()
+    for path in extra_paths:
+        try:
+            directory = Path(path).expanduser()
+            if not directory.is_absolute():
+                directory = Path.cwd() / directory
+            exact_directories.add(str(directory))
+            exact_directories.add(str(directory.resolve()))
+        except (TypeError, OSError, RuntimeError):
+            continue
+
+    required = [
+        *(f"{root}:{root}" for root in roots),
+        *(f"{path}:{path}" for path in sorted(exact_directories)),
+    ]
 
     for var in ("APPTAINER_BINDPATH", "SINGULARITY_BINDPATH"):
-        os.environ.setdefault(var, bind_spec)
+        existing = [item for item in os.environ.get(var, "").split(",") if item]
+        os.environ[var] = ",".join(dict.fromkeys([*existing, *required]))
     for var in ("APPTAINER_NV", "SINGULARITY_NV"):
         os.environ.setdefault(var, "1")
 

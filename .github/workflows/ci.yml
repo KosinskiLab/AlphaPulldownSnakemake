@@ -21,65 +21,18 @@ jobs:
       - name: Install test dependencies
         # common.smk imports parse_fold_chains from the parser package; >=0.5.1
         # is required (public helper + ".json" preservation for AF3 inputs, #41).
-        run: pip install --quiet pytest "alphapulldown-input-parser>=0.5.1"
+        run: |
+          pip install --quiet "alphapulldown-input-parser>=0.5.1" pytest pyyaml
+          # Current Snakemake requires Python >=3.11. The 3.10 job still runs all
+          # pure-Python adapter/resource tests; 3.12 additionally runs real DAGs.
+          if [[ "${{ matrix.python-version }}" == "3.12" ]]; then
+            pip install --quiet "snakemake>=9,<10"
+          fi
       - name: Byte-compile common.smk
         # common.smk carries the memory/length logic; delegates parsing to the parser.
         run: python -m py_compile workflow/rules/common.smk
-      - name: Run complete unit test suite
-        # Tests load common.smk directly; the SLURM-plugin integration test
-        # self-skips when the plugin is absent.
-        run: python -m pytest test/ -q
+      - name: Run workflow tests and dry-runs
+        # Includes AF2/AF3 DAG dry-runs and MMseqs GPU shard/retry contracts. The
+        # optional SLURM-plugin integration test self-skips when unavailable.
+        run: python -m pytest -q test
 
-  resident-batch-dry-runs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install workflow dependencies
-        run: pip install --quiet "snakemake==9.*" "alphapulldown-input-parser>=0.5.1"
-      - name: Dry-run resident AlphaFold 2 and AlphaFold 3 batches
-        shell: bash
-        run: |
-          set -euo pipefail
-          for backend in af2 af3; do
-            log="${RUNNER_TEMP}/resident-${backend}.log"
-            snakemake \
-              --snakefile workflow/Snakefile \
-              --configfile "test/fixtures/resident_batch/${backend}.yaml" \
-              --cores 1 \
-              --dry-run \
-              --printshellcmds | tee "${log}"
-            grep -q "run_structure_prediction_batch.py" "${log}"
-            grep -Eq '\.prediction_batches/batch-[0-9a-f]{64}\.jsonl' "${log}"
-            grep -Eq '/predictions/batch-[0-9a-f]{64}/completed_fold\.txt' "${log}"
-          done
-      - name: Reject stale batch artifacts after composition changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          output="test/fixtures/resident_batch/output-af2"
-          old_id=$(grep -m1 -Eo 'batch-[0-9a-f]{64}' \
-            "${RUNNER_TEMP}/resident-af2.log")
-          mkdir -p "${output}/.prediction_batches" "${output}/predictions/${old_id}"
-          touch "${output}/.prediction_batches/${old_id}.jsonl"
-          touch "${output}/predictions/${old_id}/completed_fold.txt"
-
-          log="${RUNNER_TEMP}/resident-af2-changed.log"
-          snakemake \
-            --snakefile workflow/Snakefile \
-            --configfile test/fixtures/resident_batch/af2.yaml \
-            --config input_files=test/fixtures/resident_batch/changed_sample_sheet.csv \
-            --rerun-triggers mtime \
-            --cores 1 \
-            --dry-run \
-            --printshellcmds | tee "${log}"
-
-          grep -q "rule structure_inference" "${log}"
-          grep -Eq '/predictions/batch-[0-9a-f]{64}/completed_fold\.txt' "${log}"
-          if grep -q "/predictions/${old_id}/completed_fold.txt" "${log}"; then
-            echo "changed composition reused the stale batch sentinel" >&2
-            exit 1
-          fi
