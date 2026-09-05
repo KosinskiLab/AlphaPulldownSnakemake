@@ -1,247 +1,138 @@
-# List of input sample sheets
+# AlphaPulldownSnakemake configuration.
+#
+# Three sections: REQUIRED (set these), COMMON (routinely adjusted), ADVANCED
+# (sensible defaults; change only when you need to). Every key is documented in
+# README.md -- the section named beside each key below.
+
+# ============================================================================
+# REQUIRED
+# ============================================================================
+
+# Sample sheets listing the folds to predict. README: "Configure input files"
 input_files:
   - config/sample_sheet.csv
 
-# Delimiter used in protein names
-protein_delimiter: "+"
-
-# Whether to drop equivalent permutations (AB and BA are the same) when generating fold specs
-exclude_permutations: true
-
-# Directory where all output files will be stored
+# Where all output is written. README: "Setup protein folding jobs"
 output_directory: ./temp_fold/
 
-# Path to AlphaFold databases and to backend weights
-# Note prior to version 2.0.4 these were called alphafold_data_directory
+# AlphaFold sequence/template databases, and the model weights for the backend
+# you selected below. README: "Database configuration"
 databases_directory: /scratch/AlphaFold_DBs/3.0.0
 backend_weights_directory : /g/kosinski/dima/alphafold3_weights/
 
-# Directories containing precomputed features
+# The container decides the folding backend (alphafold2 / alphafold3 / alphalink);
+# a local .sif path also works. README: "Changing folding backends"
+prediction_container: "docker://kosinskilab/alphafold3:2.7.0"
+
+# ============================================================================
+# COMMON
+# ============================================================================
+
+# Directories of precomputed features to reuse. README: "Using precomputed features"
 feature_directory:
   - "/g/alphafold/input_features/Homo_sapiens/features"
 
-# If True, only generate features without running structure prediction
+# Separator between chains in a fold spec, and whether AB and BA are treated as
+# one fold. README: "Setup pulldown experiments"
+protein_delimiter: "+"
+exclude_permutations: true
+
+# Stop after feature generation instead of predicting. README: "Execution"
 only_generate_features: false
 
-# Toggle structure analysis after prediction
-enable_structure_analysis: true
-
-# Generate an aggregated CSV (reports/all_interfaces.csv) across all folds
-generate_recursive_report: true
-
-# Extra CLI flags to pass to alphajudge during recursive report generation.
-# Uncomment --aggregate_report to also produce an RCSB-style validation PDF
-# alongside the all_interfaces.csv (one slider page per detected interface,
-# ranked by interface_meta_score against the AlphaJudge benchmark). The path
-# must be absolute (or relative to the working directory snakemake uses).
-recursive_report_arguments: {}
-# recursive_report_arguments:
-#   --aggregate_report: /absolute/path/to/reports/aggregate_report.pdf
-
-# Arguments for feature generation
+# Feature generation flags. README: "Feature generation flags"
 create_feature_arguments:
   --save_msa_files: false  # Do not save multiple sequence alignment (MSA) files
   --use_precomputed_msas: true  # Use precomputed MSA files if available
-  --max_template_date: "2050-01-01"  # Set maximum template date (quote it: unquoted YAML parses as a date object that is not JSON serializable)
+  --max_template_date: "2050-01-01"  # Quote it: unquoted YAML parses as a date object that is not JSON serializable
   # Compress generated features (AF2 -> *.pkl.xz, AF3 -> *_af3_input.json.xz).
   # AF3 compression needs a prediction_container with alphapulldown-input-parser
   # >= 0.5.2; older images index only *.json and fail inference with
   # "['<ID>_af3_input.json'] not found in [...]".
   --compress_features: true
-  --data_pipeline: alphafold3 # Use alphafold2 or alphafold3 data pipeline for generating features
+  --data_pipeline: alphafold3 # alphafold2 or alphafold3 data pipeline
 
-# Arguments for structure inference
+# Inference flags. Must match the backend in prediction_container.
+# README: "Backend-specific flags"
 structure_inference_arguments:
   --fold_backend: alphafold3 # Options: alphafold2, alphafold3, alphalink
 
-# Arguments for structure analysis.
-# Per-fold alphajudge runs automatically write a per-run RCSB-style report.pdf
-# next to interfaces.csv (the --report flag is on by default when no --summary
-# is requested at this stage).
+# Per-fold analysis and the aggregated report across all folds.
+# README: "Structure analysis & reporting"
+enable_structure_analysis: true
+generate_recursive_report: true
 analyze_structure_arguments:
-  --contact_thresh: 8.0 # Contact threshold for structure analysis
-  --pae_filter: 100.0 # PAE filter for structure analysis
-  --models_to_analyse: "all"  # Models to analyze
+  --contact_thresh: 8.0
+  --pae_filter: 100.0
+  --models_to_analyse: "all"
 
-# Memory allocation for feature creation and structure inference.
-# NOTE: despite the "_bytes" suffix these values are in MEGABYTES (used directly as
-# the SLURM --mem request), so 64000 = 64000 MB ~= 64 GB.
-#
-# Host RAM for both stages is sized automatically from the input sequence length
-# with a safety margin, and still escalates on OOM retries. The requested memory is:
-#   create_features      : safety * (feature_create_ram_bytes + per_residue * seq_len)
-#   structure_inference  : safety * (structure_inference_ram_bytes + per_token_sq * N^2)
-# where seq_len is the query length, N is the total residues of the complex, and the
-# request is multiplied by (scaling ** (attempt - 1)) on each retry. AlphaFold's pair
-# representation is O(N^2), hence the quadratic term for inference.
-#
-# The base / per-length coefficients DEFAULT BY BACKEND (AF2 is heavier than AF3),
-# selected automatically from --data_pipeline / --fold_backend:
-#                              feature base   feature /res   infer base   infer /N^2
-#   alphafold2 (AF2 multimer):    64000 MB      120 MB         16000 MB     0.0055
-#   alphafold3 (AF3):             24000 MB        8 MB          8000 MB     0.0045
-# Inference bases are deliberately modest; the quadratic term dominates at high N, and
-# OOM retries still escalate from this base via `..._ram_scaling ** (attempt - 1)`.
-# Leave the keys below commented to use those backend defaults. Uncomment any key
-# to override it for ALL backends.
-
-# Safety margin applied to the first-attempt estimate of every length-aware stage.
-mem_safety_factor: 1.25
-# Optional hard ceiling (MB) on any single memory request; 0 = no cap. Set this to
-# your largest node's RAM on clusters where an over-estimate would never schedule.
-max_mem_mb: 0
-
-# create_features (CPU/MSA) — base is database/MSA-tool dominated (AF2 HHblits is the
-# main OOM source), with a mild linear dependence on query length.
-# feature_create_ram_bytes: 64000        # MB, fixed base (default: backend-specific)
-# feature_create_ram_per_residue_mb: 120 # MB per query residue (default: backend-specific)
-feature_create_ram_scaling: 1.1          # per-retry escalation on OOM
-# The AF2 figures above are fitted to 2,825 measured first attempts (99-2261 aa): they
-# cover 98.8% of jobs outright, and the 1.1 escalation covers the rest within the 3
-# retries set in config/profiles/slurm/config.yaml. Retries must stay enabled for that
-# tail to be caught - with retries off, an OOM is a permanent loss.
-
-# structure_inference (GPU host RAM) — base plus a quadratic term in complex size.
-# With unified memory enabled the XLA spill fraction is derived from this host
-# allocation, so this also sizes the effective GPU memory ceiling.
-# structure_inference_ram_bytes: 16000           # MB, fixed base (default: backend-specific)
-# structure_inference_ram_per_token_sq_mb: 0.0045  # MB per residue^2 (default: backend-specific)
-structure_inference_ram_scaling: 1.1             # per-retry escalation on OOM
-# Wall-time minutes per attempt for structure_inference (capped by
-# structure_inference_max_runtime). Default 1440; AF3 on an adequate GPU finishes far
-# sooner, but host-memory spilling can take many hours, so the default stays generous.
-# structure_inference_runtime_minutes: 1440
-
-# Length filtering: skip folds that are too large to be worth submitting. Lengths
-# are resolved at parse time (local FASTA / already-downloaded data / cache / the
-# UniProt REST API) and cached in <output_directory>/.sequence_lengths.tsv; skipped
-# folds are listed in <output_directory>/skipped_folds.tsv. Unknown lengths fail
-# open (the fold is kept). Set a limit to 0 to disable it.
-#
-# Max TOTAL complex length (sum of all chains, residues), per backend; selected by
-# --fold_backend. AF3 handles larger inputs than AF2-Multimer.
-max_total_length_alphafold2: 5000
-max_total_length_alphafold3: 7000
-# Optional single override applied to BOTH backends (takes precedence if set):
-# max_total_length: 6000
-# Max length of any SINGLE protein (residues); 0 disables (issue #33). A protein
-# over this drops every fold containing it, so it is never downloaded/predicted.
-max_protein_length: 0
-# Whether parse-time length resolution may query the UniProt REST API for IDs that
-# have no local FASTA / cached length yet. Set false for fully offline runs.
-length_filter_fetch_uniprot: true
-
-# Small-job batching (issue #48): group several folds into ONE structure_inference
-# Slurm job to amortise queue wait and per-job model loading. The job runs
-# run_structure_prediction.py once over the whole batch (model loaded once, folds
-# predicted back to back). Folds are grouped by size so a batch's memory tracks its
-# largest fold and its walltime the number of folds. batch_size is the max folds per
-# job (1 = today's one-job-per-fold behaviour, fully unchanged). batch_max_tokens
-# optionally caps the summed residues per batch so total walltime stays within the
-# partition MaxTime; 0 disables that cap (a single oversized fold always runs alone).
-# Trade-off: a failed batch reruns all its folds, so keep batches modest; folds whose
-# outputs already exist are skipped on rerun when the backend supports resuming.
+# Group several folds into ONE inference job to amortise queue wait and model
+# loading. 1 = one job per fold (unchanged behaviour). batch_max_tokens caps the
+# summed residues per batch; 0 = no cap. README: "Batching small jobs into one SLURM job"
 batch_size: 1
 batch_max_tokens: 0
 
-# Number of threads for AlphaFold inference
+# Partition(s) for the GPU inference jobs: one name, comma-separated, or a YAML
+# list. README: "SLURM defaults for structure inference"
+slurm_partition: "gpu-el8"
+slurm_qos: "normal"
 alphafold_inference_threads: 8
 
-# SLURM resources
-# Partition(s) for the GPU structure_inference jobs. Give ONE partition, or SEVERAL
-# to let SLURM start each job on whichever one frees up first (it schedules onto the
-# soonest-available partition). Accepts a single name, a comma/space-separated string,
-# or a YAML list -- all equivalent:
-#   slurm_partition: "gpu-el8"                     # single partition
-#   slurm_partition: "gpu-el8,gpu-training"        # comma-separated
-#   slurm_partition:                               # YAML list
-#     - gpu-el8
-#     - gpu-training
-# SLURM runs the job on the first listed partition that fits its GPUs, --mem and
-# walltime and skips those that don't (e.g. a MaxTime below structure_inference_max_runtime,
-# or no matching GPU), so make sure at least one listed partition can accommodate it.
-# Only structure_inference uses this; see slurm_partition_cpu for the CPU rules.
-slurm_partition: "gpu-el8"
-
-# Partition(s) for the CPU rules (feature generation). Same syntax as above: one
-# name, a comma-separated string, or a YAML list. Leave unset to use the cluster
-# default partition (previous behaviour).
-#
-# Worth setting on a busy cluster. Feature jobs are numerous and memory-hungry
-# (~100-200 GB each), so confining them to a single partition caps how many can run
-# at once no matter what --jobs says: at EMBL, moving from one partition to five
-# took concurrency from 18 to ~195 with nothing left pending. List only partitions
-# whose nodes have enough RAM for your longest query, and prefer CPU-only ones so
-# GPU nodes stay free for jobs that need them.
-#
-# EMBL example (CPU-only partitions, 251 GB - 12 TB per node):
-# slurm_partition_cpu: "htc-el8,htc-el10,bigmem,bigmem-el10"
-slurm_qos: "normal"
-structure_inference_gpus_per_task: 1
-# Restrict structure_inference to one GPU model (sbatch --gpus=<model>:N), e.g. "3090".
-# Default "" lets SLURM pick any GPU in the partition (use the whole pool); set a model
-# name only if you want to pin all inference jobs to one card type. The richer
-# structure_inference_gpu_tiers below routes by VRAM and OVERRIDES this when set.
-structure_inference_gpu_model: ""
-# Optional length-based GPU routing by VRAM (within this partition). List your GPU
-# pool as tiers of {min_vram_gb, nodes}; a complex's estimated peak VRAM
-# (~ structure_inference_ram_per_token_sq * N^2) selects the smallest tier that fits
-# and all SMALLER-GPU nodes are excluded, so the job runs on ANY GPU >= that tier
-# (the whole pool, not one pinned model). A complex larger than every tier uses the
-# biggest tier and spills to host RAM via unified memory. When set, this drives
-# --exclude and OVERRIDES structure_inference_gpu_model. Use explicit comma node lists
-# (avoid bracket ranges, which the shell may glob). The example below is for the EMBL
-# gpu-el8 partition - replace nodes with your cluster's; nothing is hard-coded.
-# structure_inference_gpu_vram_headroom: 1.0   # <1.0 tolerates that fraction of host spill
-# structure_inference_gpu_tiers:
-#   - {min_vram_gb: 16, nodes: "gpu60,gpu61,gpu62,gpu63,gpu64,gpu65,gpu66,gpu67,gpu68"}  # RTX PRO 4500 Blackwell, 16GB MIG slices
-#   - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29,gpu30,gpu31,gpu32,gpu33,gpu34,gpu35,gpu36,gpu37"}  # RTX 3090
-#   - {min_vram_gb: 40, nodes: "gpu25,gpu26,gpu27,gpu28"}                                # A100 40GB
-#   - {min_vram_gb: 48, nodes: "gpu40,gpu41,gpu42,gpu43,gpu44,gpu45,gpu46,gpu47,gpu48"}  # L40s/A40 48GB
-#   - {min_vram_gb: 80, nodes: "gpu38,gpu39"}                                            # H100 PCIe 80GB
-#   - {min_vram_gb: 96, nodes: "gpu50,gpu51,gpu52,gpu53"}                                # RTX PRO 6000 Blackwell 96GB
-# Blackwell (compute capability 12.0 / sm_120): RTX PRO 6000 (gpu50-53, 96GB) and
-# RTX PRO 4500 (gpu60-68, sliced into 16GB MIG instances) are verified working with
-# AlphaPulldown 2.5.0 containers - AF3 (jax 0.9.1/ptxas 12.9/cuDNN 9.17/Tokamax, all
-# three attention implementations) and AF2 (jax 0.5.3 on ptxas 12.9/cuDNN 9.2x), with
-# confidence scores matching A100/H100/3090. Only PRE-2.5.0 images fail there, at the
-# first kernel compilation with "ptxas too old" / UNIMPLEMENTED; that is an image
-# problem, so exclude those nodes only while you are still on an old image.
-# The 16GB MIG slices suit monomers and small complexes; send bigger jobs to the
-# 96GB RTX PRO 6000 cards via the tiers above. A plain "gpu:1" gres lands on a MIG
-# slice correctly (SLURM sets CUDA_VISIBLE_DEVICES=MIG-...), so no gres change is
-# needed to use them.
-# H100-SXM/H200/B200 live on the separate gpu-training partition (not routed here).
-# Optional: comma-separated nodes to keep structure_inference OFF, passed to sbatch
-# as --exclude. Useful as a fallback for GPUs the prediction container cannot use
-# (e.g. a CUDA compute capability the bundled ptxas is too old for - which for
-# Blackwell means a pre-2.5.0 image; see the note above). Example:
-# slurm_exclude_nodes: "gpu50,gpu51,gpu52,gpu53"
-# slurm_exclude_nodes: ""
-# Cap structure_inference wall time (minutes) so retry scaling (1440 * attempt) cannot
-# exceed the partition MaxTime and trigger "Requested time limit is invalid" failures.
-structure_inference_max_runtime: 10080
-# Enable JAX/XLA unified (managed) memory for structure inference so large complexes
-# spill from GPU VRAM into host RAM instead of OOM-ing (DeepMind-recommended for large
-# AlphaFold 3 inputs; slower when actually spilling). On by default.
-structure_inference_unified_memory: true
-# How far past physical GPU VRAM XLA may allocate. "auto" (default) computes it per
-# job at run time as (allocated host RAM) / (physical GPU VRAM), so the unified-memory
-# ceiling stays within the SLURM --mem allocation and XLA cannot oversubscribe host
-# RAM beyond what the job requested. Set a number (e.g. 3.2) to pin it explicitly.
-structure_inference_xla_mem_fraction: auto
-
-# Specify the backend by changing the prediction container
-# - "docker://kosinskilab/alphafold2:2.7.0" for AlphaFold2
-#   (ships a patched HHblits 3.3.1 - stock 3.3.0 aborts long queries with
-#    "MergeMasterSlave: did not find N match states", see hh-suite#389 - and
-#    fixes a crash on templates whose sum_probs is unset)
-# - "docker://kosinskilab/alphafold3:2.7.0" for AlphaFold3
-#   (reads/writes compressed *_af3_input.json.xz features)
-# - "docker://kosinskilab/alphalink:2.1.5" for AlphaLink  (latest published alphalink tag)
-# (you can also use local singularity .sif files)
-# - "/path/to/my/container.sif"
-prediction_container: "docker://kosinskilab/alphafold3:2.7.0"
-
-# Container for structure analysis. alphajudge publishes only ":latest".
+# alphajudge publishes only ":latest".
 analysis_container: "docker://kosinskilab/alphajudge:latest"
+
+# ============================================================================
+# ADVANCED
+# ============================================================================
+
+# --- Memory sizing -----------------------------------------------------------
+# Host RAM is estimated from sequence length per backend and escalates on OOM
+# retries. Values are MEGABYTES. Uncomment a base/per-length key to override the
+# backend default for ALL backends. README: "SLURM defaults for structure inference"
+mem_safety_factor: 1.25                  # margin on the first-attempt estimate
+max_mem_mb: 0                            # hard ceiling per request; 0 = none
+feature_create_ram_scaling: 1.1          # per-retry escalation on OOM
+structure_inference_ram_scaling: 1.1     # per-retry escalation on OOM
+# feature_create_ram_bytes: 64000
+# feature_create_ram_per_residue_mb: 120
+# structure_inference_ram_bytes: 16000
+# structure_inference_ram_per_token_sq_mb: 0.0045
+# structure_inference_runtime_minutes: 1440
+
+# --- Length filtering --------------------------------------------------------
+# Skip folds too large to be worth submitting; 0 disables a limit. Skipped folds
+# are listed in <output_directory>/skipped_folds.tsv.
+max_total_length_alphafold2: 5000
+max_total_length_alphafold3: 7000
+# max_total_length: 6000                 # single override for both backends
+max_protein_length: 0                    # drops every fold containing the protein
+length_filter_fetch_uniprot: true        # false for fully offline runs
+
+# --- GPU selection -----------------------------------------------------------
+# gpu_model pins one card type; gpu_tiers routes by VRAM and OVERRIDES it.
+# README: "GPU compatibility"
+structure_inference_gpus_per_task: 1
+structure_inference_gpu_model: ""
+# structure_inference_gpu_vram_headroom: 1.0
+# structure_inference_gpu_tiers:
+#   - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29"}
+#   - {min_vram_gb: 80, nodes: "gpu38,gpu39"}
+# slurm_exclude_nodes: ""                # nodes to keep inference off
+
+# --- Inference runtime and memory spilling -----------------------------------
+# Cap wall time so retry scaling cannot exceed the partition MaxTime. Unified
+# memory lets large complexes spill from VRAM into host RAM instead of OOM-ing.
+structure_inference_max_runtime: 10080
+structure_inference_unified_memory: true
+structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
+
+# --- CPU partitions ----------------------------------------------------------
+# Feature jobs are numerous and memory-hungry; listing several partitions raises
+# concurrency substantially. Unset = cluster default.
+# slurm_partition_cpu: "htc-el8,htc-el10,bigmem"
+
+# --- Extra report flags ------------------------------------------------------
+# --aggregate_report also produces an RCSB-style validation PDF (absolute path).
+recursive_report_arguments: {}
+# recursive_report_arguments:
+#   --aggregate_report: /absolute/path/to/reports/aggregate_report.pdf

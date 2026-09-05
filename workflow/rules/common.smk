@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import inspect
 import json
 import lzma
@@ -531,6 +532,7 @@ def batch_inference_args(
     backend: str,
     batch_size: int,
     jax_cache_dir: str,
+    resident: bool = False,
 ) -> dict:
     """Return inference CLI args with the batch-only flags added, each gated to the
     backend that accepts them.
@@ -541,9 +543,13 @@ def batch_inference_args(
 
     * ``--allow_resume`` (AlphaFold2 only): a crashed batch re-runs all its folds, so
       resume the ones already done. AlphaFold3 rejects it.
-    * ``--jax_compilation_cache_dir`` (AlphaFold3 only): lets the per-fold calls in a
-      batch share one on-disk JAX compile cache. This is a JAX/XLA flag; AlphaFold2
-      rejects it (its inference is not JAX-compiled).
+    * ``--jax_compilation_cache_dir`` (AlphaFold3, per-fold path only): lets the separate
+      per-fold processes share one on-disk JAX compile cache. A resident batch loads and
+      compiles once in memory, so it does not need the cache, and XLA's autotune cache
+      cannot be written safely to every shared filesystem. AlphaFold2 is JAX-compiled too
+      and benefits just as much, but the flag is only accepted by newer prediction
+      containers, so set it yourself in ``structure_inference_arguments`` rather than
+      having it added automatically.
 
     With ``batch_size <= 1`` nothing is added (the unbatched pipeline is untouched). Any
     value the user already set is preserved (``setdefault``).
@@ -552,21 +558,92 @@ def batch_inference_args(
     if batch_size > 1:
         if backend == "alphafold2":
             args.setdefault("--allow_resume", "true")
-        if backend == "alphafold3":
+        if backend == "alphafold3" and not resident:
             args.setdefault("--jax_compilation_cache_dir", jax_cache_dir)
     return args
 
 
-# Inference flags each backend accepts, mirroring run_structure_prediction.py's
-# ``_validate_flags_for_backend``. Names are WITHOUT the leading ``--``. This is only
-# used for a parse-time WARNING: the container is the source of truth and hard-errors,
-# so if this list drifts (a newer image adds a flag) the worst case is a spurious
-# warning, never a blocked run. Keep in sync with AlphaPulldown when convenient.
+def batch_padding_args(folds, *, backend: str, token_fn) -> dict:
+    """Pad every AlphaFold2 multimer in a batch to one shape.
+
+    AlphaFold2 compiles per input shape, so a resident batch whose folds differ in
+    length recompiles for each one and the batch saves nothing. ``pad_input_features``
+    removes that, but it applies to multimers only and needs both bounds set.
+    """
+    if str(backend or "").strip().lower() not in ("alphafold2", "af2"):
+        return {}
+    multimers = [fold for fold in folds if "+" in str(fold)]
+    if len(multimers) < 2:
+        return {}
+    tokens = [int(token_fn(fold) or 0) for fold in folds]
+    # Every fold must contribute a length: padding to less than the largest fold in the
+    # batch would make pad_input_features shrink it. An unresolved length disables padding.
+    if not all(tokens):
+        return {}
+    return {"--desired_num_res": str(max(tokens))}
+
+
+def prediction_batch_manifest(jobs, manifest_path) -> str:
+    """Serialize ordered inference jobs for AlphaPulldown resident inference.
+
+    Output directories are relative to the manifest so the handoff remains
+    relocatable when the workflow output tree is mounted into a container.
+    """
+    manifest_parent = Path(manifest_path).expanduser().resolve().parent
+    records = []
+    for job_id, fold_input, output_directory in jobs:
+        relative_output = os.path.relpath(
+            Path(output_directory).expanduser().resolve(), manifest_parent
+        )
+        records.append(
+            json.dumps(
+                {
+                    "job_id": str(job_id),
+                    "input": str(fold_input),
+                    "output_directory": relative_output,
+                },
+                separators=(",", ":"),
+            )
+        )
+    return "\n".join(records) + ("\n" if records else "")
+
+
+def prediction_batch_id(folds: Iterable[str]) -> str:
+    """Return the stable identity used by a structure-inference batch.
+
+    Single-fold jobs retain their historical fold identity. Resident batches add
+    a digest of the complete ordered membership, so changing any member changes
+    both the manifest path and the completion sentinel selected by the Snakefile.
+    """
+    members = [str(fold) for fold in folds]
+    if not members:
+        raise ValueError("an inference batch must contain at least one fold")
+    if len(members) == 1:
+        return members[0]
+    payload = json.dumps(members, ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"batch-{digest}"
+
+
+# Inference flags each backend accepts. Names are WITHOUT the leading ``--``.
+#
+# SOURCE OF TRUTH: ``alphapulldown/inference_flags.py`` in AlphaPulldown. This is a copy
+# because the workflow parses on the head node, where AlphaPulldown is not importable -
+# it only lives inside the prediction container. The copy exists solely to turn a queue
+# round-trip into a parse-time WARNING; the container still hard-errors, so drift costs
+# a spurious warning, never a blocked run.
+#
+# It HAS drifted before (``convert_to_modelcif`` was missing from the AF3 set and users
+# were told a valid flag was unsupported), so ``test_inference_flag_tables`` pins these
+# sets. When a new AlphaPulldown release changes them, update both the sets and that test.
 _COMMON_INFERENCE_FLAGS = {
     "input", "output_directory", "data_directory", "features_directory",
     "protein_delimiter", "fold_backend", "random_seed", "storage_mode",
 }
 _AF2_LIKE_INFERENCE_FLAGS = {
+    # AF2 inference is JAX-compiled, so a persistent compile cache helps it as much as
+    # AF3; newer prediction containers accept the flag.
+    "jax_compilation_cache_dir",
     "compress_result_pickles", "remove_result_pickles", "models_to_relax",
     "relax_best_score_threshold", "remove_keys_from_pickles", "convert_to_modelcif",
     "allow_resume", "num_cycle", "num_predictions_per_model", "pair_msa",
@@ -580,6 +657,7 @@ _AF3_INFERENCE_FLAGS = {
     "jax_compilation_cache_dir", "buckets", "flash_attention_implementation",
     "num_diffusion_samples", "num_seeds", "debug_templates", "debug_msas",
     "num_recycles", "save_embeddings", "save_distogram", "use_ap_style",
+    "convert_to_modelcif",
 }
 _ALPHALINK_EXTRA_FLAGS = {"crosslinks"}
 
@@ -710,6 +788,8 @@ def bin_folds(
     *,
     batch_size: int = 1,
     max_batch_tokens: int = 0,
+    backend: str | None = None,
+    delimiter: str = "+",
 ) -> list[list[str]]:
     """Group folds into batches that share a single inference job (issue #48).
 
@@ -717,6 +797,10 @@ def bin_folds(
     loads the model once and predicts the folds back to back. Batching trades
     finer-grained retries for far less queue wait and a single model-load per
     batch instead of one per fold.
+
+    AlphaFold2 monomers and multimers require different model runners, so they
+    are binned separately when ``backend`` is ``alphafold2``. AlphaFold3 uses a
+    shared runner configuration and retains the configuration-agnostic grouping.
 
     Folds are sorted by token count so a batch holds similarly sized folds: the
     batch's memory is sized from its largest fold and its walltime from the sum,
@@ -737,18 +821,29 @@ def bin_folds(
     ordered = sorted(items, key=lambda ft: (ft[1], ft[0]))
     cap = int(max_batch_tokens or 0)
 
-    batches: list[list[str]] = []
-    current: list[str] = []
-    current_tokens = 0
+    groups: dict[str, list[tuple[str, int]]] = {}
     for fold, tokens in ordered:
-        too_many = len(current) >= batch_size
-        too_big = cap > 0 and bool(current) and (current_tokens + tokens) > cap
-        if current and (too_many or too_big):
+        configuration = "shared"
+        if str(backend or "").strip().lower() in ("alphafold2", "af2"):
+            chain_count = sum(
+                copies for _name, copies in parse_fold_chains(fold, delimiter)
+            )
+            configuration = "multimer" if chain_count > 1 else "monomer"
+        groups.setdefault(configuration, []).append((fold, tokens))
+
+    batches: list[list[str]] = []
+    for group in groups.values():
+        current: list[str] = []
+        current_tokens = 0
+        for fold, tokens in group:
+            too_many = len(current) >= batch_size
+            too_big = cap > 0 and bool(current) and (current_tokens + tokens) > cap
+            if current and (too_many or too_big):
+                batches.append(current)
+                current = []
+                current_tokens = 0
+            current.append(fold)
+            current_tokens += tokens
+        if current:
             batches.append(current)
-            current = []
-            current_tokens = 0
-        current.append(fold)
-        current_tokens += tokens
-    if current:
-        batches.append(current)
     return batches
