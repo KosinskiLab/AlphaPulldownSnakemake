@@ -22,7 +22,7 @@ backend_weights_directory : /g/kosinski/dima/alphafold3_weights/
 
 # The container decides the folding backend (alphafold2 / alphafold3 / alphalink);
 # a local .sif path also works. README: "Changing folding backends"
-prediction_container: "docker://kosinskilab/alphafold3:2.7.0"
+prediction_container: "docker://kosinskilab/alphafold3:2.8.0"
 
 ################################################################################
 ##  COMMON  --  what most runs adjust
