@@ -733,6 +733,36 @@ mmseqs2_features:
     uniprot: {path: /db/mmseqs/uniprot, identifier: uniprot-2026-08, max_sequences: 50000}
 ```
 
+#### RNA chains
+
+Add the three RNA references AlphaFold 3 uses and RNA chains are searched too. It is
+all-or-nothing — AlphaFold 3 merges them into a single unpaired MSA, so a partial set
+would quietly shallow it and is rejected. Leave them out and the stage stays
+protein-only, unchanged.
+
+```yaml
+mmseqs2_features:
+  databases:
+    rfam: {path: /db/mmseqs/rfam, identifier: rfam-14_9, max_sequences: 10000}
+    rnacentral: {path: /db/mmseqs/rnacentral, identifier: rnacentral-active, max_sequences: 10000}
+    nt_rna: {path: /db/mmseqs/nt_rna, identifier: nt-rna-2023_02_23, max_sequences: 10000}
+```
+
+Two differences from the protein databases:
+
+- **Do not pad them.** A nucleotide search cannot use the GPU prefilter, so plain
+  `mmseqs createdb` is enough; `makepaddedseqdb` would cost hours on nt_rna building
+  something the search never reads. `scripts/setup_databases.sh --mmseqs` does this.
+- **They raise the memory floor.** Protein memory is derived from the largest database
+  on disk, but that ratio does not carry over to nucleotide databases — nt_rna is 77 GB
+  on disk and needs about 275 GB. Configuring RNA therefore raises the request for every
+  search shard, since any shard may contain an RNA chain.
+
+MMseqs2 can crash (SIGSEGV) on particular RNA queries against nt_rna while succeeding
+for the same query on the smaller databases and for other queries on nt_rna. That is a
+fault inside MMseqs2, not a configuration problem; the failure names the chain and says
+retrying will not help.
+
 #### How the MSAs compare to the native pipeline
 
 MMseqs2 has been used to build AlphaFold MSAs for years (ColabFold does exactly

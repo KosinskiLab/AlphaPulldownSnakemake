@@ -17,6 +17,17 @@ from typing import Any, Mapping, Sequence
 
 
 _DATABASE_NAMES = ("uniref90", "mgnify", "small_bfd", "uniprot")
+# The three nucleotide references AlphaFold 3 merges into one unpaired RNA MSA.
+# Optional and all-or-nothing: configure all three to search RNA chains, or none and
+# the stage stays protein-only exactly as before.
+_RNA_DATABASE_NAMES = ("rfam", "rnacentral", "nt_rna")
+# Measured floor for a shard that searches the RNA databases. The protein estimate
+# below scales the padded database size on disk by 0.85, but that ratio does not carry
+# over to a plain nucleotide database: nt_rna is 77 GB on disk and 150 GB and 200 GB
+# both failed, while 275 GB and 350 GB both succeeded and both peaked at 249 GB.
+# MMseqs2 expands to fill whatever it is given -- at 500 GB the same search peaked at
+# 489 GB -- so peak RSS is not a requirement and only the failure boundary is.
+_RNA_SEARCH_FLOOR_MB = 275 * 1024
 _BUNDLED_MMSEQS_BINARY = Path("/opt/mmseqs/bin/mmseqs")
 _BUNDLED_MMSEQS_ID = "8cc5ce367b5638c4306c2d7cfc652dd099a4643f"
 
@@ -366,6 +377,34 @@ class LocalMmseqsFeatureConfig:
                 ),
                 max_sequences=max_sequences,
             )
+        # RNA is opt-in and all-or-nothing: a partial set would silently shallow the
+        # MSA, since AlphaFold 3 merges all three into one unpaired alignment.
+        configured_rna = [
+            name for name in _RNA_DATABASE_NAMES
+            if isinstance(database_values.get(name), Mapping)
+        ]
+        if configured_rna and len(configured_rna) != len(_RNA_DATABASE_NAMES):
+            missing = [n for n in _RNA_DATABASE_NAMES if n not in configured_rna]
+            raise ValueError(
+                "Local MMseqs2 RNA support needs all of "
+                f"{', '.join(_RNA_DATABASE_NAMES)}; missing: {', '.join(missing)}"
+            )
+        for name in configured_rna:
+            database = database_values[name]
+            max_sequences = (
+                int(database["max_sequences"])
+                if database.get("max_sequences") is not None
+                else None
+            )
+            if max_sequences is not None and max_sequences < 1:
+                raise ValueError(
+                    f"Local MMseqs2 {name} max_sequences must be at least 1"
+                )
+            databases[name] = MmseqsDatabaseConfig(
+                path=Path(_required(database, "path", f"{name} database")),
+                identifier=str(_required(database, "identifier", f"{name} database")),
+                max_sequences=max_sequences,
+            )
         batch_max_sequences = int(values.get("batch_max_sequences", 256))
         batch_max_residues = int(values.get("batch_max_residues", 100_000))
         e_value = float(values.get("e_value", 1e-4))
@@ -440,6 +479,12 @@ class LocalMmseqsFeatureConfig:
             template_database_ids=template_database_ids,
             databases=databases,
         )
+
+    @property
+    def rna_configured(self) -> bool:
+        """Whether RNA chains can be searched, i.e. all three databases are set."""
+        configured = self.databases or {}
+        return all(name in configured for name in _RNA_DATABASE_NAMES)
 
     def msa_cli_arguments(self, *, threads: int, memory_mb: int) -> tuple[str, ...]:
         """Arguments owned by the GPU MSA stage."""
@@ -538,6 +583,12 @@ class LocalMmseqsFeatureConfig:
         """
         derived = self._largest_database_mb()
         estimate = safety * (derived or self.search_ram_mb)
+        # A nucleotide search does not follow the padded-protein disk ratio, so the
+        # derivation above under-requests it by roughly 3.6x. Floor it at the measured
+        # boundary whenever an RNA database is configured, since any shard may contain
+        # an RNA chain.
+        if self.rna_configured:
+            estimate = max(estimate, safety * _RNA_SEARCH_FLOOR_MB)
         value = math.ceil(
             estimate * (self.gpu_ram_scaling ** max(int(attempt) - 1, 0))
         )

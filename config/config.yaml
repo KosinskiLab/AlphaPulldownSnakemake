@@ -191,6 +191,18 @@ structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
 #    mgnify: {path: /g/alphafold/AlphaFold_DBs/mmseqs/mgnify_gpu, identifier: mgy_clusters-2022_05-padded, max_sequences: 5000}
 #    small_bfd: {path: /g/alphafold/AlphaFold_DBs/mmseqs/small_bfd_gpu, identifier: small-bfd-padded, max_sequences: 5000}
 #    uniprot: {path: /g/alphafold/AlphaFold_DBs/mmseqs/uniprot_gpu, identifier: uniprot_all-2021_04-padded, max_sequences: 50000}
+#  # RNA chains. Optional and all-or-nothing: set all three to search RNA, or leave
+#  # them out and the stage stays protein-only. NOT padded -- a nucleotide search
+#  # cannot use the GPU prefilter, so `mmseqs createdb` alone is enough and
+#  # makepaddedseqdb would cost hours on nt_rna for something never read.
+#  #
+#  # Memory is DERIVED from the largest configured database for protein, but that
+#  # ratio does not hold for nucleotide databases: nt_rna is 77 GB on disk and needs
+#  # about 275 GB. Configuring RNA therefore raises the floor for every search shard,
+#  # because any shard may contain an RNA chain.
+#    rfam: {path: /g/alphafold/AlphaFold_DBs/mmseqs/rfam, identifier: rfam-14_9, max_sequences: 10000}
+#    rnacentral: {path: /g/alphafold/AlphaFold_DBs/mmseqs/rnacentral, identifier: rnacentral-active, max_sequences: 10000}
+#    nt_rna: {path: /g/alphafold/AlphaFold_DBs/mmseqs/nt_rna, identifier: nt-rna-2023_02_23, max_sequences: 10000}
 
 ## -- Extra report flags ------------------------------------------------------
 # --aggregate_report also produces an RCSB-style validation PDF (absolute path).

@@ -693,3 +693,88 @@ def test_split_memory_limit_is_omitted_when_the_resource_is_unresolved():
     args = adapter.msa_cli_arguments(threads=8, memory_mb=TBDString("<TBD>"))
     assert not any(a.startswith("--mmseqs_split_memory_limit") for a in args)
     assert any(a.startswith("--mmseqs_threads") for a in args)
+
+
+# --------------------------------------------------------------------------------
+# RNA databases
+# --------------------------------------------------------------------------------
+
+RNA_NAMES = ("rfam", "rnacentral", "nt_rna")
+
+
+def _rna_databases():
+    return {
+        name: {"path": f"/db/{name}", "identifier": f"{name}-2026-08"}
+        for name in RNA_NAMES
+    }
+
+
+def _with_rna(**overrides):
+    config = _config(**overrides)
+    config["databases"] = {**config["databases"], **_rna_databases()}
+    return config
+
+
+def test_rna_databases_are_optional_so_protein_only_configs_still_load():
+    """RNA is opt-in: the existing four-database config must keep working untouched."""
+    settings = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(), data_pipeline="alphafold3"
+    )
+
+    assert settings.enabled
+    assert not settings.rna_configured
+    assert set(settings.databases) == {"uniref90", "mgnify", "small_bfd", "uniprot"}
+
+
+def test_a_partial_rna_set_is_rejected_rather_than_silently_shallowing_the_msa():
+    """AlphaFold 3 merges all three into one MSA, so two of three is a quiet defect."""
+    config = _with_rna()
+    del config["databases"]["nt_rna"]
+
+    with pytest.raises(ValueError, match="nt_rna"):
+        mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(config, data_pipeline="alphafold3")
+
+
+def test_configuring_rna_passes_all_three_databases_to_the_msa_stage():
+    settings = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _with_rna(), data_pipeline="alphafold3"
+    )
+
+    assert settings.rna_configured
+    arguments = settings.msa_cli_arguments(threads=8, memory_mb=0)
+    for name in RNA_NAMES:
+        assert any(f"--mmseqs_{name}_database_path=" in a for a in arguments)
+        assert any(f"--mmseqs_{name}_database_id=" in a for a in arguments)
+
+
+def test_rna_search_memory_is_floored_at_the_measured_boundary():
+    """The padded-protein disk ratio under-requests a nucleotide search ~3.6x.
+
+    nt_rna is 77 GB on disk. 150 GB and 200 GB both failed; 275 GB and 350 GB both
+    succeeded, and both peaked at 249 GB. Sizing from disk would ask for ~76 GB.
+    """
+    protein_only = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(), data_pipeline="alphafold3"
+    )
+    with_rna = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(_with_rna(), data_pipeline="alphafold3")
+
+    rna_mb = with_rna.search_memory_mb(safety=1.0, attempt=1)
+    assert rna_mb >= 275 * 1024
+    assert rna_mb > protein_only.search_memory_mb(safety=1.0, attempt=1)
+
+
+def test_the_rna_floor_still_respects_the_safety_factor_and_the_cap():
+    settings = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(_with_rna(), data_pipeline="alphafold3")
+
+    assert settings.search_memory_mb(safety=1.25, attempt=1) >= int(275 * 1024 * 1.25)
+    assert settings.search_memory_mb(safety=1.25, attempt=1, cap_mb=100) == 100
+
+
+def test_configuring_rna_changes_the_cache_key_so_stale_msas_are_not_reused():
+    """A protein MSA built without the RNA databases is not the same artifact."""
+    protein_only = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(), data_pipeline="alphafold3"
+    )
+    with_rna = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(_with_rna(), data_pipeline="alphafold3")
+
+    assert protein_only.msa_cache_key("img") != with_rna.msa_cache_key("img")
