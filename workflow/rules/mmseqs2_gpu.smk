@@ -32,20 +32,30 @@ _BUNDLED_MMSEQS_BINARY = Path("/opt/mmseqs/bin/mmseqs")
 _BUNDLED_MMSEQS_ID = "8cc5ce367b5638c4306c2d7cfc652dd099a4643f"
 _BACKENDS = {"alphafold3": "alphafold3", "af3": "alphafold3",
              "alphafold2": "alphafold2", "af2": "alphafold2"}
-# create_feature_arguments an AlphaFold 2 finalization reads: the template stack,
+# create_feature_arguments each backend's finalization reads: its template search,
 # and nothing else. The MSA arguments (jackhmmer, HHblits, their databases) belong
 # to the native search this stage replaces, so they are deliberately not forwarded.
-_AF2_TEMPLATE_ARGUMENTS = (
-    "--use_hhsearch",
-    "--pdb_seqres_database_path",
-    "--pdb70_database_path",
-    "--template_mmcif_dir",
-    "--obsolete_pdbs_path",
-    "--hmmsearch_binary_path",
-    "--hmmbuild_binary_path",
-    "--hhsearch_binary_path",
-    "--kalign_binary_path",
-)
+_TEMPLATE_ARGUMENTS = {
+    "alphafold2": (
+        "--use_hhsearch",
+        "--pdb_seqres_database_path",
+        "--pdb70_database_path",
+        "--template_mmcif_dir",
+        "--obsolete_pdbs_path",
+        "--hmmsearch_binary_path",
+        "--hmmbuild_binary_path",
+        "--hhsearch_binary_path",
+        "--kalign_binary_path",
+    ),
+    # AlphaFold 3 runs hmmsearch against pdb_seqres and reads the hits from the mmCIF
+    # directory, each of which the native run lets the user override.
+    "alphafold3": (
+        "--pdb_seqres_database_path",
+        "--template_mmcif_dir",
+        "--hmmsearch_binary_path",
+        "--hmmbuild_binary_path",
+    ),
+}
 
 
 def _enabled(value: Any) -> bool:
@@ -712,17 +722,15 @@ class LocalMmseqsFeatureConfig:
     ) -> dict[str, str]:
         """The create_feature_arguments this backend's finalization reads.
 
-        AlphaFold 3 runs its own native template search and takes none of them.
-        AlphaFold 2 builds hmmsearch or hhsearch from them, so a user who pointed
-        --pdb_seqres_database_path somewhere, or chose --use_hhsearch, gets the
-        same template stack here as the native pipeline would have built.
+        Both backends search templates here, so a user who pointed
+        --pdb_seqres_database_path somewhere, or chose --use_hhsearch for AlphaFold 2,
+        gets the same templates as the native pipeline would have found. Left out,
+        the search silently falls back to the defaults under --data_dir.
         """
-        if self.backend != "alphafold2":
-            return {}
         arguments = dict(create_feature_arguments or {})
         return {
             name: str(arguments[name])
-            for name in _AF2_TEMPLATE_ARGUMENTS
+            for name in _TEMPLATE_ARGUMENTS[self.backend]
             if arguments.get(name) not in (None, "", False, "false", "False")
         }
 
@@ -793,8 +801,9 @@ class LocalMmseqsFeatureConfig:
     ) -> str:
         """Namespace final features by MSA, backend and template provenance.
 
-        The backend and AlphaFold 2's template settings are recorded only when they
-        apply, so every AlphaFold 3 feature cache keeps the namespace it had.
+        The backend and the template settings are recorded only when they differ from
+        the default, so an AlphaFold 3 feature cache that overrides no template
+        setting keeps the namespace it had.
         """
         identity = {
             "msa": self.msa_cache_key(prediction_container),
@@ -803,9 +812,9 @@ class LocalMmseqsFeatureConfig:
         }
         if self.backend != "alphafold3":
             identity["backend"] = self.backend
-            identity["template_arguments"] = self.template_arguments(
-                create_feature_arguments
-            )
+        template_arguments = self.template_arguments(create_feature_arguments)
+        if template_arguments:
+            identity["template_arguments"] = template_arguments
         return self._digest(identity)
 
     def search_memory_mb(self, *, safety: float, attempt: int, cap_mb: int = 0) -> int:

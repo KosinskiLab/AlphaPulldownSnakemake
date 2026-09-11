@@ -188,12 +188,14 @@ structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
 #  cpu_runtime_multiplier: 2.5          # walltime allowance for CPU vs GPU search
 #  gpu_runtime_per_sequence_minutes: 0.5
 #  gpu_runtime_per_1000_residues: 1.0
-#  # Finalization stage (CPU): AF3 template search over an MSA that already exists.
-#  # Measured 0.24 GB / 13 s for one protein, 0.57 GB / 110 s for eight.
+#  # Finalization stage (CPU): the template search over an MSA that already exists.
+#  # Template settings in create_feature_arguments (--pdb_seqres_database_path,
+#  # --template_mmcif_dir, AF2's --use_hhsearch, ...) reach it as in a native run.
+#  # Measured for AF3: 0.24 GB / 13 s for one protein, 0.57 GB / 110 s for eight.
 #  finalize_base_ram_mb: 2000
 #  finalize_ram_per_residue_mb: 1.0
 #  finalize_runtime_minutes_base: 30
-#  template_database_ids:  # immutable identities for native AF3 template cache
+#  template_database_ids:  # immutable identities of the template databases
 #    pdb_seqres: pdb-seqres-2026-08
 #    mmcif: pdb-mmcif-2026-08
 #  # GPU-padded MMseqs2 databases built from the AlphaFold 3.0.0 FASTAs. The paths

@@ -477,14 +477,22 @@ def test_alphafold2_finalization_gets_the_template_stack_and_nothing_else():
     )
 
 
-def test_alphafold3_finalization_takes_none_of_the_af2_template_arguments():
-    # AlphaFold 3 runs its own native template search.
-    arguments = _adapter().finalize_cli_arguments(_CREATE_FEATURE_ARGUMENTS)
+def test_alphafold3_finalization_gets_its_own_template_overrides():
+    """AlphaFold 3 searches templates here too, so a user's template database must
+    reach it; dropping it silently searched the default under --data_dir. The
+    AlphaFold 2-only settings would mean nothing to it."""
+    arguments = _adapter().finalize_cli_arguments(
+        {**_CREATE_FEATURE_ARGUMENTS, "--pdb_seqres_database_path": "/db/seqres.txt"}
+    )
+    assert "--template_mmcif_dir=/db/pdb_mmcif/mmcif_files" in arguments
+    assert "--pdb_seqres_database_path=/db/seqres.txt" in arguments
     assert not any("pdb70" in argument or "hhsearch" in argument for argument in arguments)
+    assert not any("uniref90" in argument or "jackhmmer" in argument for argument in arguments)
 
 
 def test_alphafold3_feature_cache_keeps_its_namespace():
-    """Adding a second backend must not re-key the first one's features."""
+    """Adding a second backend must not re-key the first one's features, and
+    neither may honouring template overrides re-key a run that sets none."""
     adapter = _adapter()
     before_af2_existed = adapter._digest(
         {
@@ -493,11 +501,28 @@ def test_alphafold3_feature_cache_keeps_its_namespace():
             "template_database_ids": dict(adapter.template_database_ids),
         }
     )
+    no_template_overrides = {
+        name: value
+        for name, value in _CREATE_FEATURE_ARGUMENTS.items()
+        if name != "--template_mmcif_dir"
+    }
     assert (
-        adapter.feature_cache_key(
-            "2050-01-01", "image:v1", _CREATE_FEATURE_ARGUMENTS
-        )
+        adapter.feature_cache_key("2050-01-01", "image:v1", no_template_overrides)
         == before_af2_existed
+    )
+
+
+def test_an_alphafold3_template_override_moves_the_feature_cache():
+    """Features finalized against the default template database are not the ones
+    the override asks for, so they must not be reused for it."""
+    adapter = _adapter()
+    plain = adapter.feature_cache_key("2050-01-01", "image:v1", {})
+    assert plain != adapter.feature_cache_key(
+        "2050-01-01", "image:v1", {"--template_mmcif_dir": "/elsewhere"}
+    )
+    # AlphaFold 2-only settings do not reach this backend, so they cannot move it.
+    assert plain == adapter.feature_cache_key(
+        "2050-01-01", "image:v1", {"--use_hhsearch": True}
     )
 
 
