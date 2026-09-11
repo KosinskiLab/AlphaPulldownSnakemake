@@ -84,6 +84,8 @@ class ScheduledShard:
     identifier: str
     shard: FeatureShard
     summary_path: Path
+    # A valid Shard completion already exists at summary_path.
+    complete: bool = False
 
 
 def plan_feature_shards(
@@ -92,6 +94,7 @@ def plan_feature_shards(
     *,
     max_sequences: int,
     max_residues: int,
+    start_index: int = 0,
 ) -> tuple[FeatureShard, ...]:
     """Split requests into deterministic shards bounded by count and residues.
 
@@ -125,7 +128,7 @@ def plan_feature_shards(
         groups.append((tuple(current), current_residues))
 
     shards = []
-    for index, (members, residues) in enumerate(groups):
+    for index, (members, residues) in enumerate(groups, start_index):
         digest = hashlib.sha256("\0".join(members).encode()).hexdigest()[:12]
         shards.append(
             FeatureShard(
@@ -137,15 +140,18 @@ def plan_feature_shards(
     return tuple(shards)
 
 
-def repair_shard_identifier(
-    shard: FeatureShard,
-    invalid_state: Sequence[str],
-    *,
-    cache_mtime_ns: int,
-) -> str:
-    """Return a fresh job id when a completed shard has invalid cached bundles."""
-    state = "\0".join((*invalid_state, str(cache_mtime_ns)))
-    digest = hashlib.sha256(state.encode()).hexdigest()[:12]
+def repair_shard_identifier(shard: FeatureShard, invalid_state: Sequence[str]) -> str:
+    """A job id for re-running a completed shard whose bundles are no longer valid.
+
+    A function of the shard and its own completion summaries, nothing else. It used
+    to fold in the MSA cache directory's mtime as a nonce -- but every running shard
+    writes its bundles into that directory, so a repair job re-parsing on its compute
+    node computed a different id and could not find itself. No nonce is needed: every
+    repair that completes leaves a summary, which is part of the state the next
+    repair's id is computed from, so successive repairs still get distinct ids; and a
+    repair that died before completing gets the same id again, as a retry should.
+    """
+    digest = hashlib.sha256("\0".join(invalid_state).encode()).hexdigest()[:12]
     return f"{shard.identifier}-repair-{digest}"
 
 
@@ -278,9 +284,17 @@ def schedule_feature_shards(
             candidates.extend(
                 completion_dir.glob(f"{shard.identifier}-repair-*.json")
             )
+        # Newest first, with a total order: summaries written within one timestamp
+        # tick used to be ordered by set iteration, which is hash-seeded per process,
+        # so two parses could pick different valid summaries. On a tie a repair
+        # summary wins over the base one, being the later record, then by name.
         candidates = sorted(
             {candidate for candidate in candidates if candidate.exists()},
-            key=_mtime_ns,
+            key=lambda candidate: (
+                _mtime_ns(candidate),
+                "-repair-" in candidate.name,
+                candidate.name,
+            ),
             reverse=True,
         )
         valid_summary = None
@@ -292,7 +306,8 @@ def schedule_feature_shards(
             if valid:
                 valid_summary = candidate
                 break
-            invalid_state.extend(state)
+            # Named, so the id of the next repair differs from every earlier one.
+            invalid_state.extend(f"{candidate.name}:{item}" for item in state)
 
         if valid_summary is not None:
             job_id = valid_summary.stem
@@ -301,22 +316,139 @@ def schedule_feature_shards(
             job_id = shard.identifier
             summary_path = base_summary
         else:
-            try:
-                cache_mtime_ns = msa_cache_dir.stat().st_mtime_ns
-            except OSError:
-                cache_mtime_ns = 0
-            job_id = repair_shard_identifier(
-                shard, invalid_state, cache_mtime_ns=cache_mtime_ns
-            )
+            job_id = repair_shard_identifier(shard, invalid_state)
             summary_path = completion_dir / f"{job_id}.json"
         scheduled.append(
             ScheduledShard(
                 identifier=job_id,
                 shard=shard,
                 summary_path=summary_path,
+                complete=valid_summary is not None,
             )
         )
     return tuple(scheduled)
+
+
+_SHARD_REGISTRY = ".shard_registry.json"
+
+
+@dataclass(frozen=True)
+class MsaShardSchedule:
+    """Which shard job computes which protein, as every parse of a run agrees."""
+
+    jobs: Mapping[str, FeatureShard]
+    completion_by_protein: Mapping[str, Path]
+
+    def shard(self, job_id: str) -> FeatureShard:
+        """The shard a job id names -- any id this cache namespace ever scheduled."""
+        return self.jobs[job_id]
+
+    def completion_target(self, protein: str) -> Path:
+        """The Shard completion record a requested protein's finalization waits on."""
+        return self.completion_by_protein[protein]
+
+
+def _read_shard_registry(msa_cache_dir: Path) -> tuple[FeatureShard, ...]:
+    try:
+        stored = json.loads((msa_cache_dir / _SHARD_REGISTRY).read_text())
+        return tuple(
+            FeatureShard(
+                identifier=str(entry["identifier"]),
+                proteins=tuple(str(p) for p in entry["proteins"]),
+                total_residues=int(entry["total_residues"]),
+            )
+            for entry in stored["shards"]
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return ()
+
+
+def _write_shard_registry(msa_cache_dir: Path, shards: Sequence[FeatureShard]) -> None:
+    payload = {
+        "schemaVersion": 1,
+        "shards": [
+            {
+                "identifier": shard.identifier,
+                "proteins": list(shard.proteins),
+                "total_residues": shard.total_residues,
+            }
+            for shard in shards
+        ],
+    }
+    path = msa_cache_dir / _SHARD_REGISTRY
+    try:
+        msa_cache_dir.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, indent=1))
+        os.replace(temporary, path)
+    except OSError:
+        # Unwritable output: schedule from memory rather than fail the parse. Parses
+        # can then disagree again, exactly as before the registry existed.
+        pass
+
+
+def schedule_msa_shards(
+    proteins: Sequence[str],
+    sequence_lengths: Mapping[str, int],
+    msa_cache_dir: Path,
+    *,
+    max_sequences: int,
+    max_residues: int,
+) -> MsaShardSchedule:
+    """Plan and schedule MSA shards so that every parse of a run agrees.
+
+    Snakemake parses the workflow again inside every SLURM job, and a job has to
+    find the shard it was submitted for. Nothing a parse reads may change that
+    answer, and three things did: lengths learned from FASTAs the run itself
+    downloads, the requested protein set (it excludes proteins with precomputed
+    features in a shared store other runs write to), and -- for repairs -- the MSA
+    cache directory's mtime, which every running shard changes.
+
+    So shards live in an append-only registry beside the MSA cache. A protein once
+    planned keeps its shard; only proteins no usable registered shard covers are
+    planned, and appended. Every registered shard's job id keeps resolving on every
+    later parse, scheduled now or not, so a running job always finds itself.
+
+    A registered shard is usable when all its proteins are still requested, or when
+    it has already completed; a partly requested shard that never completed is left
+    alone and its requested proteins are planned afresh. When two usable shards
+    cover one protein -- only possible after a protein was removed and re-added --
+    the newest wins.
+    """
+    requested = tuple(dict.fromkeys(proteins))
+    wanted = set(requested)
+    registry = _read_shard_registry(msa_cache_dir)
+    scheduled = list(schedule_feature_shards(registry, msa_cache_dir))
+
+    def assign(jobs: Sequence[ScheduledShard], into: dict[str, ScheduledShard]) -> None:
+        for job in jobs:
+            if set(job.shard.proteins) <= wanted or job.complete:
+                for protein in job.shard.proteins:
+                    if protein in wanted:
+                        into[protein] = job
+
+    covering: dict[str, ScheduledShard] = {}
+    assign(scheduled, covering)
+    unplanned = [protein for protein in requested if protein not in covering]
+    if unplanned:
+        fresh = plan_feature_shards(
+            unplanned,
+            sequence_lengths,
+            max_sequences=max_sequences,
+            max_residues=max_residues,
+            start_index=len(registry),
+        )
+        _write_shard_registry(msa_cache_dir, (*registry, *fresh))
+        fresh_jobs = schedule_feature_shards(fresh, msa_cache_dir)
+        scheduled.extend(fresh_jobs)
+        assign(fresh_jobs, covering)
+
+    return MsaShardSchedule(
+        jobs={job.identifier: job.shard for job in scheduled},
+        completion_by_protein={
+            protein: covering[protein].summary_path for protein in requested
+        },
+    )
 
 
 @dataclass(frozen=True)

@@ -7,6 +7,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -52,14 +53,19 @@ def _config(**overrides):
     return config
 
 
-def _workflow_case(tmp_path, proteins, *, mmseqs_config=None):
+def _workflow_case(tmp_path, proteins, *, mmseqs_config=None, staged=True):
+    """A workflow configuration over ``proteins``.
+
+    ``staged=False`` leaves ``data/`` empty, as it is when a run starts from
+    UniProt accessions: the FASTAs only appear once download_uniprot has run.
+    """
     sample_sheet = tmp_path / "sample_sheet.csv"
     sample_sheet.write_text("+".join(proteins) + "\n", encoding="utf-8")
     output_directory = tmp_path / "output"
     data_directory = output_directory / "data"
     data_directory.mkdir(parents=True)
     (output_directory / "features").mkdir()
-    for protein in proteins:
+    for protein in proteins if staged else ():
         (data_directory / f"{protein}.fasta").write_text(
             f">{protein}\nACDE\n", encoding="utf-8"
         )
@@ -73,6 +79,9 @@ def _workflow_case(tmp_path, proteins, *, mmseqs_config=None):
             "only_generate_features": True,
             "enable_structure_analysis": False,
             "max_total_length": 0,
+            # Planning resolves lengths through the same resolver as the length
+            # filter, which falls back to the UniProt REST API. Tests stay offline.
+            "length_filter_fetch_uniprot": False,
             "mmseqs2_features": mmseqs_config or _config(),
         }
     )
@@ -276,18 +285,19 @@ def test_unknown_length_requests_run_alone_so_one_shard_is_one_core_chunk():
     ]
 
 
-def test_repair_job_identity_changes_with_missing_bundle_state():
+def test_repair_job_identity_is_a_function_of_the_shards_own_summaries():
+    """Same state, same id -- whatever else happened to the cache directory."""
     shard = mmseqs2_gpu.FeatureShard("0000-base", ("alpha", "beta"), 8)
 
-    first = mmseqs2_gpu.repair_shard_identifier(
-        shard, ("beta",), cache_mtime_ns=100
-    )
-    repeated_loss = mmseqs2_gpu.repair_shard_identifier(
-        shard, ("beta",), cache_mtime_ns=200
+    first = mmseqs2_gpu.repair_shard_identifier(shard, ("0000-base.json:beta:missing",))
+    again = mmseqs2_gpu.repair_shard_identifier(shard, ("0000-base.json:beta:missing",))
+    after_a_repair = mmseqs2_gpu.repair_shard_identifier(
+        shard, ("0000-base.json:beta:missing", f"{first}.json:beta:missing")
     )
 
     assert first.startswith("0000-base-repair-")
-    assert first != repeated_loss
+    assert first == again
+    assert after_a_repair != first
 
 
 def test_unchanged_bundle_uses_manifest_stat_fast_path(tmp_path, monkeypatch):
@@ -658,6 +668,46 @@ def test_alphafold2_run_schedules_the_shared_search_and_pickle_finalization(tmp_
     assert str(cache_artifact) in completed.stdout
 
 
+def test_shard_ids_survive_the_inputs_arriving_mid_run(tmp_path):
+    """A SLURM job re-parses the workflow, and must find the shard it was given.
+
+    The head node plans shards before download_uniprot has fetched anything, so
+    every length is unknown and each protein is planned alone. When a shard's job
+    then runs, Snakemake parses the workflow again on the compute node -- after the
+    downloads -- and a planner that reads the new lengths groups the proteins into
+    a different shard with a different id. The job's own id is then missing from
+    the plan and it dies with a KeyError before doing anything, on every retry.
+    Found by a real end-to-end run starting from UniProt accessions.
+    """
+    config, config_path, output_directory = _workflow_case(
+        tmp_path, ("alpha", "beta"), staged=False
+    )
+    head_node = _run_snakemake(config_path, extra_args=("--dry-run",))
+    planned = sorted(set(re.findall(r"\.completed/([0-9]{4}-[0-9a-f]{12})\.json",
+                                    head_node.stdout)))
+    assert len(planned) == 2, "unknown lengths: each protein planned alone"
+
+    # The inputs arrive, as download_uniprot would write them.
+    for protein in ("alpha", "beta"):
+        (output_directory / "data" / f"{protein}.fasta").write_text(
+            f">{protein}\nACDE\n", encoding="utf-8"
+        )
+
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        config["mmseqs2_features"], data_pipeline="alphafold3"
+    )
+    target = (
+        output_directory / "features" / ".mmseqs2_gpu_msa_cache"
+        / adapter.msa_cache_key(config["prediction_container"])
+        / ".completed" / f"{planned[0]}.json"
+    )
+    compute_node = _run_snakemake(
+        config_path, target, check=False, extra_args=("--dry-run",)
+    )
+    assert compute_node.returncode == 0, compute_node.stdout[-1500:] + compute_node.stderr[-1500:]
+    assert "create_mmseqs2_gpu_msa_shard" in compute_node.stdout
+
+
 def test_missing_bundle_after_completion_schedules_automatic_gpu_repair(tmp_path):
     config, config_path, output_directory = _workflow_case(tmp_path, ("alpha",))
     adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
@@ -959,3 +1009,135 @@ def test_configuring_rna_changes_the_cache_key_so_stale_msas_are_not_reused():
     with_rna = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(_with_rna(), data_pipeline="alphafold3")
 
     assert protein_only.msa_cache_key("img") != with_rna.msa_cache_key("img")
+
+
+
+# --------------------------------------------------------------------------------
+# The MSA shard schedule: every parse of a run agrees
+# --------------------------------------------------------------------------------
+
+
+def _schedule(proteins, lengths, cache_dir):
+    return mmseqs2_gpu.schedule_msa_shards(
+        proteins, lengths, cache_dir, max_sequences=2, max_residues=9
+    )
+
+
+def _complete(cache_dir, job_id, protein):
+    """Publish a bundle and a valid Shard completion for one single-protein shard."""
+    bundle = cache_dir / f"{protein}_mmseqs_msa.json"
+    bundle.write_text('{"sequence":"ACDE"}\n', encoding="utf-8")
+    summary = cache_dir / ".completed" / f"{job_id}.json"
+    summary.parent.mkdir(exist_ok=True)
+    summary.write_text(json.dumps(_completion_summary(protein, bundle)), encoding="utf-8")
+    return bundle
+
+
+def test_a_shard_job_finds_its_shard_after_the_inputs_arrive(tmp_path):
+    """The head node plans before the FASTAs exist; the job parses after."""
+    head = _schedule(("alpha", "beta"), {}, tmp_path)
+    job = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, tmp_path)
+
+    assert job.jobs == head.jobs
+    for protein in ("alpha", "beta"):
+        assert job.completion_target(protein) == head.completion_target(protein)
+
+
+def test_new_proteins_get_new_shards_and_planned_ones_keep_theirs(tmp_path):
+    """A grown sample sheet re-plans nothing: no GPU job per existing shard."""
+    first = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, tmp_path)
+    grown = _schedule(
+        ("alpha", "beta", "gamma"), {"alpha": 4, "beta": 4, "gamma": 4}, tmp_path
+    )
+
+    assert grown.completion_target("alpha") == first.completion_target("alpha")
+    assert set(first.jobs) < set(grown.jobs)
+    [added] = set(grown.jobs) - set(first.jobs)
+    assert grown.shard(added).proteins == ("gamma",)
+    assert added.startswith("0001-"), "numbered after the registered shards"
+
+
+def test_a_protein_leaving_mid_run_does_not_orphan_a_running_job(tmp_path):
+    """A precomputed feature can appear in the shared store while a run is going."""
+    head = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, tmp_path)
+    [job_id] = head.jobs
+
+    later = _schedule(("alpha",), {"alpha": 4}, tmp_path)
+
+    assert later.shard(job_id).proteins == ("alpha", "beta")
+
+
+def test_repair_ids_survive_other_shards_publishing_into_the_cache(tmp_path):
+    """Running shards change the MSA cache directory's mtime. A repair job has to
+    find its own id when it re-parses anyway -- the id no longer depends on it."""
+    [job_id] = _schedule(("alpha",), {"alpha": 4}, tmp_path).jobs
+    _complete(tmp_path, job_id, "alpha").unlink()  # the bundle is lost: repair due
+
+    head = _schedule(("alpha",), {"alpha": 4}, tmp_path)
+    repair = head.completion_target("alpha")
+    assert "-repair-" in repair.name
+
+    (tmp_path / "other_mmseqs_msa.json").write_text("{}", encoding="utf-8")
+    os.utime(tmp_path, ns=(123, 456))
+    job = _schedule(("alpha",), {"alpha": 4}, tmp_path)
+
+    assert job.completion_target("alpha") == repair
+    assert job.shard(repair.stem).proteins == ("alpha",)
+
+
+def test_successive_repairs_still_get_distinct_ids(tmp_path):
+    """Without a nonce, a second loss after a completed repair is still a new job,
+    because the first repair's own summary is part of the state."""
+    [job_id] = _schedule(("alpha",), {"alpha": 4}, tmp_path).jobs
+    _complete(tmp_path, job_id, "alpha").unlink()
+    first_repair = _schedule(("alpha",), {"alpha": 4}, tmp_path).completion_target("alpha")
+
+    _complete(tmp_path, first_repair.stem, "alpha")  # the repair ran and published
+    assert _schedule(("alpha",), {"alpha": 4}, tmp_path).completion_target("alpha") == first_repair
+
+    (tmp_path / "alpha_mmseqs_msa.json").unlink()  # lost again
+    second_repair = _schedule(("alpha",), {"alpha": 4}, tmp_path).completion_target("alpha")
+
+    assert second_repair != first_repair
+    assert "-repair-" in second_repair.name
+
+
+def test_a_partly_requested_shard_is_replanned_unless_it_completed(tmp_path):
+    incomplete, complete = tmp_path / "incomplete", tmp_path / "complete"
+    for cache in (incomplete, complete):
+        cache.mkdir()
+        _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, cache)
+
+    # Never completed, and beta has left: alpha cannot run with a shard that
+    # needs beta's FASTA, so it is planned afresh.
+    [original] = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, incomplete).jobs
+    replanned = _schedule(("alpha",), {"alpha": 4}, incomplete)
+    assert replanned.completion_target("alpha").stem != original
+    assert replanned.shard(replanned.completion_target("alpha").stem).proteins == ("alpha",)
+
+    # Completed: alpha keeps the record it already has; nothing runs again.
+    [done] = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, complete).jobs
+    for protein in ("alpha", "beta"):
+        (complete / f"{protein}_mmseqs_msa.json").write_text('{"sequence":"ACDE"}\n')
+    summary = complete / ".completed" / f"{done}.json"
+    summary.parent.mkdir()
+    records = [
+        _completion_summary(p, complete / f"{p}_mmseqs_msa.json")["artifacts"][0]
+        for p in ("alpha", "beta")
+    ]
+    summary.write_text(json.dumps({
+        "schemaVersion": 2, "artifacts": records, "reused": [],
+        "written": ["alpha", "beta"],
+    }), encoding="utf-8")
+    kept = _schedule(("alpha",), {"alpha": 4}, complete)
+    assert kept.completion_target("alpha") == summary
+
+
+def test_an_unusable_registry_degrades_to_planning_in_memory(tmp_path):
+    (tmp_path / ".shard_registry.json").write_text("{not json", encoding="utf-8")
+    assert _schedule(("alpha",), {"alpha": 4}, tmp_path).completion_target("alpha")
+
+    not_a_directory = tmp_path / "file"
+    not_a_directory.write_text("", encoding="utf-8")
+    schedule = _schedule(("alpha",), {"alpha": 4}, not_a_directory / "cache")
+    assert schedule.completion_target("alpha").name.startswith("0000-")
