@@ -415,6 +415,70 @@ def test_use_gpu_reaches_the_core_command():
         assert f"--mmseqs_use_gpu={expected}" in args
 
 
+def _adapter(**overrides):
+    return mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(**overrides), data_pipeline="alphafold3"
+    )
+
+
+def test_search_settings_that_change_results_change_the_msa_cache_key():
+    """The key decides whether the core stage runs at all.
+
+    A completed shard summary short-circuits the core's own provenance check, so
+    a search setting missing from this key is not merely a slow cache miss -- the
+    job that would have noticed never starts, and the old alignments are reused
+    under the new settings.
+    """
+    baseline = _adapter().msa_cache_key("image:v1")
+    assert _adapter(use_gpu=False).msa_cache_key("image:v1") != baseline
+    assert _adapter(num_iterations=3).msa_cache_key("image:v1") != baseline
+
+
+def test_performance_only_settings_leave_the_msa_cache_key_alone():
+    """db_load_mode changes how the database is read, never what is found.
+
+    Turning it on to survive a tight allocation must not discard alignments that
+    cost hours per shard and would come back byte-identical.
+    """
+    baseline = _adapter().msa_cache_key("image:v1")
+    assert _adapter(db_load_mode=2).msa_cache_key("image:v1") == baseline
+
+
+def test_defaults_keep_the_cache_key_and_command_line_they_had_before():
+    """Adding a setting must not orphan the caches of runs that never set it.
+
+    Both new settings are recorded only when they differ from their default, so
+    an unchanged configuration keeps its existing cache namespace and issues the
+    exact command line it issued before.
+    """
+    explicit_defaults = _adapter(num_iterations=1, db_load_mode=None)
+    assert explicit_defaults.msa_cache_key("image:v1") == _adapter().msa_cache_key(
+        "image:v1"
+    )
+    arguments = _adapter().msa_cli_arguments(threads=8, memory_mb=160000)
+    assert not any("num_iterations" in argument for argument in arguments)
+    assert not any("db_load_mode" in argument for argument in arguments)
+
+
+def test_new_search_settings_reach_the_core_command():
+    arguments = _adapter(num_iterations=3, db_load_mode=2).msa_cli_arguments(
+        threads=8, memory_mb=160000
+    )
+    assert "--mmseqs_num_iterations=3" in arguments
+    assert "--mmseqs_db_load_mode=2" in arguments
+
+
+@pytest.mark.parametrize("value", (0, -1, "two"))
+def test_invalid_search_settings_are_refused(value):
+    with pytest.raises((ValueError, TypeError)):
+        _adapter(num_iterations=value)
+
+
+def test_invalid_db_load_mode_is_refused():
+    with pytest.raises(ValueError, match="db_load_mode"):
+        _adapter(db_load_mode=7)
+
+
 def test_cache_namespaces_change_with_search_and_template_provenance():
     first = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
         _config(), data_pipeline="alphafold3"

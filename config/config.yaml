@@ -163,13 +163,23 @@ structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
 #  batch_max_sequences: 256
 #  batch_max_residues: 100000
 #  e_value: 0.0001
+#  # Iterative profile search, the equivalent of jackhmmer's n_iter. AlphaFold 3
+#  # runs jackhmmer with 3: it builds a profile from the hits and searches again,
+#  # which is what reaches remote homologues. MMseqs2 defaults to 1, a plain
+#  # sequence-sequence search, so leaving this alone compares one pass against
+#  # three. Raising it costs time and recovers sensitivity on shallow families.
+#  # It changes which sequences are found, so changing it re-searches.
+#  num_iterations: 1
 #  # Search memory is DERIVED from the largest configured database, because the
 #  # databases are searched one after another rather than together, and it does not
 #  # depend on shard size or query length. search_ram_mb is only the fallback used
 #  # when the database paths cannot be read at parse time.
 #  search_ram_mb: 160000
-#  # MMseqs2 touches the whole target database into RSS unless db_load_mode is 2,
-#  # which lowers memory but is not the default -- try it on your own data.
+#  # How MMseqs2 reads the target database: 0 auto, 1 fread, 2 mmap, 3 mmap+touch.
+#  # Unset, MMseqs2 chooses and reads the whole target database into RSS; 2 memory-
+#  # maps it instead and lowers peak memory -- try it on your own data. Performance
+#  # only: it never changes the alignment, so switching it reuses existing MSAs
+#  # rather than re-searching.
 #  db_load_mode: 2
 #  gpu_ram_scaling: 1.1
 #  search_runtime_base_minutes: 90

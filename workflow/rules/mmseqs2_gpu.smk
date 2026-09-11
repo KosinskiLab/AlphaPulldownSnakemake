@@ -313,6 +313,14 @@ class LocalMmseqsFeatureConfig:
     batch_max_residues: int = 100_000
     e_value: float = 1e-4
     use_gpu: bool = True
+    # Iterative profile search, as jackhmmer's n_iter. AlphaFold 3 uses 3; MMseqs2
+    # defaults to 1, a plain sequence-sequence search. It changes which sequences
+    # are found, so it belongs in the cache identity.
+    num_iterations: int = 1
+    # How MMseqs2 reads the target database (0 auto, 1 fread, 2 mmap, 3 mmap+touch).
+    # Performance only: it never changes the alignment, so it is deliberately kept
+    # out of the cache identity and switching it reuses existing bundles.
+    db_load_mode: int | None = None
     search_ram_mb: int = 160_000
     gpu_ram_scaling: float = 1.1
     search_runtime_base_minutes: float = 90
@@ -409,6 +417,20 @@ class LocalMmseqsFeatureConfig:
         batch_max_residues = int(values.get("batch_max_residues", 100_000))
         e_value = float(values.get("e_value", 1e-4))
         use_gpu = _enabled(values.get("use_gpu", True))
+        num_iterations = int(values.get("num_iterations", 1))
+        if num_iterations < 1:
+            raise ValueError(
+                "Local MMseqs2 num_iterations must be at least 1"
+            )
+        raw_db_load_mode = values.get("db_load_mode")
+        db_load_mode = (
+            int(raw_db_load_mode) if raw_db_load_mode is not None else None
+        )
+        if db_load_mode is not None and db_load_mode not in (0, 1, 2, 3):
+            raise ValueError(
+                "Local MMseqs2 db_load_mode must be 0 (auto), 1 (fread), "
+                "2 (mmap) or 3 (mmap+touch)"
+            )
         search_ram_mb = int(values.get("search_ram_mb", 160_000))
         gpu_ram_scaling = float(values.get("gpu_ram_scaling", 1.1))
         search_runtime_base_minutes = float(
@@ -467,6 +489,8 @@ class LocalMmseqsFeatureConfig:
             batch_max_residues=batch_max_residues,
             e_value=e_value,
             use_gpu=use_gpu,
+            num_iterations=num_iterations,
+            db_load_mode=db_load_mode,
             search_ram_mb=search_ram_mb,
             gpu_ram_scaling=gpu_ram_scaling,
             search_runtime_base_minutes=search_runtime_base_minutes,
@@ -499,6 +523,12 @@ class LocalMmseqsFeatureConfig:
             "mmseqs_use_gpu": "true" if self.use_gpu else "false",
             "mmseqs_threads": threads,
         }
+        # Both are omitted at their defaults so an unchanged configuration still
+        # produces the exact command line it produced before they existed.
+        if self.num_iterations > 1:
+            values["mmseqs_num_iterations"] = self.num_iterations
+        if self.db_load_mode is not None:
+            values["mmseqs_db_load_mode"] = self.db_load_mode
         # Without this MMseqs2 sizes its database splits from 90% of the PHYSICAL node
         # memory and ignores the cgroup, so on a large node with a small allocation it
         # declines to split and is OOM-killed. Tell it the allocation instead.
@@ -537,7 +567,20 @@ class LocalMmseqsFeatureConfig:
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     def msa_cache_key(self, prediction_container: str) -> str:
-        """Namespace MSA caches by every workflow-visible search input."""
+        """Namespace MSA caches by every workflow-visible search input.
+
+        Every setting that changes which sequences the search finds has to appear
+        here, because this key decides whether the workflow even RUNS the core
+        stage. The core keys its own bundles on the same facts, but a completed
+        shard summary short-circuits that check: flip a search setting the key
+        ignores, and Snakemake sees the shard as done and never starts the job
+        whose cache check would have caught it. That is what happened with
+        ``use_gpu`` -- the core records cpu/gpu in its provenance, this key did
+        not, so switching search mode silently kept the old alignments.
+
+        Settings are recorded only when they differ from their default, so adding
+        one does not orphan the caches of runs that never set it.
+        """
         databases = {
             name: {
                 "identifier": database.identifier,
@@ -545,14 +588,18 @@ class LocalMmseqsFeatureConfig:
             }
             for name, database in sorted((self.databases or {}).items())
         }
-        return self._digest(
-            {
-                "container": prediction_container,
-                "mmseqs_binary_id": self.binary_id,
-                "e_value": self.e_value,
-                "databases": databases,
-            }
-        )
+        identity = {
+            "container": prediction_container,
+            "mmseqs_binary_id": self.binary_id,
+            "e_value": self.e_value,
+            "databases": databases,
+        }
+        if not self.use_gpu:
+            identity["search_mode"] = "cpu"
+        if self.num_iterations > 1:
+            identity["num_iterations"] = self.num_iterations
+        # db_load_mode is absent on purpose: see the field's comment.
+        return self._digest(identity)
 
     def feature_cache_key(
         self, max_template_date: str, prediction_container: str
