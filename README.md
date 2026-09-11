@@ -721,6 +721,13 @@ is still required — these are additive, not a replacement. Memory and walltime
 stages are derived from the configured databases; the remaining knobs live in the
 ADVANCED section of `config/config.yaml`.
 
+**The GPU search reads every padded database in full**, about 375 GB for the four
+protein ones. On network storage a cold first attempt is bound by that read, not by the
+GPU: measured ~150 MB/s from NFS with the GPU idle, about an hour per shard, against
+minutes once the node's page cache holds the databases. If first attempts time out,
+raise `search_runtime_base_minutes` or stage the databases on local disk; the retry,
+with twice the walltime, recovers either way.
+
 **Depth is not identical to the native pipeline.** Measured on eight *B. subtilis*
 proteins it was ~90% of jackhmmer's unpaired depth overall, but only 54–68% on the
 shallowest families. Whether that costs accuracy is untested, so treat it as opt-in and
@@ -730,9 +737,14 @@ spot-check your own targets.
 MSA recipe is AlphaFold 2's `reduced_dbs` set (no BFD/UniRef30 HHblits arm); templates
 come from the AlphaFold 2 database tree, and `--use_hhsearch` and any explicit template
 paths in `create_feature_arguments` reach the finalization stage. The native MSA
-arguments do not — this stage replaces that search. AlphaFold 2 finalization resources
-are not measured yet, and it needs a prediction image carrying the AlphaFold 2
-finalizer. Not yet benchmarked against native AlphaFold 2 features.
+arguments do not — this stage replaces that search. It needs a prediction image
+carrying the AlphaFold 2 finalizer. AlphaFold 2 finalization is heavier than AlphaFold
+3's because template featurization dominates it — median ~1 GB and 2 min, but up to
+19 GB and 90 min, set by which structures the templates come from rather than by length
+— so its defaults request 16 GB (times the safety factor) and 60 min. Against native
+`reduced_dbs` features on 12 heterodimers released after AF2-multimer's training cutoff,
+top-ranked DockQ averaged 0.56 against 0.59, with 9 of 12 interfaces acceptable either
+way.
 
 Databases, RNA, AlphaFold 2, tuning, caching and caveats:
 [AlphaPulldown docs/mmseqs2_rna.md](https://github.com/KosinskiLab/AlphaPulldown/blob/main/docs/mmseqs2_rna.md).
