@@ -771,12 +771,11 @@ if LOCAL_MMSEQS2.enabled:
             **CPU_PARTITION_RESOURCE,
             # NOT estimate_feature_mem_mb: those constants were fitted to jackhmmer and
             # HHblits building an MSA from scratch. This stage does not build MSAs - they
-            # arrive in the bundle - it runs AF3's native template search and writes the
-            # artifact. Measured at 0.24 GB / 13 s for one protein and 0.57 GB / 110 s for
-            # eight, against the 24 GB and 24 h the old model asked for. For AlphaFold 2
-            # the stage runs hmmsearch or hhsearch and pickles the features instead; that
-            # is not measured yet, so it borrows these constants and leans on the OOM
-            # retry escalation until it is.
+            # arrive in the bundle - it runs the backend's template search and writes the
+            # artifact. AlphaFold 3 measured 0.24 GB / 13 s for one protein, against the
+            # 24 GB and 24 h the old model asked for. AlphaFold 2's template
+            # featurization is far heavier (up to 18.8 GB / 87 min), so the defaults are
+            # per backend; see _FINALIZE_DEFAULTS.
             **linear_resources(
                 mem_fn=lambda wildcards, input, attempt: LOCAL_MMSEQS2.finalize_memory_mb(
                     chain_residue_count(

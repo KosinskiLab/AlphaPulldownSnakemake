@@ -426,6 +426,31 @@ def test_finalization_is_sized_far_below_msa_generation():
     assert adapter.finalize_runtime_minutes(attempt=1) <= 60
 
 
+def test_alphafold2_finalization_defaults_cover_its_template_featurization():
+    """AlphaFold 2's template featurization peaked at 18.8 GB and 87 min, and an
+    89-residue chain was the slowest. Sized like AlphaFold 3's 0.24 GB search, the
+    first attempt ran out of memory, and a 1.1x escalation per retry never caught up."""
+    values = _config()
+    for key in ("finalize_base_ram_mb", "finalize_runtime_minutes_base"):
+        values.pop(key, None)
+    af2 = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        values, data_pipeline="alphafold2"
+    )
+    # MiB at the workflow's default safety factor, for the shortest chains too.
+    assert af2.finalize_memory_mb(89, safety=1.25, attempt=1) >= 19_271
+    assert af2.finalize_runtime_minutes(attempt=2) >= 87
+
+    # AlphaFold 3 keeps its light defaults, and an explicit setting still wins.
+    af3 = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        values, data_pipeline="alphafold3"
+    )
+    assert af3.finalize_memory_mb(89, safety=1.25, attempt=1) < 6_000
+    pinned = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        {**values, "finalize_base_ram_mb": 4_000}, data_pipeline="alphafold2"
+    )
+    assert pinned.finalize_base_ram_mb == 4_000
+
+
 def test_use_gpu_reaches_the_core_command():
     for use_gpu, expected in ((True, "true"), (False, "false")):
         adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(

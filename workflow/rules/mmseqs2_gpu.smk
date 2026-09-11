@@ -56,6 +56,17 @@ _TEMPLATE_ARGUMENTS = {
         "--hmmbuild_binary_path",
     ),
 }
+# Finalization resources per backend, both measured. AlphaFold 3's template search is
+# light: 0.24 GB / 13 s for one protein. AlphaFold 2's template featurization is not:
+# over 56 chains the median was ~1 GB / 2 min, but the peak 18.8 GB and 87 min, set by
+# which structures the template hits come from rather than by length or MSA depth (an
+# 89-residue chain was the slowest). So AlphaFold 2 gets a flat base that covers that
+# peak at the default safety factor, and a walltime that finishes ~95% of chains on the
+# first attempt and the rest on the retry. An explicit setting overrides either.
+_FINALIZE_DEFAULTS = {
+    "alphafold3": {"finalize_base_ram_mb": 2_000, "finalize_runtime_minutes_base": 30},
+    "alphafold2": {"finalize_base_ram_mb": 16_000, "finalize_runtime_minutes_base": 60},
+}
 
 
 def _enabled(value: Any) -> bool:
@@ -602,12 +613,20 @@ class LocalMmseqsFeatureConfig:
             values.get("search_runtime_base_minutes", 90)
         )
         cpu_runtime_multiplier = float(values.get("cpu_runtime_multiplier", 2.5))
-        finalize_base_ram_mb = int(values.get("finalize_base_ram_mb", 2_000))
+        finalize_defaults = _FINALIZE_DEFAULTS[backend]
+        finalize_base_ram_mb = int(
+            values.get(
+                "finalize_base_ram_mb", finalize_defaults["finalize_base_ram_mb"]
+            )
+        )
         finalize_ram_per_residue_mb = float(
             values.get("finalize_ram_per_residue_mb", 1.0)
         )
         finalize_runtime_minutes_base = float(
-            values.get("finalize_runtime_minutes_base", 30)
+            values.get(
+                "finalize_runtime_minutes_base",
+                finalize_defaults["finalize_runtime_minutes_base"],
+            )
         )
         gpu_runtime_per_sequence_minutes = float(
             values.get("gpu_runtime_per_sequence_minutes", 0.5)
@@ -850,9 +869,10 @@ class LocalMmseqsFeatureConfig:
     ) -> int:
         """Host RAM for finalizing one protein: template search plus artifact writing.
 
-        Measured 0.24 GB at 117 residues and 0.57 GB at 887 (shard of eight), i.e. a
-        small constant with a shallow slope - two orders of magnitude below the
-        MSA-generation model this stage used to borrow.
+        For AlphaFold 3, measured 0.24 GB at 117 residues and 0.57 GB at 887 (shard of
+        eight), i.e. a small constant with a shallow slope - two orders of magnitude
+        below the MSA-generation model this stage used to borrow. AlphaFold 2's base is
+        far larger; see _FINALIZE_DEFAULTS.
         """
         estimate = safety * (
             self.finalize_base_ram_mb
@@ -862,7 +882,7 @@ class LocalMmseqsFeatureConfig:
         return min(value, cap_mb) if cap_mb else value
 
     def finalize_runtime_minutes(self, *, attempt: int) -> int:
-        """Wall time for one finalization. Measured ~14 s per protein."""
+        """Wall time for one finalization; each retry adds the base again."""
         return math.ceil(self.finalize_runtime_minutes_base * max(int(attempt), 1))
 
     def _largest_database_mb(self) -> int:
