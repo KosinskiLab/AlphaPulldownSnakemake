@@ -385,6 +385,23 @@ def test_gpu_exclude_nodes_vram_routing():
     assert common.gpu_exclude_nodes(2400, [], c) == ""
 
 
+def test_af3_padded_tokens_follow_buckets():
+    assert common.af3_padded_tokens(1537) == 2048
+    assert common.af3_padded_tokens(2048) == 2048
+    assert common.af3_padded_tokens(2049) == 2560
+    assert common.af3_padded_tokens(6270) == 6270
+    assert common.af3_buckets(None) == common.AF3_DEFAULT_BUCKETS
+    assert common.af3_buckets("1024,256,512") == (256, 512, 1024)
+    assert common.af3_buckets(["64", "128"]) == (64, 128)
+    assert common.af3_padded_tokens(600, common.af3_buckets("256,512,1024")) == 1024
+    d = common.INFERENCE_RAM_DEFAULTS["alphafold3"]
+    mem = common.estimate_inference_mem_mb(
+        common.af3_padded_tokens(1537), base_mb=d["base_mb"],
+        per_token_sq_mb=d["per_token_sq_mb"], scaling=1.1, safety=1.25, attempt=1,
+    )
+    assert mem > 30139  # smallest ceiling that fit a 2048-token bucket
+
+
 def test_mem_mb_reaches_sbatch_via_real_plugin():
     """Integration: the value our model computes is what the SLURM plugin turns
     into `sbatch --mem`. Skips gracefully if the plugin isn't importable."""

@@ -435,10 +435,16 @@ def resident_batch_jobs(batch_id):
     return list(zip(folds, inputs, batch_prediction_dirs(batch_id)))
 
 
+_AF3_BUCKETS = af3_buckets(_structure_inference_args.get("--buckets"))
+
+
 def batch_max_tokens_for(batch_id):
     """Largest fold in the batch sizes its memory/GPU tier (folds run one at a
-    time, so peak memory is the max, not the sum)."""
-    return max((_fold_tokens(fold) for fold in BATCH_FOLDS[batch_id]), default=0)
+    time, so peak memory is the max, not the sum). AF3 runs at its bucket size."""
+    tokens = max((_fold_tokens(fold) for fold in BATCH_FOLDS[batch_id]), default=0)
+    if INFERENCE_BACKEND == "alphafold3":
+        return af3_padded_tokens(tokens, _AF3_BUCKETS)
+    return tokens
 
 
 def completed_fold_target(fold):
@@ -607,7 +613,8 @@ feature_ram_per_residue = config.get(
 feature_threads = config.get("feature_threads", 8)
 
 # structure_inference (GPU host RAM): mem ~ safety * (base + per_token_sq * N^2),
-# N = total residues of the complex (AlphaFold pair representation is O(N^2)).
+# N = total residues of the complex, padded to the bucket for AF3 (pair
+# representation is O(N^2)).
 structure_inference_base_ram = config.get(
     "structure_inference_ram_bytes", _infer_ram_defaults["base_mb"]
 )

@@ -515,7 +515,8 @@ structure_inference  mem = safety * (structure_inference_ram_bytes + per_token_s
 ```
 
 - `seq_len` is the query length; `N` is the **total residues of the complex** (the
-  AlphaFold token count, summed over chains and copy numbers). AlphaFold's pair
+  AlphaFold token count, summed over chains and copy numbers). For AlphaFold 3, `N` is
+  rounded up to the `--buckets` size the model pads to. AlphaFold's pair
   representation is `O(N^2)`, hence the quadratic inference term.
 - **The coefficients default by backend** (selected from `--data_pipeline` / `--fold_backend`).
   AlphaFold-Multimer (AF2) is heavier than AlphaFold 3 — measured AF2 inference host RSS was

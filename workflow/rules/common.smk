@@ -7,12 +7,14 @@
 
 from __future__ import annotations
 
+import bisect
 import functools
 import hashlib
 import inspect
 import json
 import lzma
 import os
+import re
 import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
@@ -305,6 +307,24 @@ def fold_length_violation(
         if total > max_total_length:
             return f"total length {total} exceeds max_total_length {max_total_length}"
     return None
+
+
+AF3_DEFAULT_BUCKETS = (
+    128, 256, 512, 768, 1024, 1280, 1536, 2048, 2560, 3072, 3584, 4096, 4608, 5120,
+)
+
+
+def af3_buckets(value=None) -> tuple[int, ...]:
+    """Bucket sizes from a ``--buckets`` value (list or comma-separated string)."""
+    sizes = sorted({int(size) for size in re.findall(r"\d+", str(value or ""))})
+    return tuple(sizes) or AF3_DEFAULT_BUCKETS
+
+
+def af3_padded_tokens(total_tokens: int, buckets=AF3_DEFAULT_BUCKETS) -> int:
+    """Token count AF3 runs at: the smallest bucket that fits, else the exact size."""
+    tokens = max(int(total_tokens), 0)
+    index = bisect.bisect_left(buckets, tokens)
+    return buckets[index] if index < len(buckets) else tokens
 
 
 def required_gpu_vram_gb(
