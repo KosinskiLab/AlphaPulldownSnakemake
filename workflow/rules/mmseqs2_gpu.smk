@@ -30,6 +30,22 @@ _RNA_DATABASE_NAMES = ("rfam", "rnacentral", "nt_rna")
 _RNA_SEARCH_FLOOR_MB = 275 * 1024
 _BUNDLED_MMSEQS_BINARY = Path("/opt/mmseqs/bin/mmseqs")
 _BUNDLED_MMSEQS_ID = "8cc5ce367b5638c4306c2d7cfc652dd099a4643f"
+_BACKENDS = {"alphafold3": "alphafold3", "af3": "alphafold3",
+             "alphafold2": "alphafold2", "af2": "alphafold2"}
+# create_feature_arguments an AlphaFold 2 finalization reads: the template stack,
+# and nothing else. The MSA arguments (jackhmmer, HHblits, their databases) belong
+# to the native search this stage replaces, so they are deliberately not forwarded.
+_AF2_TEMPLATE_ARGUMENTS = (
+    "--use_hhsearch",
+    "--pdb_seqres_database_path",
+    "--pdb70_database_path",
+    "--template_mmcif_dir",
+    "--obsolete_pdbs_path",
+    "--hmmsearch_binary_path",
+    "--hmmbuild_binary_path",
+    "--hhsearch_binary_path",
+    "--kalign_binary_path",
+)
 
 
 def _enabled(value: Any) -> bool:
@@ -306,6 +322,9 @@ def schedule_feature_shards(
 @dataclass(frozen=True)
 class LocalMmseqsFeatureConfig:
     enabled: bool
+    # Which feature format the finalization stage writes. The search stage is the
+    # same for both; only what is built from its MSA bundles differs.
+    backend: str = "alphafold3"
     binary_path: Path | None = None
     binary_id: str | None = None
     temp_dir: Path | None = None
@@ -344,8 +363,12 @@ class LocalMmseqsFeatureConfig:
         enabled = _enabled(values.get("enabled", False))
         if not enabled:
             return cls(enabled=False)
-        if data_pipeline.lower() not in {"alphafold3", "af3"}:
-            raise ValueError("Local MMseqs2-GPU features require AlphaFold 3")
+        backend = _BACKENDS.get(str(data_pipeline).lower())
+        if backend is None:
+            raise ValueError(
+                "Local MMseqs2 features need --data_pipeline alphafold2 or "
+                f"alphafold3, not {data_pipeline!r}"
+            )
 
         binary_path = Path(
             values.get("binary_path", _BUNDLED_MMSEQS_BINARY)
@@ -482,6 +505,7 @@ class LocalMmseqsFeatureConfig:
 
         return cls(
             enabled=True,
+            backend=backend,
             binary_path=binary_path,
             binary_id=binary_id,
             temp_dir=Path(_required(values, "temp_dir", "configuration")),
@@ -551,15 +575,43 @@ class LocalMmseqsFeatureConfig:
             f"--{name}={shlex.quote(str(value))}" for name, value in values.items()
         )
 
-    def finalize_cli_arguments(self) -> tuple[str, ...]:
-        """Template provenance arguments owned by the CPU finalization stage."""
+    def template_arguments(
+        self, create_feature_arguments: Mapping[str, Any] | None
+    ) -> dict[str, str]:
+        """The create_feature_arguments this backend's finalization reads.
+
+        AlphaFold 3 runs its own native template search and takes none of them.
+        AlphaFold 2 builds hmmsearch or hhsearch from them, so a user who pointed
+        --pdb_seqres_database_path somewhere, or chose --use_hhsearch, gets the
+        same template stack here as the native pipeline would have built.
+        """
+        if self.backend != "alphafold2":
+            return {}
+        arguments = dict(create_feature_arguments or {})
+        return {
+            name: str(arguments[name])
+            for name in _AF2_TEMPLATE_ARGUMENTS
+            if arguments.get(name) not in (None, "", False, "false", "False")
+        }
+
+    def finalize_cli_arguments(
+        self, create_feature_arguments: Mapping[str, Any] | None = None
+    ) -> tuple[str, ...]:
+        """Arguments owned by the CPU finalization stage."""
         if not self.enabled:
             return ()
         identifiers = self.template_database_ids or {}
         return (
+            f"--data_pipeline={self.backend}",
             "--template_seqres_database_id="
             + shlex.quote(identifiers["pdb_seqres"]),
             "--template_mmcif_database_id=" + shlex.quote(identifiers["mmcif"]),
+            *(
+                f"{name}={shlex.quote(value)}"
+                for name, value in self.template_arguments(
+                    create_feature_arguments
+                ).items()
+            ),
         )
 
     def _digest(self, values: Mapping[str, Any]) -> str:
@@ -602,16 +654,27 @@ class LocalMmseqsFeatureConfig:
         return self._digest(identity)
 
     def feature_cache_key(
-        self, max_template_date: str, prediction_container: str
+        self,
+        max_template_date: str,
+        prediction_container: str,
+        create_feature_arguments: Mapping[str, Any] | None = None,
     ) -> str:
-        """Namespace final features by MSA and native template provenance."""
-        return self._digest(
-            {
-                "msa": self.msa_cache_key(prediction_container),
-                "max_template_date": str(max_template_date),
-                "template_database_ids": dict(self.template_database_ids or {}),
-            }
-        )
+        """Namespace final features by MSA, backend and template provenance.
+
+        The backend and AlphaFold 2's template settings are recorded only when they
+        apply, so every AlphaFold 3 feature cache keeps the namespace it had.
+        """
+        identity = {
+            "msa": self.msa_cache_key(prediction_container),
+            "max_template_date": str(max_template_date),
+            "template_database_ids": dict(self.template_database_ids or {}),
+        }
+        if self.backend != "alphafold3":
+            identity["backend"] = self.backend
+            identity["template_arguments"] = self.template_arguments(
+                create_feature_arguments
+            )
+        return self._digest(identity)
 
     def search_memory_mb(self, *, safety: float, attempt: int, cap_mb: int = 0) -> int:
         """Host RAM for one search shard, sized from the largest configured database.

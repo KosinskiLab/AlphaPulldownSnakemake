@@ -137,10 +137,20 @@ def test_enabled_af3_adapter_preserves_deep_interface_chunk_limits():
     assert adapter.batch_max_residues == 9
 
 
-def test_local_mmseqs_features_are_af3_only_and_require_explicit_databases():
-    with pytest.raises(ValueError, match="AlphaFold 3"):
+def test_local_mmseqs_features_serve_both_backends_and_require_explicit_databases():
+    for pipeline, backend in (
+        ("alphafold2", "alphafold2"),
+        ("af2", "alphafold2"),
+        ("alphafold3", "alphafold3"),
+        ("af3", "alphafold3"),
+    ):
+        adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+            _config(), data_pipeline=pipeline
+        )
+        assert adapter.backend == backend
+    with pytest.raises(ValueError, match="alphafold2 or alphafold3"):
         mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
-            _config(), data_pipeline="alphafold2"
+            _config(), data_pipeline="alphalink"
         )
 
     missing = _config()
@@ -415,9 +425,83 @@ def test_use_gpu_reaches_the_core_command():
         assert f"--mmseqs_use_gpu={expected}" in args
 
 
-def _adapter(**overrides):
+def _adapter(data_pipeline="alphafold3", **overrides):
     return mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
-        _config(**overrides), data_pipeline="alphafold3"
+        _config(**overrides), data_pipeline=data_pipeline
+    )
+
+
+# A realistic create_feature_arguments mixing template settings with the native
+# MSA settings the local search replaces.
+_CREATE_FEATURE_ARGUMENTS = {
+    "--use_hhsearch": True,
+    "--pdb70_database_path": "/db/pdb70/pdb70",
+    "--template_mmcif_dir": "/db/pdb_mmcif/mmcif_files",
+    "--uniref90_database_path": "/db/uniref90/uniref90.fasta",
+    "--jackhmmer_binary_path": "/usr/bin/jackhmmer",
+    "--db_preset": "full_dbs",
+    "--max_template_date": "2050-01-01",
+}
+
+
+def test_finalization_is_told_which_backend_to_build_for():
+    assert "--data_pipeline=alphafold3" in _adapter().finalize_cli_arguments()
+    assert "--data_pipeline=alphafold2" in _adapter(
+        "alphafold2"
+    ).finalize_cli_arguments()
+
+
+def test_alphafold2_finalization_gets_the_template_stack_and_nothing_else():
+    """AlphaFold 2 builds hmmsearch or hhsearch from these, so a user's
+    --use_hhsearch must reach it. The native MSA arguments must not: they describe
+    a search this stage replaces, and recording them would misstate provenance."""
+    arguments = _adapter("alphafold2").finalize_cli_arguments(
+        _CREATE_FEATURE_ARGUMENTS
+    )
+    assert "--use_hhsearch=True" in arguments
+    assert "--pdb70_database_path=/db/pdb70/pdb70" in arguments
+    assert "--template_mmcif_dir=/db/pdb_mmcif/mmcif_files" in arguments
+    assert not any(
+        "uniref90" in argument or "jackhmmer" in argument or "db_preset" in argument
+        for argument in arguments
+    )
+
+
+def test_alphafold3_finalization_takes_none_of_the_af2_template_arguments():
+    # AlphaFold 3 runs its own native template search.
+    arguments = _adapter().finalize_cli_arguments(_CREATE_FEATURE_ARGUMENTS)
+    assert not any("pdb70" in argument or "hhsearch" in argument for argument in arguments)
+
+
+def test_alphafold3_feature_cache_keeps_its_namespace():
+    """Adding a second backend must not re-key the first one's features."""
+    adapter = _adapter()
+    before_af2_existed = adapter._digest(
+        {
+            "msa": adapter.msa_cache_key("image:v1"),
+            "max_template_date": "2050-01-01",
+            "template_database_ids": dict(adapter.template_database_ids),
+        }
+    )
+    assert (
+        adapter.feature_cache_key(
+            "2050-01-01", "image:v1", _CREATE_FEATURE_ARGUMENTS
+        )
+        == before_af2_existed
+    )
+
+
+def test_alphafold2_feature_cache_is_keyed_on_backend_and_template_stack():
+    af2, af3 = _adapter("alphafold2"), _adapter()
+    plain = af2.feature_cache_key("2050-01-01", "image:v1", {})
+    assert plain != af3.feature_cache_key("2050-01-01", "image:v1", {})
+    # hhsearch and hmmsearch find different templates.
+    assert plain != af2.feature_cache_key(
+        "2050-01-01", "image:v1", {"--use_hhsearch": True}
+    )
+    # MSA arguments are not part of it: they do not reach this stage.
+    assert plain == af2.feature_cache_key(
+        "2050-01-01", "image:v1", {"--uniref90_database_path": "/elsewhere"}
     )
 
 
@@ -537,6 +621,39 @@ def test_partial_msa_cache_schedules_shard_retry_and_cpu_finalization(tmp_path):
             config["prediction_container"],
         )
         / "alpha_af3_input.json"
+    )
+    assert str(cache_artifact) in completed.stdout
+
+
+def test_alphafold2_run_schedules_the_shared_search_and_pickle_finalization(tmp_path):
+    """The DAG an AlphaFold 2 configuration actually builds, from a real dry run."""
+    config, config_path, output_directory = _workflow_case(tmp_path, ("alpha",))
+    config["create_feature_arguments"]["--data_pipeline"] = "alphafold2"
+    config["create_feature_arguments"]["--use_hhsearch"] = True
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    completed = _run_snakemake(
+        config_path, extra_args=("--dry-run", "--printshellcmds")
+    )
+
+    assert "create_mmseqs2_gpu_msa_shard" in completed.stdout
+    assert "finalize_mmseqs2_features" in completed.stdout
+    assert "--data_pipeline=alphafold2" in completed.stdout
+    assert "--data_pipeline=alphafold3" not in completed.stdout
+    assert "--use_hhsearch=True" in completed.stdout
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        config["mmseqs2_features"], data_pipeline="alphafold2"
+    )
+    cache_artifact = (
+        output_directory
+        / "features"
+        / ".mmseqs2_gpu_cache"
+        / adapter.feature_cache_key(
+            config["create_feature_arguments"]["--max_template_date"],
+            config["prediction_container"],
+            config["create_feature_arguments"],
+        )
+        / "alpha.pkl"
     )
     assert str(cache_artifact) in completed.stdout
 

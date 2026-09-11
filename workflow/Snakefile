@@ -514,6 +514,7 @@ _MMSEQS2_GPU_MSA_CACHE_KEY = LOCAL_MMSEQS2.msa_cache_key(
 _MMSEQS2_GPU_FEATURE_CACHE_KEY = LOCAL_MMSEQS2.feature_cache_key(
     _MMSEQS2_GPU_MAX_TEMPLATE_DATE,
     str(config["prediction_container"]),
+    config["create_feature_arguments"],
 ) if LOCAL_MMSEQS2.enabled else "disabled"
 LOCAL_MMSEQS2_MSA_CACHE = join(
     config["output_directory"],
@@ -766,8 +767,12 @@ if LOCAL_MMSEQS2.enabled:
                 )
             ).lower(),
             max_template_date=_MMSEQS2_GPU_MAX_TEMPLATE_DATE,
+            # Carries --data_pipeline, so one rule finalizes either backend; for
+            # AlphaFold 2 it also carries the template stack settings.
             finalize_cli_parameters=" ".join(
-                LOCAL_MMSEQS2.finalize_cli_arguments()
+                LOCAL_MMSEQS2.finalize_cli_arguments(
+                    config["create_feature_arguments"]
+                )
             ),
         resources:
             qos=DEFAULT_SLURM_QOS,
@@ -776,7 +781,10 @@ if LOCAL_MMSEQS2.enabled:
             # HHblits building an MSA from scratch. This stage does not build MSAs - they
             # arrive in the bundle - it runs AF3's native template search and writes the
             # artifact. Measured at 0.24 GB / 13 s for one protein and 0.57 GB / 110 s for
-            # eight, against the 24 GB and 24 h the old model asked for.
+            # eight, against the 24 GB and 24 h the old model asked for. For AlphaFold 2
+            # the stage runs hmmsearch or hhsearch and pickles the features instead; that
+            # is not measured yet, so it borrows these constants and leans on the OOM
+            # retry escalation until it is.
             **linear_resources(
                 mem_fn=lambda wildcards, input, attempt: LOCAL_MMSEQS2.finalize_memory_mb(
                     chain_residue_count(
@@ -801,7 +809,6 @@ if LOCAL_MMSEQS2.enabled:
             finalize_batch_features.py \
                 --fasta_paths={input.fasta} \
                 --msa_input_dir={params.msa_output_directory} \
-                --data_pipeline=alphafold3 \
                 --data_dir={params.data_directory} \
                 --output_dir={params.output_directory} \
                 --max_template_date={params.max_template_date} \
