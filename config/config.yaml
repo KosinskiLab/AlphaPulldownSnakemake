@@ -66,12 +66,14 @@ analyze_structure_arguments:
   --pae_filter: 100.0
   --models_to_analyse: "all"
 
-# Local MMseqs2 MSA backend for AlphaFold 3 protein features, replacing the
-# per-protein jackhmmer/HHblits rules. Off by default. When enabled, every database
-# path and build identifier is explicit because the workflow does not guess database
-# locations, and the databases must be GPU-padded (makepaddedseqdb) for either search
-# mode. Search runs as sharded GPU or CPU jobs; template finalization runs separately
-# on CPU. README: "Local MMseqs2 features".
+# Local MMseqs2 MSA backend for AlphaFold 2 and 3 protein features, replacing the
+# per-protein jackhmmer/HHblits rules; --data_pipeline above picks which features the
+# finalization stage writes. For AlphaFold 2 the recipe is reduced_dbs. Off by
+# default. When enabled, every database path and build identifier is explicit
+# because the workflow does not guess database locations, and the databases must be
+# GPU-padded (makepaddedseqdb) for either search mode. Search runs as sharded GPU or
+# CPU jobs; template finalization runs separately on CPU. README: "Local MMseqs2
+# features".
 mmseqs2_features:
   # OFF by default. MSA depth from this backend has not been shown equivalent to the
   # native jackhmmer pipeline - measured recall against it was 90% overall but 54-68%

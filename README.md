@@ -690,16 +690,17 @@ manually).
 
 </details>
 
-### Batched local MMseqs2-GPU features (AlphaFold 3)
+### Batched local MMseqs2 features (AlphaFold 2 and 3)
 
 <details>
-<summary>Faster AlphaFold 3 MSAs using local MMseqs2 instead of jackhmmer/HHblits</summary>
+<summary>Faster MSAs using local MMseqs2 instead of jackhmmer/HHblits</summary>
 
 Off by default. Missing proteins are split into bounded shards searched with MMseqs2 —
-as GPU jobs, or CPU jobs with `use_gpu: false` — and a separate CPU stage runs AlphaFold
-3's own template search and writes one standard AF3 JSON per chain, so template work can
-use CPU and big-memory partitions in parallel. AlphaFold 2 feature generation and the
-remote `--use_mmseqs2` path are unchanged. RNA chains are supported once the RNA
+as GPU jobs, or CPU jobs with `use_gpu: false` — and a separate CPU stage turns each
+chain's alignment into standard features, so template work can use CPU and big-memory
+partitions in parallel. Which features follows `--data_pipeline` in
+`create_feature_arguments`: an AF3 JSON per chain, or an AF2 pickle. The remote
+`--use_mmseqs2` path is unchanged. RNA chains are supported for AlphaFold 3 once the RNA
 databases are configured.
 
 ```yaml
@@ -725,7 +726,15 @@ proteins it was ~90% of jackhmmer's unpaired depth overall, but only 54–68% on
 shallowest families. Whether that costs accuracy is untested, so treat it as opt-in and
 spot-check your own targets.
 
-Databases, RNA, tuning, caching and caveats:
+**For AlphaFold 2** set `--data_pipeline: alphafold2` and enable the block above. The
+MSA recipe is AlphaFold 2's `reduced_dbs` set (no BFD/UniRef30 HHblits arm); templates
+come from the AlphaFold 2 database tree, and `--use_hhsearch` and any explicit template
+paths in `create_feature_arguments` reach the finalization stage. The native MSA
+arguments do not — this stage replaces that search. AlphaFold 2 finalization resources
+are not measured yet, and it needs a prediction image carrying the AlphaFold 2
+finalizer. Not yet benchmarked against native AlphaFold 2 features.
+
+Databases, RNA, AlphaFold 2, tuning, caching and caveats:
 [AlphaPulldown docs/mmseqs2_rna.md](https://github.com/KosinskiLab/AlphaPulldown/blob/main/docs/mmseqs2_rna.md).
 
 </details>
