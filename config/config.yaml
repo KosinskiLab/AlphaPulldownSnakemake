@@ -66,12 +66,14 @@ analyze_structure_arguments:
   --pae_filter: 100.0
   --models_to_analyse: "all"
 
-# Local MMseqs2 MSA backend for AlphaFold 3 protein features, replacing the
-# per-protein jackhmmer/HHblits rules. Off by default. When enabled, every database
-# path and build identifier is explicit because the workflow does not guess database
-# locations, and the databases must be GPU-padded (makepaddedseqdb) for either search
-# mode. Search runs as sharded GPU or CPU jobs; template finalization runs separately
-# on CPU. README: "Local MMseqs2 features".
+# Local MMseqs2 MSA backend for AlphaFold 2 and 3 protein features, replacing the
+# per-protein jackhmmer/HHblits rules; --data_pipeline above picks which features the
+# finalization stage writes. For AlphaFold 2 the recipe is reduced_dbs. Off by
+# default. When enabled, every database path and build identifier is explicit
+# because the workflow does not guess database locations, and the databases must be
+# GPU-padded (makepaddedseqdb) for either search mode. Search runs as sharded GPU or
+# CPU jobs; template finalization runs separately on CPU. README: "Local MMseqs2
+# features".
 mmseqs2_features:
   # OFF by default. MSA depth from this backend has not been shown equivalent to the
   # native jackhmmer pipeline - measured recall against it was 90% overall but 54-68%
@@ -163,25 +165,40 @@ structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
 #  batch_max_sequences: 256
 #  batch_max_residues: 100000
 #  e_value: 0.0001
+#  # Iterative profile search, the equivalent of jackhmmer's n_iter. AlphaFold 3
+#  # runs jackhmmer with 3: it builds a profile from the hits and searches again,
+#  # which is what reaches remote homologues. MMseqs2 defaults to 1, a plain
+#  # sequence-sequence search, so leaving this alone compares one pass against
+#  # three. Raising it costs time and recovers sensitivity on shallow families.
+#  # It changes which sequences are found, so changing it re-searches.
+#  num_iterations: 1
 #  # Search memory is DERIVED from the largest configured database, because the
 #  # databases are searched one after another rather than together, and it does not
 #  # depend on shard size or query length. search_ram_mb is only the fallback used
 #  # when the database paths cannot be read at parse time.
 #  search_ram_mb: 160000
-#  # MMseqs2 touches the whole target database into RSS unless db_load_mode is 2,
-#  # which lowers memory but is not the default -- try it on your own data.
+#  # How MMseqs2 reads the target database: 0 auto, 1 fread, 2 mmap, 3 mmap+touch.
+#  # Unset, MMseqs2 chooses and reads the whole target database into RSS; 2 memory-
+#  # maps it instead and lowers peak memory -- try it on your own data. Performance
+#  # only: it never changes the alignment, so switching it reuses existing MSAs
+#  # rather than re-searching.
 #  db_load_mode: 2
 #  gpu_ram_scaling: 1.1
-#  search_runtime_base_minutes: 90
+#  search_runtime_base_minutes: 90      # raise for databases on network storage: a
+#                                       # cold read is ~1 h before the GPU has work
 #  cpu_runtime_multiplier: 2.5          # walltime allowance for CPU vs GPU search
 #  gpu_runtime_per_sequence_minutes: 0.5
 #  gpu_runtime_per_1000_residues: 1.0
-#  # Finalization stage (CPU): AF3 template search over an MSA that already exists.
-#  # Measured 0.24 GB / 13 s for one protein, 0.57 GB / 110 s for eight.
-#  finalize_base_ram_mb: 2000
+#  # Finalization stage (CPU): the template search over an MSA that already exists.
+#  # Template settings in create_feature_arguments (--pdb_seqres_database_path,
+#  # --template_mmcif_dir, AF2's --use_hhsearch, ...) reach it as in a native run.
+#  # Defaults depend on the backend. AF3 measured 0.24 GB / 13 s for one protein;
+#  # AF2's template featurization peaked at 18.8 GB / 87 min. Set these only to
+#  # override the backend's default.
+#  finalize_base_ram_mb: 2000             # AF2 default: 16000
 #  finalize_ram_per_residue_mb: 1.0
-#  finalize_runtime_minutes_base: 30
-#  template_database_ids:  # immutable identities for native AF3 template cache
+#  finalize_runtime_minutes_base: 30      # AF2 default: 60
+#  template_database_ids:  # immutable identities of the template databases
 #    pdb_seqres: pdb-seqres-2026-08
 #    mmcif: pdb-mmcif-2026-08
 #  # GPU-padded MMseqs2 databases built from the AlphaFold 3.0.0 FASTAs. The paths

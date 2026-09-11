@@ -30,6 +30,43 @@ _RNA_DATABASE_NAMES = ("rfam", "rnacentral", "nt_rna")
 _RNA_SEARCH_FLOOR_MB = 275 * 1024
 _BUNDLED_MMSEQS_BINARY = Path("/opt/mmseqs/bin/mmseqs")
 _BUNDLED_MMSEQS_ID = "8cc5ce367b5638c4306c2d7cfc652dd099a4643f"
+_BACKENDS = {"alphafold3": "alphafold3", "af3": "alphafold3",
+             "alphafold2": "alphafold2", "af2": "alphafold2"}
+# create_feature_arguments each backend's finalization reads: its template search,
+# and nothing else. The MSA arguments (jackhmmer, HHblits, their databases) belong
+# to the native search this stage replaces, so they are deliberately not forwarded.
+_TEMPLATE_ARGUMENTS = {
+    "alphafold2": (
+        "--use_hhsearch",
+        "--pdb_seqres_database_path",
+        "--pdb70_database_path",
+        "--template_mmcif_dir",
+        "--obsolete_pdbs_path",
+        "--hmmsearch_binary_path",
+        "--hmmbuild_binary_path",
+        "--hhsearch_binary_path",
+        "--kalign_binary_path",
+    ),
+    # AlphaFold 3 runs hmmsearch against pdb_seqres and reads the hits from the mmCIF
+    # directory, each of which the native run lets the user override.
+    "alphafold3": (
+        "--pdb_seqres_database_path",
+        "--template_mmcif_dir",
+        "--hmmsearch_binary_path",
+        "--hmmbuild_binary_path",
+    ),
+}
+# Finalization resources per backend, both measured. AlphaFold 3's template search is
+# light: 0.24 GB / 13 s for one protein. AlphaFold 2's template featurization is not:
+# over 56 chains the median was ~1 GB / 2 min, but the peak 18.8 GB and 87 min, set by
+# which structures the template hits come from rather than by length or MSA depth (an
+# 89-residue chain was the slowest). So AlphaFold 2 gets a flat base that covers that
+# peak at the default safety factor, and a walltime that finishes ~95% of chains on the
+# first attempt and the rest on the retry. An explicit setting overrides either.
+_FINALIZE_DEFAULTS = {
+    "alphafold3": {"finalize_base_ram_mb": 2_000, "finalize_runtime_minutes_base": 30},
+    "alphafold2": {"finalize_base_ram_mb": 16_000, "finalize_runtime_minutes_base": 60},
+}
 
 
 def _enabled(value: Any) -> bool:
@@ -68,6 +105,8 @@ class ScheduledShard:
     identifier: str
     shard: FeatureShard
     summary_path: Path
+    # A valid Shard completion already exists at summary_path.
+    complete: bool = False
 
 
 def plan_feature_shards(
@@ -76,6 +115,7 @@ def plan_feature_shards(
     *,
     max_sequences: int,
     max_residues: int,
+    start_index: int = 0,
 ) -> tuple[FeatureShard, ...]:
     """Split requests into deterministic shards bounded by count and residues.
 
@@ -109,7 +149,7 @@ def plan_feature_shards(
         groups.append((tuple(current), current_residues))
 
     shards = []
-    for index, (members, residues) in enumerate(groups):
+    for index, (members, residues) in enumerate(groups, start_index):
         digest = hashlib.sha256("\0".join(members).encode()).hexdigest()[:12]
         shards.append(
             FeatureShard(
@@ -121,15 +161,18 @@ def plan_feature_shards(
     return tuple(shards)
 
 
-def repair_shard_identifier(
-    shard: FeatureShard,
-    invalid_state: Sequence[str],
-    *,
-    cache_mtime_ns: int,
-) -> str:
-    """Return a fresh job id when a completed shard has invalid cached bundles."""
-    state = "\0".join((*invalid_state, str(cache_mtime_ns)))
-    digest = hashlib.sha256(state.encode()).hexdigest()[:12]
+def repair_shard_identifier(shard: FeatureShard, invalid_state: Sequence[str]) -> str:
+    """A job id for re-running a completed shard whose bundles are no longer valid.
+
+    A function of the shard and its own completion summaries, nothing else. It used
+    to fold in the MSA cache directory's mtime as a nonce -- but every running shard
+    writes its bundles into that directory, so a repair job re-parsing on its compute
+    node computed a different id and could not find itself. No nonce is needed: every
+    repair that completes leaves a summary, which is part of the state the next
+    repair's id is computed from, so successive repairs still get distinct ids; and a
+    repair that died before completing gets the same id again, as a retry should.
+    """
+    digest = hashlib.sha256("\0".join(invalid_state).encode()).hexdigest()[:12]
     return f"{shard.identifier}-repair-{digest}"
 
 
@@ -262,9 +305,17 @@ def schedule_feature_shards(
             candidates.extend(
                 completion_dir.glob(f"{shard.identifier}-repair-*.json")
             )
+        # Newest first, with a total order: summaries written within one timestamp
+        # tick used to be ordered by set iteration, which is hash-seeded per process,
+        # so two parses could pick different valid summaries. On a tie a repair
+        # summary wins over the base one, being the later record, then by name.
         candidates = sorted(
             {candidate for candidate in candidates if candidate.exists()},
-            key=_mtime_ns,
+            key=lambda candidate: (
+                _mtime_ns(candidate),
+                "-repair-" in candidate.name,
+                candidate.name,
+            ),
             reverse=True,
         )
         valid_summary = None
@@ -276,7 +327,8 @@ def schedule_feature_shards(
             if valid:
                 valid_summary = candidate
                 break
-            invalid_state.extend(state)
+            # Named, so the id of the next repair differs from every earlier one.
+            invalid_state.extend(f"{candidate.name}:{item}" for item in state)
 
         if valid_summary is not None:
             job_id = valid_summary.stem
@@ -285,27 +337,147 @@ def schedule_feature_shards(
             job_id = shard.identifier
             summary_path = base_summary
         else:
-            try:
-                cache_mtime_ns = msa_cache_dir.stat().st_mtime_ns
-            except OSError:
-                cache_mtime_ns = 0
-            job_id = repair_shard_identifier(
-                shard, invalid_state, cache_mtime_ns=cache_mtime_ns
-            )
+            job_id = repair_shard_identifier(shard, invalid_state)
             summary_path = completion_dir / f"{job_id}.json"
         scheduled.append(
             ScheduledShard(
                 identifier=job_id,
                 shard=shard,
                 summary_path=summary_path,
+                complete=valid_summary is not None,
             )
         )
     return tuple(scheduled)
 
 
+_SHARD_REGISTRY = ".shard_registry.json"
+
+
+@dataclass(frozen=True)
+class MsaShardSchedule:
+    """Which shard job computes which protein, as every parse of a run agrees."""
+
+    jobs: Mapping[str, FeatureShard]
+    completion_by_protein: Mapping[str, Path]
+
+    def shard(self, job_id: str) -> FeatureShard:
+        """The shard a job id names -- any id this cache namespace ever scheduled."""
+        return self.jobs[job_id]
+
+    def completion_target(self, protein: str) -> Path:
+        """The Shard completion record a requested protein's finalization waits on."""
+        return self.completion_by_protein[protein]
+
+
+def _read_shard_registry(msa_cache_dir: Path) -> tuple[FeatureShard, ...]:
+    try:
+        stored = json.loads((msa_cache_dir / _SHARD_REGISTRY).read_text())
+        return tuple(
+            FeatureShard(
+                identifier=str(entry["identifier"]),
+                proteins=tuple(str(p) for p in entry["proteins"]),
+                total_residues=int(entry["total_residues"]),
+            )
+            for entry in stored["shards"]
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return ()
+
+
+def _write_shard_registry(msa_cache_dir: Path, shards: Sequence[FeatureShard]) -> None:
+    payload = {
+        "schemaVersion": 1,
+        "shards": [
+            {
+                "identifier": shard.identifier,
+                "proteins": list(shard.proteins),
+                "total_residues": shard.total_residues,
+            }
+            for shard in shards
+        ],
+    }
+    path = msa_cache_dir / _SHARD_REGISTRY
+    try:
+        msa_cache_dir.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, indent=1))
+        os.replace(temporary, path)
+    except OSError:
+        # Unwritable output: schedule from memory rather than fail the parse. Parses
+        # can then disagree again, exactly as before the registry existed.
+        pass
+
+
+def schedule_msa_shards(
+    proteins: Sequence[str],
+    sequence_lengths: Mapping[str, int],
+    msa_cache_dir: Path,
+    *,
+    max_sequences: int,
+    max_residues: int,
+) -> MsaShardSchedule:
+    """Plan and schedule MSA shards so that every parse of a run agrees.
+
+    Snakemake parses the workflow again inside every SLURM job, and a job has to
+    find the shard it was submitted for. Nothing a parse reads may change that
+    answer, and three things did: lengths learned from FASTAs the run itself
+    downloads, the requested protein set (it excludes proteins with precomputed
+    features in a shared store other runs write to), and -- for repairs -- the MSA
+    cache directory's mtime, which every running shard changes.
+
+    So shards live in an append-only registry beside the MSA cache. A protein once
+    planned keeps its shard; only proteins no usable registered shard covers are
+    planned, and appended. Every registered shard's job id keeps resolving on every
+    later parse, scheduled now or not, so a running job always finds itself.
+
+    A registered shard is usable when all its proteins are still requested, or when
+    it has already completed; a partly requested shard that never completed is left
+    alone and its requested proteins are planned afresh. When two usable shards
+    cover one protein -- only possible after a protein was removed and re-added --
+    the newest wins.
+    """
+    requested = tuple(dict.fromkeys(proteins))
+    wanted = set(requested)
+    registry = _read_shard_registry(msa_cache_dir)
+    scheduled = list(schedule_feature_shards(registry, msa_cache_dir))
+
+    def assign(jobs: Sequence[ScheduledShard], into: dict[str, ScheduledShard]) -> None:
+        for job in jobs:
+            if set(job.shard.proteins) <= wanted or job.complete:
+                for protein in job.shard.proteins:
+                    if protein in wanted:
+                        into[protein] = job
+
+    covering: dict[str, ScheduledShard] = {}
+    assign(scheduled, covering)
+    unplanned = [protein for protein in requested if protein not in covering]
+    if unplanned:
+        fresh = plan_feature_shards(
+            unplanned,
+            sequence_lengths,
+            max_sequences=max_sequences,
+            max_residues=max_residues,
+            start_index=len(registry),
+        )
+        _write_shard_registry(msa_cache_dir, (*registry, *fresh))
+        fresh_jobs = schedule_feature_shards(fresh, msa_cache_dir)
+        scheduled.extend(fresh_jobs)
+        assign(fresh_jobs, covering)
+
+    return MsaShardSchedule(
+        jobs={job.identifier: job.shard for job in scheduled},
+        completion_by_protein={
+            protein: covering[protein].summary_path for protein in requested
+        },
+    )
+
+
 @dataclass(frozen=True)
 class LocalMmseqsFeatureConfig:
     enabled: bool
+    # Which feature format the finalization stage writes. The search stage is the
+    # same for both; only what is built from its MSA bundles differs.
+    backend: str = "alphafold3"
     binary_path: Path | None = None
     binary_id: str | None = None
     temp_dir: Path | None = None
@@ -313,6 +485,14 @@ class LocalMmseqsFeatureConfig:
     batch_max_residues: int = 100_000
     e_value: float = 1e-4
     use_gpu: bool = True
+    # Iterative profile search, as jackhmmer's n_iter. AlphaFold 3 uses 3; MMseqs2
+    # defaults to 1, a plain sequence-sequence search. It changes which sequences
+    # are found, so it belongs in the cache identity.
+    num_iterations: int = 1
+    # How MMseqs2 reads the target database (0 auto, 1 fread, 2 mmap, 3 mmap+touch).
+    # Performance only: it never changes the alignment, so it is deliberately kept
+    # out of the cache identity and switching it reuses existing bundles.
+    db_load_mode: int | None = None
     search_ram_mb: int = 160_000
     gpu_ram_scaling: float = 1.1
     search_runtime_base_minutes: float = 90
@@ -336,8 +516,12 @@ class LocalMmseqsFeatureConfig:
         enabled = _enabled(values.get("enabled", False))
         if not enabled:
             return cls(enabled=False)
-        if data_pipeline.lower() not in {"alphafold3", "af3"}:
-            raise ValueError("Local MMseqs2-GPU features require AlphaFold 3")
+        backend = _BACKENDS.get(str(data_pipeline).lower())
+        if backend is None:
+            raise ValueError(
+                "Local MMseqs2 features need --data_pipeline alphafold2 or "
+                f"alphafold3, not {data_pipeline!r}"
+            )
 
         binary_path = Path(
             values.get("binary_path", _BUNDLED_MMSEQS_BINARY)
@@ -409,18 +593,40 @@ class LocalMmseqsFeatureConfig:
         batch_max_residues = int(values.get("batch_max_residues", 100_000))
         e_value = float(values.get("e_value", 1e-4))
         use_gpu = _enabled(values.get("use_gpu", True))
+        num_iterations = int(values.get("num_iterations", 1))
+        if num_iterations < 1:
+            raise ValueError(
+                "Local MMseqs2 num_iterations must be at least 1"
+            )
+        raw_db_load_mode = values.get("db_load_mode")
+        db_load_mode = (
+            int(raw_db_load_mode) if raw_db_load_mode is not None else None
+        )
+        if db_load_mode is not None and db_load_mode not in (0, 1, 2, 3):
+            raise ValueError(
+                "Local MMseqs2 db_load_mode must be 0 (auto), 1 (fread), "
+                "2 (mmap) or 3 (mmap+touch)"
+            )
         search_ram_mb = int(values.get("search_ram_mb", 160_000))
         gpu_ram_scaling = float(values.get("gpu_ram_scaling", 1.1))
         search_runtime_base_minutes = float(
             values.get("search_runtime_base_minutes", 90)
         )
         cpu_runtime_multiplier = float(values.get("cpu_runtime_multiplier", 2.5))
-        finalize_base_ram_mb = int(values.get("finalize_base_ram_mb", 2_000))
+        finalize_defaults = _FINALIZE_DEFAULTS[backend]
+        finalize_base_ram_mb = int(
+            values.get(
+                "finalize_base_ram_mb", finalize_defaults["finalize_base_ram_mb"]
+            )
+        )
         finalize_ram_per_residue_mb = float(
             values.get("finalize_ram_per_residue_mb", 1.0)
         )
         finalize_runtime_minutes_base = float(
-            values.get("finalize_runtime_minutes_base", 30)
+            values.get(
+                "finalize_runtime_minutes_base",
+                finalize_defaults["finalize_runtime_minutes_base"],
+            )
         )
         gpu_runtime_per_sequence_minutes = float(
             values.get("gpu_runtime_per_sequence_minutes", 0.5)
@@ -460,6 +666,7 @@ class LocalMmseqsFeatureConfig:
 
         return cls(
             enabled=True,
+            backend=backend,
             binary_path=binary_path,
             binary_id=binary_id,
             temp_dir=Path(_required(values, "temp_dir", "configuration")),
@@ -467,6 +674,8 @@ class LocalMmseqsFeatureConfig:
             batch_max_residues=batch_max_residues,
             e_value=e_value,
             use_gpu=use_gpu,
+            num_iterations=num_iterations,
+            db_load_mode=db_load_mode,
             search_ram_mb=search_ram_mb,
             gpu_ram_scaling=gpu_ram_scaling,
             search_runtime_base_minutes=search_runtime_base_minutes,
@@ -499,6 +708,12 @@ class LocalMmseqsFeatureConfig:
             "mmseqs_use_gpu": "true" if self.use_gpu else "false",
             "mmseqs_threads": threads,
         }
+        # Both are omitted at their defaults so an unchanged configuration still
+        # produces the exact command line it produced before they existed.
+        if self.num_iterations > 1:
+            values["mmseqs_num_iterations"] = self.num_iterations
+        if self.db_load_mode is not None:
+            values["mmseqs_db_load_mode"] = self.db_load_mode
         # Without this MMseqs2 sizes its database splits from 90% of the PHYSICAL node
         # memory and ignores the cgroup, so on a large node with a small allocation it
         # declines to split and is OOM-killed. Tell it the allocation instead.
@@ -521,15 +736,41 @@ class LocalMmseqsFeatureConfig:
             f"--{name}={shlex.quote(str(value))}" for name, value in values.items()
         )
 
-    def finalize_cli_arguments(self) -> tuple[str, ...]:
-        """Template provenance arguments owned by the CPU finalization stage."""
+    def template_arguments(
+        self, create_feature_arguments: Mapping[str, Any] | None
+    ) -> dict[str, str]:
+        """The create_feature_arguments this backend's finalization reads.
+
+        Both backends search templates here, so a user who pointed
+        --pdb_seqres_database_path somewhere, or chose --use_hhsearch for AlphaFold 2,
+        gets the same templates as the native pipeline would have found. Left out,
+        the search silently falls back to the defaults under --data_dir.
+        """
+        arguments = dict(create_feature_arguments or {})
+        return {
+            name: str(arguments[name])
+            for name in _TEMPLATE_ARGUMENTS[self.backend]
+            if arguments.get(name) not in (None, "", False, "false", "False")
+        }
+
+    def finalize_cli_arguments(
+        self, create_feature_arguments: Mapping[str, Any] | None = None
+    ) -> tuple[str, ...]:
+        """Arguments owned by the CPU finalization stage."""
         if not self.enabled:
             return ()
         identifiers = self.template_database_ids or {}
         return (
+            f"--data_pipeline={self.backend}",
             "--template_seqres_database_id="
             + shlex.quote(identifiers["pdb_seqres"]),
             "--template_mmcif_database_id=" + shlex.quote(identifiers["mmcif"]),
+            *(
+                f"{name}={shlex.quote(value)}"
+                for name, value in self.template_arguments(
+                    create_feature_arguments
+                ).items()
+            ),
         )
 
     def _digest(self, values: Mapping[str, Any]) -> str:
@@ -537,7 +778,20 @@ class LocalMmseqsFeatureConfig:
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
     def msa_cache_key(self, prediction_container: str) -> str:
-        """Namespace MSA caches by every workflow-visible search input."""
+        """Namespace MSA caches by every workflow-visible search input.
+
+        Every setting that changes which sequences the search finds has to appear
+        here, because this key decides whether the workflow even RUNS the core
+        stage. The core keys its own bundles on the same facts, but a completed
+        shard summary short-circuits that check: flip a search setting the key
+        ignores, and Snakemake sees the shard as done and never starts the job
+        whose cache check would have caught it. That is what happened with
+        ``use_gpu`` -- the core records cpu/gpu in its provenance, this key did
+        not, so switching search mode silently kept the old alignments.
+
+        Settings are recorded only when they differ from their default, so adding
+        one does not orphan the caches of runs that never set it.
+        """
         databases = {
             name: {
                 "identifier": database.identifier,
@@ -545,26 +799,42 @@ class LocalMmseqsFeatureConfig:
             }
             for name, database in sorted((self.databases or {}).items())
         }
-        return self._digest(
-            {
-                "container": prediction_container,
-                "mmseqs_binary_id": self.binary_id,
-                "e_value": self.e_value,
-                "databases": databases,
-            }
-        )
+        identity = {
+            "container": prediction_container,
+            "mmseqs_binary_id": self.binary_id,
+            "e_value": self.e_value,
+            "databases": databases,
+        }
+        if not self.use_gpu:
+            identity["search_mode"] = "cpu"
+        if self.num_iterations > 1:
+            identity["num_iterations"] = self.num_iterations
+        # db_load_mode is absent on purpose: see the field's comment.
+        return self._digest(identity)
 
     def feature_cache_key(
-        self, max_template_date: str, prediction_container: str
+        self,
+        max_template_date: str,
+        prediction_container: str,
+        create_feature_arguments: Mapping[str, Any] | None = None,
     ) -> str:
-        """Namespace final features by MSA and native template provenance."""
-        return self._digest(
-            {
-                "msa": self.msa_cache_key(prediction_container),
-                "max_template_date": str(max_template_date),
-                "template_database_ids": dict(self.template_database_ids or {}),
-            }
-        )
+        """Namespace final features by MSA, backend and template provenance.
+
+        The backend and the template settings are recorded only when they differ from
+        the default, so an AlphaFold 3 feature cache that overrides no template
+        setting keeps the namespace it had.
+        """
+        identity = {
+            "msa": self.msa_cache_key(prediction_container),
+            "max_template_date": str(max_template_date),
+            "template_database_ids": dict(self.template_database_ids or {}),
+        }
+        if self.backend != "alphafold3":
+            identity["backend"] = self.backend
+        template_arguments = self.template_arguments(create_feature_arguments)
+        if template_arguments:
+            identity["template_arguments"] = template_arguments
+        return self._digest(identity)
 
     def search_memory_mb(self, *, safety: float, attempt: int, cap_mb: int = 0) -> int:
         """Host RAM for one search shard, sized from the largest configured database.
@@ -599,9 +869,10 @@ class LocalMmseqsFeatureConfig:
     ) -> int:
         """Host RAM for finalizing one protein: template search plus artifact writing.
 
-        Measured 0.24 GB at 117 residues and 0.57 GB at 887 (shard of eight), i.e. a
-        small constant with a shallow slope - two orders of magnitude below the
-        MSA-generation model this stage used to borrow.
+        For AlphaFold 3, measured 0.24 GB at 117 residues and 0.57 GB at 887 (shard of
+        eight), i.e. a small constant with a shallow slope - two orders of magnitude
+        below the MSA-generation model this stage used to borrow. AlphaFold 2's base is
+        far larger; see _FINALIZE_DEFAULTS.
         """
         estimate = safety * (
             self.finalize_base_ram_mb
@@ -611,7 +882,7 @@ class LocalMmseqsFeatureConfig:
         return min(value, cap_mb) if cap_mb else value
 
     def finalize_runtime_minutes(self, *, attempt: int) -> int:
-        """Wall time for one finalization. Measured ~14 s per protein."""
+        """Wall time for one finalization; each retry adds the base again."""
         return math.ceil(self.finalize_runtime_minutes_base * max(int(attempt), 1))
 
     def _largest_database_mb(self) -> int:

@@ -7,6 +7,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -52,14 +53,19 @@ def _config(**overrides):
     return config
 
 
-def _workflow_case(tmp_path, proteins, *, mmseqs_config=None):
+def _workflow_case(tmp_path, proteins, *, mmseqs_config=None, staged=True):
+    """A workflow configuration over ``proteins``.
+
+    ``staged=False`` leaves ``data/`` empty, as it is when a run starts from
+    UniProt accessions: the FASTAs only appear once download_uniprot has run.
+    """
     sample_sheet = tmp_path / "sample_sheet.csv"
     sample_sheet.write_text("+".join(proteins) + "\n", encoding="utf-8")
     output_directory = tmp_path / "output"
     data_directory = output_directory / "data"
     data_directory.mkdir(parents=True)
     (output_directory / "features").mkdir()
-    for protein in proteins:
+    for protein in proteins if staged else ():
         (data_directory / f"{protein}.fasta").write_text(
             f">{protein}\nACDE\n", encoding="utf-8"
         )
@@ -73,6 +79,9 @@ def _workflow_case(tmp_path, proteins, *, mmseqs_config=None):
             "only_generate_features": True,
             "enable_structure_analysis": False,
             "max_total_length": 0,
+            # Planning resolves lengths through the same resolver as the length
+            # filter, which falls back to the UniProt REST API. Tests stay offline.
+            "length_filter_fetch_uniprot": False,
             "mmseqs2_features": mmseqs_config or _config(),
         }
     )
@@ -137,10 +146,20 @@ def test_enabled_af3_adapter_preserves_deep_interface_chunk_limits():
     assert adapter.batch_max_residues == 9
 
 
-def test_local_mmseqs_features_are_af3_only_and_require_explicit_databases():
-    with pytest.raises(ValueError, match="AlphaFold 3"):
+def test_local_mmseqs_features_serve_both_backends_and_require_explicit_databases():
+    for pipeline, backend in (
+        ("alphafold2", "alphafold2"),
+        ("af2", "alphafold2"),
+        ("alphafold3", "alphafold3"),
+        ("af3", "alphafold3"),
+    ):
+        adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+            _config(), data_pipeline=pipeline
+        )
+        assert adapter.backend == backend
+    with pytest.raises(ValueError, match="alphafold2 or alphafold3"):
         mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
-            _config(), data_pipeline="alphafold2"
+            _config(), data_pipeline="alphalink"
         )
 
     missing = _config()
@@ -266,18 +285,19 @@ def test_unknown_length_requests_run_alone_so_one_shard_is_one_core_chunk():
     ]
 
 
-def test_repair_job_identity_changes_with_missing_bundle_state():
+def test_repair_job_identity_is_a_function_of_the_shards_own_summaries():
+    """Same state, same id -- whatever else happened to the cache directory."""
     shard = mmseqs2_gpu.FeatureShard("0000-base", ("alpha", "beta"), 8)
 
-    first = mmseqs2_gpu.repair_shard_identifier(
-        shard, ("beta",), cache_mtime_ns=100
-    )
-    repeated_loss = mmseqs2_gpu.repair_shard_identifier(
-        shard, ("beta",), cache_mtime_ns=200
+    first = mmseqs2_gpu.repair_shard_identifier(shard, ("0000-base.json:beta:missing",))
+    again = mmseqs2_gpu.repair_shard_identifier(shard, ("0000-base.json:beta:missing",))
+    after_a_repair = mmseqs2_gpu.repair_shard_identifier(
+        shard, ("0000-base.json:beta:missing", f"{first}.json:beta:missing")
     )
 
     assert first.startswith("0000-base-repair-")
-    assert first != repeated_loss
+    assert first == again
+    assert after_a_repair != first
 
 
 def test_unchanged_bundle_uses_manifest_stat_fast_path(tmp_path, monkeypatch):
@@ -406,6 +426,31 @@ def test_finalization_is_sized_far_below_msa_generation():
     assert adapter.finalize_runtime_minutes(attempt=1) <= 60
 
 
+def test_alphafold2_finalization_defaults_cover_its_template_featurization():
+    """AlphaFold 2's template featurization peaked at 18.8 GB and 87 min, and an
+    89-residue chain was the slowest. Sized like AlphaFold 3's 0.24 GB search, the
+    first attempt ran out of memory, and a 1.1x escalation per retry never caught up."""
+    values = _config()
+    for key in ("finalize_base_ram_mb", "finalize_runtime_minutes_base"):
+        values.pop(key, None)
+    af2 = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        values, data_pipeline="alphafold2"
+    )
+    # MiB at the workflow's default safety factor, for the shortest chains too.
+    assert af2.finalize_memory_mb(89, safety=1.25, attempt=1) >= 19_271
+    assert af2.finalize_runtime_minutes(attempt=2) >= 87
+
+    # AlphaFold 3 keeps its light defaults, and an explicit setting still wins.
+    af3 = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        values, data_pipeline="alphafold3"
+    )
+    assert af3.finalize_memory_mb(89, safety=1.25, attempt=1) < 6_000
+    pinned = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        {**values, "finalize_base_ram_mb": 4_000}, data_pipeline="alphafold2"
+    )
+    assert pinned.finalize_base_ram_mb == 4_000
+
+
 def test_use_gpu_reaches_the_core_command():
     for use_gpu, expected in ((True, "true"), (False, "false")):
         adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
@@ -413,6 +458,169 @@ def test_use_gpu_reaches_the_core_command():
         )
         args = adapter.msa_cli_arguments(threads=8, memory_mb=160000)
         assert f"--mmseqs_use_gpu={expected}" in args
+
+
+def _adapter(data_pipeline="alphafold3", **overrides):
+    return mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        _config(**overrides), data_pipeline=data_pipeline
+    )
+
+
+# A realistic create_feature_arguments mixing template settings with the native
+# MSA settings the local search replaces.
+_CREATE_FEATURE_ARGUMENTS = {
+    "--use_hhsearch": True,
+    "--pdb70_database_path": "/db/pdb70/pdb70",
+    "--template_mmcif_dir": "/db/pdb_mmcif/mmcif_files",
+    "--uniref90_database_path": "/db/uniref90/uniref90.fasta",
+    "--jackhmmer_binary_path": "/usr/bin/jackhmmer",
+    "--db_preset": "full_dbs",
+    "--max_template_date": "2050-01-01",
+}
+
+
+def test_finalization_is_told_which_backend_to_build_for():
+    assert "--data_pipeline=alphafold3" in _adapter().finalize_cli_arguments()
+    assert "--data_pipeline=alphafold2" in _adapter(
+        "alphafold2"
+    ).finalize_cli_arguments()
+
+
+def test_alphafold2_finalization_gets_the_template_stack_and_nothing_else():
+    """AlphaFold 2 builds hmmsearch or hhsearch from these, so a user's
+    --use_hhsearch must reach it. The native MSA arguments must not: they describe
+    a search this stage replaces, and recording them would misstate provenance."""
+    arguments = _adapter("alphafold2").finalize_cli_arguments(
+        _CREATE_FEATURE_ARGUMENTS
+    )
+    assert "--use_hhsearch=True" in arguments
+    assert "--pdb70_database_path=/db/pdb70/pdb70" in arguments
+    assert "--template_mmcif_dir=/db/pdb_mmcif/mmcif_files" in arguments
+    assert not any(
+        "uniref90" in argument or "jackhmmer" in argument or "db_preset" in argument
+        for argument in arguments
+    )
+
+
+def test_alphafold3_finalization_gets_its_own_template_overrides():
+    """AlphaFold 3 searches templates here too, so a user's template database must
+    reach it; dropping it silently searched the default under --data_dir. The
+    AlphaFold 2-only settings would mean nothing to it."""
+    arguments = _adapter().finalize_cli_arguments(
+        {**_CREATE_FEATURE_ARGUMENTS, "--pdb_seqres_database_path": "/db/seqres.txt"}
+    )
+    assert "--template_mmcif_dir=/db/pdb_mmcif/mmcif_files" in arguments
+    assert "--pdb_seqres_database_path=/db/seqres.txt" in arguments
+    assert not any("pdb70" in argument or "hhsearch" in argument for argument in arguments)
+    assert not any("uniref90" in argument or "jackhmmer" in argument for argument in arguments)
+
+
+def test_alphafold3_feature_cache_keeps_its_namespace():
+    """Adding a second backend must not re-key the first one's features, and
+    neither may honouring template overrides re-key a run that sets none."""
+    adapter = _adapter()
+    before_af2_existed = adapter._digest(
+        {
+            "msa": adapter.msa_cache_key("image:v1"),
+            "max_template_date": "2050-01-01",
+            "template_database_ids": dict(adapter.template_database_ids),
+        }
+    )
+    no_template_overrides = {
+        name: value
+        for name, value in _CREATE_FEATURE_ARGUMENTS.items()
+        if name != "--template_mmcif_dir"
+    }
+    assert (
+        adapter.feature_cache_key("2050-01-01", "image:v1", no_template_overrides)
+        == before_af2_existed
+    )
+
+
+def test_an_alphafold3_template_override_moves_the_feature_cache():
+    """Features finalized against the default template database are not the ones
+    the override asks for, so they must not be reused for it."""
+    adapter = _adapter()
+    plain = adapter.feature_cache_key("2050-01-01", "image:v1", {})
+    assert plain != adapter.feature_cache_key(
+        "2050-01-01", "image:v1", {"--template_mmcif_dir": "/elsewhere"}
+    )
+    # AlphaFold 2-only settings do not reach this backend, so they cannot move it.
+    assert plain == adapter.feature_cache_key(
+        "2050-01-01", "image:v1", {"--use_hhsearch": True}
+    )
+
+
+def test_alphafold2_feature_cache_is_keyed_on_backend_and_template_stack():
+    af2, af3 = _adapter("alphafold2"), _adapter()
+    plain = af2.feature_cache_key("2050-01-01", "image:v1", {})
+    assert plain != af3.feature_cache_key("2050-01-01", "image:v1", {})
+    # hhsearch and hmmsearch find different templates.
+    assert plain != af2.feature_cache_key(
+        "2050-01-01", "image:v1", {"--use_hhsearch": True}
+    )
+    # MSA arguments are not part of it: they do not reach this stage.
+    assert plain == af2.feature_cache_key(
+        "2050-01-01", "image:v1", {"--uniref90_database_path": "/elsewhere"}
+    )
+
+
+def test_search_settings_that_change_results_change_the_msa_cache_key():
+    """The key decides whether the core stage runs at all.
+
+    A completed shard summary short-circuits the core's own provenance check, so
+    a search setting missing from this key is not merely a slow cache miss -- the
+    job that would have noticed never starts, and the old alignments are reused
+    under the new settings.
+    """
+    baseline = _adapter().msa_cache_key("image:v1")
+    assert _adapter(use_gpu=False).msa_cache_key("image:v1") != baseline
+    assert _adapter(num_iterations=3).msa_cache_key("image:v1") != baseline
+
+
+def test_performance_only_settings_leave_the_msa_cache_key_alone():
+    """db_load_mode changes how the database is read, never what is found.
+
+    Turning it on to survive a tight allocation must not discard alignments that
+    cost hours per shard and would come back byte-identical.
+    """
+    baseline = _adapter().msa_cache_key("image:v1")
+    assert _adapter(db_load_mode=2).msa_cache_key("image:v1") == baseline
+
+
+def test_defaults_keep_the_cache_key_and_command_line_they_had_before():
+    """Adding a setting must not orphan the caches of runs that never set it.
+
+    Both new settings are recorded only when they differ from their default, so
+    an unchanged configuration keeps its existing cache namespace and issues the
+    exact command line it issued before.
+    """
+    explicit_defaults = _adapter(num_iterations=1, db_load_mode=None)
+    assert explicit_defaults.msa_cache_key("image:v1") == _adapter().msa_cache_key(
+        "image:v1"
+    )
+    arguments = _adapter().msa_cli_arguments(threads=8, memory_mb=160000)
+    assert not any("num_iterations" in argument for argument in arguments)
+    assert not any("db_load_mode" in argument for argument in arguments)
+
+
+def test_new_search_settings_reach_the_core_command():
+    arguments = _adapter(num_iterations=3, db_load_mode=2).msa_cli_arguments(
+        threads=8, memory_mb=160000
+    )
+    assert "--mmseqs_num_iterations=3" in arguments
+    assert "--mmseqs_db_load_mode=2" in arguments
+
+
+@pytest.mark.parametrize("value", (0, -1, "two"))
+def test_invalid_search_settings_are_refused(value):
+    with pytest.raises((ValueError, TypeError)):
+        _adapter(num_iterations=value)
+
+
+def test_invalid_db_load_mode_is_refused():
+    with pytest.raises(ValueError, match="db_load_mode"):
+        _adapter(db_load_mode=7)
 
 
 def test_cache_namespaces_change_with_search_and_template_provenance():
@@ -475,6 +683,79 @@ def test_partial_msa_cache_schedules_shard_retry_and_cpu_finalization(tmp_path):
         / "alpha_af3_input.json"
     )
     assert str(cache_artifact) in completed.stdout
+
+
+def test_alphafold2_run_schedules_the_shared_search_and_pickle_finalization(tmp_path):
+    """The DAG an AlphaFold 2 configuration actually builds, from a real dry run."""
+    config, config_path, output_directory = _workflow_case(tmp_path, ("alpha",))
+    config["create_feature_arguments"]["--data_pipeline"] = "alphafold2"
+    config["create_feature_arguments"]["--use_hhsearch"] = True
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    completed = _run_snakemake(
+        config_path, extra_args=("--dry-run", "--printshellcmds")
+    )
+
+    assert "create_mmseqs2_gpu_msa_shard" in completed.stdout
+    assert "finalize_mmseqs2_features" in completed.stdout
+    assert "--data_pipeline=alphafold2" in completed.stdout
+    assert "--data_pipeline=alphafold3" not in completed.stdout
+    assert "--use_hhsearch=True" in completed.stdout
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        config["mmseqs2_features"], data_pipeline="alphafold2"
+    )
+    cache_artifact = (
+        output_directory
+        / "features"
+        / ".mmseqs2_gpu_cache"
+        / adapter.feature_cache_key(
+            config["create_feature_arguments"]["--max_template_date"],
+            config["prediction_container"],
+            config["create_feature_arguments"],
+        )
+        / "alpha.pkl"
+    )
+    assert str(cache_artifact) in completed.stdout
+
+
+def test_shard_ids_survive_the_inputs_arriving_mid_run(tmp_path):
+    """A SLURM job re-parses the workflow, and must find the shard it was given.
+
+    The head node plans shards before download_uniprot has fetched anything, so
+    every length is unknown and each protein is planned alone. When a shard's job
+    then runs, Snakemake parses the workflow again on the compute node -- after the
+    downloads -- and a planner that reads the new lengths groups the proteins into
+    a different shard with a different id. The job's own id is then missing from
+    the plan and it dies with a KeyError before doing anything, on every retry.
+    Found by a real end-to-end run starting from UniProt accessions.
+    """
+    config, config_path, output_directory = _workflow_case(
+        tmp_path, ("alpha", "beta"), staged=False
+    )
+    head_node = _run_snakemake(config_path, extra_args=("--dry-run",))
+    planned = sorted(set(re.findall(r"\.completed/([0-9]{4}-[0-9a-f]{12})\.json",
+                                    head_node.stdout)))
+    assert len(planned) == 2, "unknown lengths: each protein planned alone"
+
+    # The inputs arrive, as download_uniprot would write them.
+    for protein in ("alpha", "beta"):
+        (output_directory / "data" / f"{protein}.fasta").write_text(
+            f">{protein}\nACDE\n", encoding="utf-8"
+        )
+
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        config["mmseqs2_features"], data_pipeline="alphafold3"
+    )
+    target = (
+        output_directory / "features" / ".mmseqs2_gpu_msa_cache"
+        / adapter.msa_cache_key(config["prediction_container"])
+        / ".completed" / f"{planned[0]}.json"
+    )
+    compute_node = _run_snakemake(
+        config_path, target, check=False, extra_args=("--dry-run",)
+    )
+    assert compute_node.returncode == 0, compute_node.stdout[-1500:] + compute_node.stderr[-1500:]
+    assert "create_mmseqs2_gpu_msa_shard" in compute_node.stdout
 
 
 def test_missing_bundle_after_completion_schedules_automatic_gpu_repair(tmp_path):
@@ -778,3 +1059,135 @@ def test_configuring_rna_changes_the_cache_key_so_stale_msas_are_not_reused():
     with_rna = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(_with_rna(), data_pipeline="alphafold3")
 
     assert protein_only.msa_cache_key("img") != with_rna.msa_cache_key("img")
+
+
+
+# --------------------------------------------------------------------------------
+# The MSA shard schedule: every parse of a run agrees
+# --------------------------------------------------------------------------------
+
+
+def _schedule(proteins, lengths, cache_dir):
+    return mmseqs2_gpu.schedule_msa_shards(
+        proteins, lengths, cache_dir, max_sequences=2, max_residues=9
+    )
+
+
+def _complete(cache_dir, job_id, protein):
+    """Publish a bundle and a valid Shard completion for one single-protein shard."""
+    bundle = cache_dir / f"{protein}_mmseqs_msa.json"
+    bundle.write_text('{"sequence":"ACDE"}\n', encoding="utf-8")
+    summary = cache_dir / ".completed" / f"{job_id}.json"
+    summary.parent.mkdir(exist_ok=True)
+    summary.write_text(json.dumps(_completion_summary(protein, bundle)), encoding="utf-8")
+    return bundle
+
+
+def test_a_shard_job_finds_its_shard_after_the_inputs_arrive(tmp_path):
+    """The head node plans before the FASTAs exist; the job parses after."""
+    head = _schedule(("alpha", "beta"), {}, tmp_path)
+    job = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, tmp_path)
+
+    assert job.jobs == head.jobs
+    for protein in ("alpha", "beta"):
+        assert job.completion_target(protein) == head.completion_target(protein)
+
+
+def test_new_proteins_get_new_shards_and_planned_ones_keep_theirs(tmp_path):
+    """A grown sample sheet re-plans nothing: no GPU job per existing shard."""
+    first = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, tmp_path)
+    grown = _schedule(
+        ("alpha", "beta", "gamma"), {"alpha": 4, "beta": 4, "gamma": 4}, tmp_path
+    )
+
+    assert grown.completion_target("alpha") == first.completion_target("alpha")
+    assert set(first.jobs) < set(grown.jobs)
+    [added] = set(grown.jobs) - set(first.jobs)
+    assert grown.shard(added).proteins == ("gamma",)
+    assert added.startswith("0001-"), "numbered after the registered shards"
+
+
+def test_a_protein_leaving_mid_run_does_not_orphan_a_running_job(tmp_path):
+    """A precomputed feature can appear in the shared store while a run is going."""
+    head = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, tmp_path)
+    [job_id] = head.jobs
+
+    later = _schedule(("alpha",), {"alpha": 4}, tmp_path)
+
+    assert later.shard(job_id).proteins == ("alpha", "beta")
+
+
+def test_repair_ids_survive_other_shards_publishing_into_the_cache(tmp_path):
+    """Running shards change the MSA cache directory's mtime. A repair job has to
+    find its own id when it re-parses anyway -- the id no longer depends on it."""
+    [job_id] = _schedule(("alpha",), {"alpha": 4}, tmp_path).jobs
+    _complete(tmp_path, job_id, "alpha").unlink()  # the bundle is lost: repair due
+
+    head = _schedule(("alpha",), {"alpha": 4}, tmp_path)
+    repair = head.completion_target("alpha")
+    assert "-repair-" in repair.name
+
+    (tmp_path / "other_mmseqs_msa.json").write_text("{}", encoding="utf-8")
+    os.utime(tmp_path, ns=(123, 456))
+    job = _schedule(("alpha",), {"alpha": 4}, tmp_path)
+
+    assert job.completion_target("alpha") == repair
+    assert job.shard(repair.stem).proteins == ("alpha",)
+
+
+def test_successive_repairs_still_get_distinct_ids(tmp_path):
+    """Without a nonce, a second loss after a completed repair is still a new job,
+    because the first repair's own summary is part of the state."""
+    [job_id] = _schedule(("alpha",), {"alpha": 4}, tmp_path).jobs
+    _complete(tmp_path, job_id, "alpha").unlink()
+    first_repair = _schedule(("alpha",), {"alpha": 4}, tmp_path).completion_target("alpha")
+
+    _complete(tmp_path, first_repair.stem, "alpha")  # the repair ran and published
+    assert _schedule(("alpha",), {"alpha": 4}, tmp_path).completion_target("alpha") == first_repair
+
+    (tmp_path / "alpha_mmseqs_msa.json").unlink()  # lost again
+    second_repair = _schedule(("alpha",), {"alpha": 4}, tmp_path).completion_target("alpha")
+
+    assert second_repair != first_repair
+    assert "-repair-" in second_repair.name
+
+
+def test_a_partly_requested_shard_is_replanned_unless_it_completed(tmp_path):
+    incomplete, complete = tmp_path / "incomplete", tmp_path / "complete"
+    for cache in (incomplete, complete):
+        cache.mkdir()
+        _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, cache)
+
+    # Never completed, and beta has left: alpha cannot run with a shard that
+    # needs beta's FASTA, so it is planned afresh.
+    [original] = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, incomplete).jobs
+    replanned = _schedule(("alpha",), {"alpha": 4}, incomplete)
+    assert replanned.completion_target("alpha").stem != original
+    assert replanned.shard(replanned.completion_target("alpha").stem).proteins == ("alpha",)
+
+    # Completed: alpha keeps the record it already has; nothing runs again.
+    [done] = _schedule(("alpha", "beta"), {"alpha": 4, "beta": 4}, complete).jobs
+    for protein in ("alpha", "beta"):
+        (complete / f"{protein}_mmseqs_msa.json").write_text('{"sequence":"ACDE"}\n')
+    summary = complete / ".completed" / f"{done}.json"
+    summary.parent.mkdir()
+    records = [
+        _completion_summary(p, complete / f"{p}_mmseqs_msa.json")["artifacts"][0]
+        for p in ("alpha", "beta")
+    ]
+    summary.write_text(json.dumps({
+        "schemaVersion": 2, "artifacts": records, "reused": [],
+        "written": ["alpha", "beta"],
+    }), encoding="utf-8")
+    kept = _schedule(("alpha",), {"alpha": 4}, complete)
+    assert kept.completion_target("alpha") == summary
+
+
+def test_an_unusable_registry_degrades_to_planning_in_memory(tmp_path):
+    (tmp_path / ".shard_registry.json").write_text("{not json", encoding="utf-8")
+    assert _schedule(("alpha",), {"alpha": 4}, tmp_path).completion_target("alpha")
+
+    not_a_directory = tmp_path / "file"
+    not_a_directory.write_text("", encoding="utf-8")
+    schedule = _schedule(("alpha",), {"alpha": 4}, not_a_directory / "cache")
+    assert schedule.completion_target("alpha").name.startswith("0000-")
