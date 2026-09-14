@@ -658,11 +658,13 @@ class LocalMmseqsFeatureConfig:
                 "Local MMseqs2-GPU requires template_database_ids"
             )
         template_database_ids = {
-            name: str(
-                _required(template_values, name, f"{name} template database")
-            )
-            for name in ("pdb_seqres", "mmcif")
+            "mmcif": str(_required(template_values, "mmcif", "mmcif template database"))
         }
+        for name in ("pdb_seqres", "pdb70") if backend == "alphafold2" else ("pdb_seqres",):
+            if template_values.get(name) is not None:
+                template_database_ids[name] = str(template_values[name])
+        if backend == "alphafold3":
+            _required(template_database_ids, "pdb_seqres", "pdb_seqres template database")
 
         return cls(
             enabled=True,
@@ -753,18 +755,34 @@ class LocalMmseqsFeatureConfig:
             if arguments.get(name) not in (None, "", False, "false", "False")
         }
 
+    def _selected_template_database_ids(
+        self, create_feature_arguments: Mapping[str, Any] | None
+    ) -> dict[str, str]:
+        """One database selection shared by command construction and cache identity."""
+        arguments = create_feature_arguments or {}
+        search_database = (
+            "pdb70" if self.backend == "alphafold2"
+            and _enabled(arguments.get("--use_hhsearch", False)) else "pdb_seqres"
+        )
+        return {
+            name: str(_required(self.template_database_ids or {}, name, f"{name} template database"))
+            for name in (search_database, "mmcif")
+        }
+
     def finalize_cli_arguments(
         self, create_feature_arguments: Mapping[str, Any] | None = None
     ) -> tuple[str, ...]:
         """Arguments owned by the CPU finalization stage."""
         if not self.enabled:
             return ()
-        identifiers = self.template_database_ids or {}
+        identifiers = self._selected_template_database_ids(create_feature_arguments)
         return (
             f"--data_pipeline={self.backend}",
-            "--template_seqres_database_id="
-            + shlex.quote(identifiers["pdb_seqres"]),
-            "--template_mmcif_database_id=" + shlex.quote(identifiers["mmcif"]),
+            *(
+                f"--template_{'seqres' if name == 'pdb_seqres' else name}_database_id="
+                + shlex.quote(identifier)
+                for name, identifier in identifiers.items()
+            ),
             *(
                 f"{name}={shlex.quote(value)}"
                 for name, value in self.template_arguments(
@@ -827,7 +845,7 @@ class LocalMmseqsFeatureConfig:
         identity = {
             "msa": self.msa_cache_key(prediction_container),
             "max_template_date": str(max_template_date),
-            "template_database_ids": dict(self.template_database_ids or {}),
+            "template_database_ids": self._selected_template_database_ids(create_feature_arguments),
         }
         if self.backend != "alphafold3":
             identity["backend"] = self.backend

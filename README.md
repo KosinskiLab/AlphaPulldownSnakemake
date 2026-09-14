@@ -736,8 +736,14 @@ spot-check your own targets.
 **For AlphaFold 2** set `--data_pipeline: alphafold2` and enable the block above. The
 MSA recipe is AlphaFold 2's `reduced_dbs` set (no BFD/UniRef30 HHblits arm); templates
 come from the AlphaFold 2 database tree, and `--use_hhsearch` and any explicit template
-paths in `create_feature_arguments` reach the finalization stage. The native MSA
-arguments do not — this stage replaces that search. It needs a prediction image
+paths in `create_feature_arguments` reach the finalization stage. The MSA cache
+remains reusable when only the template database changes. With
+`--use_hhsearch: true`, set `mmseqs2_features.template_database_ids.pdb70` to the
+immutable PDB70 build identity; `pdb_seqres` is then unused. Other template searches
+require `pdb_seqres`, and every search requires `mmcif`. Update the relevant ID when
+rebuilding a database, even at the same path; this invalidates finalized features.
+The native MSA arguments do not reach finalization because this stage replaces
+that search. It needs a prediction image
 carrying the AlphaFold 2 finalizer. AlphaFold 2 finalization is heavier than AlphaFold
 3's because template featurization dominates it — median ~1 GB and 2 min, but up to
 19 GB and 90 min, set by which structures the templates come from rather than by length

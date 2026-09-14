@@ -40,6 +40,7 @@ def _config(**overrides):
         "template_database_ids": {
             "pdb_seqres": "pdb-seqres-2026-08",
             "mmcif": "pdb-mmcif-2026-08",
+            "pdb70": "pdb70-2026-08",
         },
         "databases": {
             name: {
@@ -563,6 +564,53 @@ def test_alphafold2_feature_cache_is_keyed_on_backend_and_template_stack():
     assert plain == af2.feature_cache_key(
         "2050-01-01", "image:v1", {"--uniref90_database_path": "/elsewhere"}
     )
+
+
+def test_pdb70_identity_changes_only_the_hhsearch_feature_cache():
+    first = _adapter("alphafold2")
+    ids = dict(_config()["template_database_ids"], pdb70="pdb70-new")
+    second = _adapter("alphafold2", template_database_ids=ids)
+    hhsearch = {"--use_hhsearch": True}
+    assert first.msa_cache_key("image:v1") == second.msa_cache_key("image:v1")
+    assert first.feature_cache_key("2050-01-01", "image:v1", hhsearch) != (
+        second.feature_cache_key("2050-01-01", "image:v1", hhsearch)
+    )
+    assert first.feature_cache_key("2050-01-01", "image:v1") == (
+        second.feature_cache_key("2050-01-01", "image:v1")
+    )
+    assert "--template_pdb70_database_id=pdb70-new" in second.finalize_cli_arguments(hhsearch)
+    assert not any("seqres_database_id" in arg for arg in second.finalize_cli_arguments(hhsearch))
+
+
+def test_hhsearch_does_not_need_or_key_an_unused_seqres_identity():
+    ids = {"pdb70": "pdb70-v1", "mmcif": "mmcif-v1"}
+    first = _adapter("alphafold2", template_database_ids=ids)
+    second = _adapter("alphafold2", template_database_ids={**ids, "pdb_seqres": "unused"})
+    arguments = {"--use_hhsearch": True}
+    assert "--template_pdb70_database_id=pdb70-v1" in first.finalize_cli_arguments(arguments)
+    assert first.feature_cache_key("2050-01-01", "image:v1", arguments) == (
+        second.feature_cache_key("2050-01-01", "image:v1", arguments)
+    )
+
+
+@pytest.mark.parametrize("missing", [None, "", "  "])
+def test_missing_pdb70_identity_fails_before_a_job_is_scheduled(missing):
+    ids = dict(_config()["template_database_ids"], pdb70=missing)
+    adapter = _adapter("alphafold2", template_database_ids=ids)
+    with pytest.raises(ValueError, match="pdb70"):
+        adapter.feature_cache_key("2050-01-01", "image:v1", {"--use_hhsearch": True})
+    with pytest.raises(ValueError, match="pdb70"):
+        adapter.finalize_cli_arguments({"--use_hhsearch": True})
+
+
+@pytest.mark.parametrize("disabled", [False, "false", "False", "0"])
+def test_disabled_hhsearch_uses_seqres_identity(disabled):
+    ids = {"pdb_seqres": "seqres-v1", "mmcif": "mmcif-v1"}
+    arguments = _adapter("alphafold2", template_database_ids=ids).finalize_cli_arguments(
+        {"--use_hhsearch": disabled}
+    )
+    assert "--template_seqres_database_id=seqres-v1" in arguments
+    assert not any("pdb70_database_id" in arg for arg in arguments)
 
 
 def test_search_settings_that_change_results_change_the_msa_cache_key():

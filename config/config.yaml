@@ -201,6 +201,9 @@ structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
 #  template_database_ids:  # immutable identities of the template databases
 #    pdb_seqres: pdb-seqres-2026-08
 #    mmcif: pdb-mmcif-2026-08
+#    # Required instead of pdb_seqres when AF2 --use_hhsearch is true:
+#    pdb70: pdb70-2026-08
+#    # Change the selected database ID on rebuild, even at the same path.
 #  # GPU-padded MMseqs2 databases built from the AlphaFold 3.0.0 FASTAs. The paths
 #  # below are the shared EMBL build - uncomment as-is there, or repoint elsewhere.
 #  databases:
