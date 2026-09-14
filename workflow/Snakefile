@@ -173,38 +173,55 @@ if exists(_sequence_length_cache_path):
 kept_folds = list(dataset.fold_specifications)
 dropped_folds = []
 
+_local_path_by_base = {
+    splitext(basename(p))[0]: p
+    for p in dataset.sequences_by_origin.get("local", ())
+}
+_data_dir = join(config["output_directory"], "data")
+_features_dir = join(config["output_directory"], "features")
+
+
+def _resolve_protein_length(name):
+    """A protein's length from the cheapest source that knows it, cached, or None.
+
+    Shared by the length filter and by local MMseqs2 shard planning, so both see the
+    same lengths whether or not length filtering is switched on.
+    """
+    if is_json_input(name):
+        # Direct AF3 JSON input (e.g. a ligand): not a UniProt protein, so do
+        # not query UniProt. Count polymer residues from the file if present,
+        # else 0 (a known length, so the fold is kept rather than flagged).
+        return chain_residue_count(name, _data_dir, _features_dir, IS_AF3)
+    if name in sequence_length_cache:
+        return sequence_length_cache[name]
+    length = 0
+    if name in _local_path_by_base:
+        length = residue_count(_local_path_by_base[name])
+    if length == 0:
+        length = residue_count(join(_data_dir, f"{name}.fasta"))
+    if length == 0 and IS_AF3:
+        length = af3_input_residue_count(
+            join(_features_dir, f"{name}_af3_input.json")
+        )
+    if length == 0 and LENGTH_FILTER_FETCH_UNIPROT:
+        length = fetch_uniprot_length(name)
+    if length > 0:
+        sequence_length_cache[name] = length
+        return length
+    return None
+
+
+def _persist_sequence_length_cache():
+    try:
+        makedirs(config["output_directory"], exist_ok=True)
+        with open(_sequence_length_cache_path, "w") as _cache_fh:
+            for _name in sorted(sequence_length_cache):
+                _cache_fh.write(f"{_name}\t{sequence_length_cache[_name]}\n")
+    except OSError:
+        pass
+
+
 if MAX_PROTEIN_LENGTH > 0 or MAX_TOTAL_LENGTH > 0:
-    _local_path_by_base = {
-        splitext(basename(p))[0]: p
-        for p in dataset.sequences_by_origin.get("local", ())
-    }
-    _data_dir = join(config["output_directory"], "data")
-    _features_dir = join(config["output_directory"], "features")
-
-    def _resolve_protein_length(name):
-        if is_json_input(name):
-            # Direct AF3 JSON input (e.g. a ligand): not a UniProt protein, so do
-            # not query UniProt. Count polymer residues from the file if present,
-            # else 0 (a known length, so the fold is kept rather than flagged).
-            return chain_residue_count(name, _data_dir, _features_dir, IS_AF3)
-        if name in sequence_length_cache:
-            return sequence_length_cache[name]
-        length = 0
-        if name in _local_path_by_base:
-            length = residue_count(_local_path_by_base[name])
-        if length == 0:
-            length = residue_count(join(_data_dir, f"{name}.fasta"))
-        if length == 0 and IS_AF3:
-            length = af3_input_residue_count(
-                join(_features_dir, f"{name}_af3_input.json")
-            )
-        if length == 0 and LENGTH_FILTER_FETCH_UNIPROT:
-            length = fetch_uniprot_length(name)
-        if length > 0:
-            sequence_length_cache[name] = length
-            return length
-        return None
-
     kept_folds = []
     _unknown_proteins = set()
     for fold in dataset.fold_specifications:
@@ -222,13 +239,7 @@ if MAX_PROTEIN_LENGTH > 0 or MAX_TOTAL_LENGTH > 0:
         else:
             kept_folds.append(fold)
 
-    try:
-        makedirs(config["output_directory"], exist_ok=True)
-        with open(_sequence_length_cache_path, "w") as _cache_fh:
-            for _name in sorted(sequence_length_cache):
-                _cache_fh.write(f"{_name}\t{sequence_length_cache[_name]}\n")
-    except OSError:
-        pass
+    _persist_sequence_length_cache()
 
     if dropped_folds:
         _skipped_path = join(config["output_directory"], "skipped_folds.tsv")
@@ -514,6 +525,7 @@ _MMSEQS2_GPU_MSA_CACHE_KEY = LOCAL_MMSEQS2.msa_cache_key(
 _MMSEQS2_GPU_FEATURE_CACHE_KEY = LOCAL_MMSEQS2.feature_cache_key(
     _MMSEQS2_GPU_MAX_TEMPLATE_DATE,
     str(config["prediction_container"]),
+    config["create_feature_arguments"],
 ) if LOCAL_MMSEQS2.enabled else "disabled"
 LOCAL_MMSEQS2_MSA_CACHE = join(
     config["output_directory"],
@@ -527,33 +539,22 @@ LOCAL_MMSEQS2_CACHE = join(
     ".mmseqs2_gpu_cache",
     _MMSEQS2_GPU_FEATURE_CACHE_KEY,
 )
-_LOCAL_MMSEQS2_LENGTHS = {
-    protein: (
-        int(sequence_length_cache.get(protein, 0) or 0)
-        or residue_count(
-            join(config["output_directory"], "data", f"{protein}.fasta")
-        )
+if LOCAL_MMSEQS2.enabled:
+    # Lengths only decide how the FIRST plan groups proteins -- the schedule keeps
+    # every plan it ever made -- so resolve them as the length filter would, whether
+    # or not the filter is on; an unknown length still runs alone.
+    _LOCAL_MMSEQS2_LENGTHS = {
+        protein: _resolve_protein_length(protein) or 0
+        for protein in LOCAL_MMSEQS2_PROTEINS
+    }
+    _persist_sequence_length_cache()
+    LOCAL_MMSEQS2_SCHEDULE = schedule_msa_shards(
+        LOCAL_MMSEQS2_PROTEINS,
+        _LOCAL_MMSEQS2_LENGTHS,
+        Path(LOCAL_MMSEQS2_MSA_CACHE),
+        max_sequences=LOCAL_MMSEQS2.batch_max_sequences,
+        max_residues=LOCAL_MMSEQS2.batch_max_residues,
     )
-    for protein in LOCAL_MMSEQS2_PROTEINS
-}
-LOCAL_MMSEQS2_SHARDS = plan_feature_shards(
-    LOCAL_MMSEQS2_PROTEINS,
-    _LOCAL_MMSEQS2_LENGTHS,
-    max_sequences=LOCAL_MMSEQS2.batch_max_sequences,
-    max_residues=LOCAL_MMSEQS2.batch_max_residues,
-)
-LOCAL_MMSEQS2_SCHEDULED_SHARDS = schedule_feature_shards(
-    LOCAL_MMSEQS2_SHARDS,
-    Path(LOCAL_MMSEQS2_MSA_CACHE),
-)
-LOCAL_MMSEQS2_SHARD_JOB = {
-    job.identifier: job.shard for job in LOCAL_MMSEQS2_SCHEDULED_SHARDS
-}
-LOCAL_MMSEQS2_COMPLETION_BY_PROTEIN = {
-    protein: str(job.summary_path)
-    for job in LOCAL_MMSEQS2_SCHEDULED_SHARDS
-    for protein in job.shard.proteins
-}
 
 rule all:
     input:
@@ -676,9 +677,7 @@ if LOCAL_MMSEQS2.enabled:
         input:
             fastas=lambda wildcards: [
                 join(config["output_directory"], "data", f"{protein}.fasta")
-                for protein in LOCAL_MMSEQS2_SHARD_JOB[
-                    wildcards.mmseqs_shard
-                ].proteins
+                for protein in LOCAL_MMSEQS2_SCHEDULE.shard(wildcards.mmseqs_shard).proteins
             ],
         output:
             summary=join(
@@ -717,13 +716,9 @@ if LOCAL_MMSEQS2.enabled:
                 runtime_fn=lambda wildcards, attempt: (
                     LOCAL_MMSEQS2.search_runtime_minutes(
                         len(
-                            LOCAL_MMSEQS2_SHARD_JOB[
-                                wildcards.mmseqs_shard
-                            ].proteins
+                            LOCAL_MMSEQS2_SCHEDULE.shard(wildcards.mmseqs_shard).proteins
                         ),
-                        LOCAL_MMSEQS2_SHARD_JOB[
-                            wildcards.mmseqs_shard
-                        ].total_residues,
+                        LOCAL_MMSEQS2_SCHEDULE.shard(wildcards.mmseqs_shard).total_residues,
                         attempt=attempt,
                     )
                 ),
@@ -748,9 +743,7 @@ if LOCAL_MMSEQS2.enabled:
                 "{fasta_basename}.fasta",
             ),
             msa_complete=lambda wildcards: (
-                LOCAL_MMSEQS2_COMPLETION_BY_PROTEIN[
-                    wildcards.fasta_basename
-                ]
+                str(LOCAL_MMSEQS2_SCHEDULE.completion_target(wildcards.fasta_basename))
             ),
         output:
             join(LOCAL_MMSEQS2_CACHE, FEATURE_OUTPUT_PATTERN),
@@ -766,17 +759,23 @@ if LOCAL_MMSEQS2.enabled:
                 )
             ).lower(),
             max_template_date=_MMSEQS2_GPU_MAX_TEMPLATE_DATE,
+            # Carries --data_pipeline, so one rule finalizes either backend; for
+            # AlphaFold 2 it also carries the template stack settings.
             finalize_cli_parameters=" ".join(
-                LOCAL_MMSEQS2.finalize_cli_arguments()
+                LOCAL_MMSEQS2.finalize_cli_arguments(
+                    config["create_feature_arguments"]
+                )
             ),
         resources:
             qos=DEFAULT_SLURM_QOS,
             **CPU_PARTITION_RESOURCE,
             # NOT estimate_feature_mem_mb: those constants were fitted to jackhmmer and
             # HHblits building an MSA from scratch. This stage does not build MSAs - they
-            # arrive in the bundle - it runs AF3's native template search and writes the
-            # artifact. Measured at 0.24 GB / 13 s for one protein and 0.57 GB / 110 s for
-            # eight, against the 24 GB and 24 h the old model asked for.
+            # arrive in the bundle - it runs the backend's template search and writes the
+            # artifact. AlphaFold 3 measured 0.24 GB / 13 s for one protein, against the
+            # 24 GB and 24 h the old model asked for. AlphaFold 2's template
+            # featurization is far heavier (up to 18.8 GB / 87 min), so the defaults are
+            # per backend; see _FINALIZE_DEFAULTS.
             **linear_resources(
                 mem_fn=lambda wildcards, input, attempt: LOCAL_MMSEQS2.finalize_memory_mb(
                     chain_residue_count(
@@ -801,7 +800,6 @@ if LOCAL_MMSEQS2.enabled:
             finalize_batch_features.py \
                 --fasta_paths={input.fasta} \
                 --msa_input_dir={params.msa_output_directory} \
-                --data_pipeline=alphafold3 \
                 --data_dir={params.data_directory} \
                 --output_dir={params.output_directory} \
                 --max_template_date={params.max_template_date} \

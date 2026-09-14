@@ -14,18 +14,30 @@
   mtime-only rerun triggers.
 - **Batch sentinel**: the completion marker named by the batch identity. A resident
   sentinel may live in a synthetic prediction directory; singleton paths are unchanged.
-- **Feature request**: one named protein sequence requiring an AlphaFold 3 feature artifact.
+- **Feature request**: one named sequence requiring a feature artifact for the configured
+  backend.
 - **MSA shard**: a deterministic, count- and residue-bounded group submitted as
-  one JAX-free GPU MMseqs2 batch. Unknown-length requests run alone.
+  one JAX-free MMseqs2 batch, on GPU or CPU. Unknown-length requests run alone.
+- **Shard registry**: the append-only record, beside the MSA cache, of every MSA shard
+  ever planned in that cache namespace. A protein keeps the shard it was first planned
+  into, and every registered shard's job id keeps resolving, so every parse of a run -
+  the head node's and each SLURM job's - agrees on which job computes which protein.
+- **MSA shard schedule**: which shard job computes each requested protein this parse,
+  derived from the shard registry and the Shard completions. A registered shard runs
+  only when all its proteins are still requested; a partly requested one that already
+  completed keeps serving its remaining proteins.
 - **MSA bundle**: a durable per-protein cache artifact containing paired and
   unpaired alignments plus MMseqs2/search/database provenance.
 - **Shard completion**: an atomic summary written only after every request in an
   MSA shard succeeds. The MSA bundles are not declared outputs, so a failed shard
   retry retains and validates prior successes.
-- **Feature finalization**: a per-protein CPU job that consumes an MSA bundle,
-  runs native AF3 template processing, and writes the standard AF3 feature JSON.
+- **Feature finalization**: a per-protein CPU job that consumes an MSA bundle, runs
+  the backend's template search, and writes its standard feature artifact: AF3's
+  native template processing and feature JSON, or AF2's hmmsearch/hhsearch and a
+  MonomericObject pickle.
 - **Database identifier**: the configured immutable identity of one MMseqs2 database build.
-- **Feature artifact**: the standard per-protein AlphaFold 3 JSON consumed by structure inference.
+- **Feature artifact**: the standard per-protein features structure inference consumes:
+  an AlphaFold 3 JSON, or an AlphaFold 2 MonomericObject pickle.
 - **Cache hit**: an artifact that AlphaPulldown validates against the sequence,
   MMseqs2 executable version, output-affecting settings, database identifiers,
   template cutoff, and template database identifiers as appropriate.

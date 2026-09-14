@@ -1,211 +1,221 @@
 # AlphaPulldownSnakemake configuration.
 #
-# Three sections: REQUIRED (set these), COMMON (routinely adjusted), ADVANCED
-# (sensible defaults; change only when you need to). Every key is documented in
-# README.md -- the section named beside each key below.
+# Start with REQUIRED: choose inputs, database/weight locations and a backend.
+# COMMON controls which results you produce. ADVANCED contains optional tuning.
+# Paths beginning /path/to/ and example cluster names must be replaced for your site.
+# Keep YAML indentation (spaces, not tabs). Lines starting # are comments; remove
+# the # only for options you want to enable. Define each setting only once.
+# See README.md for the sections named below.
 
 ################################################################################
-##  REQUIRED  --  a first run needs only this section
+##  REQUIRED  --  check these before your first run
 ################################################################################
 
-# Sample sheets listing the folds to predict. README: "Configure input files"
+# Sample sheet(s) listing the proteins or complexes to predict.
+# README: "Setup protein folding jobs" and "Configure input files"
 input_files:
   - config/sample_sheet.csv
 
-# Where all output is written. README: "Setup protein folding jobs"
+# Results and intermediate files are written here.
 output_directory: ./temp_fold/
 
-# AlphaFold sequence/template databases, and the model weights for the backend
-# you selected below. README: "Database configuration"
-databases_directory: /scratch/AlphaFold_DBs/3.0.0
-backend_weights_directory : /g/kosinski/dima/alphafold3_weights/
+# Sequence/template databases and model weights must already be installed.
+# Use the database tree and weights for the backend selected below.
+# README: "Setting up databases" and "Database configuration"
+databases_directory: /path/to/alphafold/databases
+backend_weights_directory: /path/to/alphafold3/weights/
 
-# The container decides the folding backend (alphafold2 / alphafold3 / alphalink);
-# a local .sif path also works. README: "Changing folding backends"
-prediction_container: "docker://kosinskilab/alphafold3:2.8.0"
+# These defaults run AlphaFold 3. To use AlphaFold 2, change the image to
+# alphafold2:2.9.0, both backend flags below to alphafold2, and the paths above.
+# A local .sif image also works. README: "Changing folding backends"
+prediction_container: "docker://kosinskilab/alphafold3:2.9.0"
+
+# Features are the sequence alignments and templates used for prediction.
+# Keep any additional feature flags inside this block.
+# README: "Feature generation flags"
+create_feature_arguments:
+  --data_pipeline: alphafold3
+  --max_template_date: "2050-01-01"  # latest allowed template date; keep the quotes
+  --compress_features: true          # save disk space; read back automatically
+  --save_msa_files: false            # also save separate alignment files if true
+  --use_precomputed_msas: true       # reuse saved alignments when available
+
+# Must match the image and feature pipeline above. Put extra prediction flags
+# here as needed. README: "Backend-specific flags"
+structure_inference_arguments:
+  --fold_backend: alphafold3
+
+# SLURM only: replace "gpu" with your cluster's GPU partition. Several names can
+# be comma-separated. Desktop runs ignore these scheduler settings.
+# QoS is the site's scheduling class; change or remove it if "normal" is unused.
+# README: "SLURM defaults for structure inference"
+slurm_partition: "gpu"
+slurm_qos: "normal"
+# slurm_partition_cpu: "cpu,bigmem"  # omit to use the cluster default for CPU jobs
 
 ################################################################################
-##  COMMON  --  what most runs adjust
+##  COMMON  --  choose inputs to reuse and results to produce
 ################################################################################
 
-# Directories of precomputed features to reuse. README: "Using precomputed features"
-feature_directory:
-  - "/g/alphafold/input_features/Homo_sapiens/features"
+# Optional directories of existing features. Leave [] to generate missing ones.
+# Example: feature_directory: ["/path/to/precomputed/features"]
+# README: "Using precomputed features"
+feature_directory: []
 
-# Separator between chains in a fold spec, and whether AB and BA are treated as
-# one fold. README: "Setup pulldown experiments"
-protein_delimiter: "+"
-exclude_permutations: true
-
-# Stop after feature generation instead of predicting. README: "Execution"
+# true stops after feature generation, without predicting structures.
+# README: "Execution"
 only_generate_features: false
 
-# Feature generation flags. README: "Feature generation flags"
-create_feature_arguments:
-  --save_msa_files: false  # Do not save multiple sequence alignment (MSA) files
-  --use_precomputed_msas: true  # Use precomputed MSA files if available
-  --max_template_date: "2050-01-01"  # Quote it: unquoted YAML parses as a date object that is not JSON serializable
-  # Compress generated features (AF2 -> *.pkl.xz, AF3 -> *_af3_input.json.xz).
-  # AF3 compression needs a prediction_container with alphapulldown-input-parser
-  # >= 0.5.2; older images index only *.json and fail inference with
-  # "['<ID>_af3_input.json'] not found in [...]".
-  --compress_features: true
-  --data_pipeline: alphafold3 # alphafold2 or alphafold3 data pipeline
-
-# Inference flags. Must match the backend in prediction_container.
-# README: "Backend-specific flags"
-structure_inference_arguments:
-  --fold_backend: alphafold3 # Options: alphafold2, alphafold3, alphalink
-
-# Per-fold analysis and the aggregated report across all folds.
+# Analyze interfaces in each prediction, then combine them into one report.
 # README: "Structure analysis & reporting"
 enable_structure_analysis: true
 generate_recursive_report: true
-analyze_structure_arguments:
-  --contact_thresh: 8.0
-  --pae_filter: 100.0
-  --models_to_analyse: "all"
 
-# Local MMseqs2 MSA backend for AlphaFold 3 protein features, replacing the
-# per-protein jackhmmer/HHblits rules. Off by default. When enabled, every database
-# path and build identifier is explicit because the workflow does not guess database
-# locations, and the databases must be GPU-padded (makepaddedseqdb) for either search
-# mode. Search runs as sharded GPU or CPU jobs; template finalization runs separately
-# on CPU. README: "Local MMseqs2 features".
-mmseqs2_features:
-  # OFF by default. MSA depth from this backend has not been shown equivalent to the
-  # native jackhmmer pipeline - measured recall against it was 90% overall but 54-68%
-  # on the shallowest families - so treat it as opt-in until you have benchmarked it
-  # for your own targets. README: "Local MMseqs2 features".
-  enabled: false
-  # WHICH SEARCH RUNS. true: MMseqs2 on a GPU, one GPU per search shard, on
-  # slurm_partition. false: the same search on CPU, no GPU requested, on
-  # slurm_partition_cpu. Either way the databases must be GPU-padded
-  # (makepaddedseqdb).
-  use_gpu: true
+# "+" separates chains in a complex. true treats A+B and B+A as the same job.
+# README: "Setup pulldown experiments"
+protein_delimiter: "+"
+exclude_permutations: true
 
-# Arguments for structure inference
-  # Databases, shard limits and the resource model are in ADVANCED below.
+################################################################################
+##  ADVANCED  --  optional features and resource tuning
+################################################################################
 
-# Group several folds into ONE inference job to amortise queue wait and model
-# loading. 1 = one job per fold (unchanged behaviour). batch_max_tokens caps the
-# summed residues per batch; 0 = no cap. README: "Batching small jobs into one SLURM job"
+## -- Batch small predictions -------------------------------------------------
+# Run several predictions in one job to share model loading and queue time.
+# 1 keeps one prediction per job. batch_max_tokens limits the combined residue
+# count per batch; 0 adds no limit. Each complex is still predicted independently.
+# README: "Batching small jobs into one SLURM job"
 batch_size: 1
 batch_max_tokens: 0
 
-# Partition(s) for the GPU inference jobs: one name, comma-separated, or a YAML
-# list. README: "SLURM defaults for structure inference"
-slurm_partition: "gpu-el8"
-slurm_qos: "normal"
+## -- CPU, memory and time requests -------------------------------------------
+# Host RAM is estimated from sequence length and the selected backend. Failed
+# jobs request more RAM on retry (retries are enabled in the shipped SLURM profile).
+# All memory values below are MB, even the legacy keys ending in _bytes.
+# All runtime values are minutes. README: "SLURM defaults for structure inference"
 alphafold_inference_threads: 8
-
-# alphajudge publishes only ":latest".
-analysis_container: "docker://kosinskilab/alphajudge:latest"
-
-################################################################################
-##  ADVANCED  --  sensible defaults; change only when you need to
-################################################################################
-
-## -- Memory sizing -----------------------------------------------------------
-# Host RAM is estimated from sequence length per backend and escalates on OOM
-# retries. Values are MEGABYTES. Uncomment a base/per-length key to override the
-# backend default for ALL backends. README: "SLURM defaults for structure inference"
-mem_safety_factor: 1.25                  # margin on the first-attempt estimate
-max_mem_mb: 0                            # hard ceiling per request; 0 = none
-feature_create_ram_scaling: 1.1          # per-retry escalation on OOM
-structure_inference_ram_scaling: 1.1     # per-retry escalation on OOM
+# feature_threads: 8                    # CPUs per feature-generation job
+mem_safety_factor: 1.25                 # margin added to the memory estimate
+max_mem_mb: 0                           # cap per job; 0 means no cap
+feature_create_ram_scaling: 1.1         # multiply RAM by this on each retry
+structure_inference_ram_scaling: 1.1
+# Overrides replace backend defaults; leave commented unless you need to tune.
 # feature_create_ram_bytes: 64000
 # feature_create_ram_per_residue_mb: 120
 # structure_inference_ram_bytes: 16000
 # structure_inference_ram_per_token_sq_mb: 0.0045
 # structure_inference_runtime_minutes: 1440
+structure_inference_max_runtime: 10080  # runtime ceiling; fit it to your partition
 
-## -- Length filtering --------------------------------------------------------
-# Skip folds too large to be worth submitting; 0 disables a limit. Skipped folds
-# are listed in <output_directory>/skipped_folds.tsv.
+## -- Length limits -----------------------------------------------------------
+# Skip oversized complexes before submitting expensive jobs; 0 disables a limit.
+# Total length includes all chains and copies. Skipped jobs are recorded in
+# <output_directory>/skipped_folds.tsv. README: "SLURM defaults for structure inference"
 max_total_length_alphafold2: 5000
 max_total_length_alphafold3: 7000
-# max_total_length: 6000                 # single override for both backends
-max_protein_length: 0                    # drops every fold containing the protein
-length_filter_fetch_uniprot: true        # false for fully offline runs
+# max_total_length: 6000                # one override for both backends
+max_protein_length: 0                   # skip every complex containing a longer chain
+length_filter_fetch_uniprot: true       # set false to avoid online length lookups
 
-## -- GPU selection -----------------------------------------------------------
-# gpu_model pins one card type; gpu_tiers routes by VRAM and OVERRIDES it.
-# README: "GPU compatibility"
+## -- GPU selection and memory ------------------------------------------------
+# An empty model accepts any GPU. Optional tiers choose GPUs by available GPU
+# memory (VRAM) and override a fixed model. Replace example node names for your site.
+# README: "GPU compatibility" and "SLURM defaults for structure inference"
 structure_inference_gpus_per_task: 1
 structure_inference_gpu_model: ""
 # structure_inference_gpu_vram_headroom: 1.0
 # structure_inference_gpu_tiers:
-#   - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29"}
-#   - {min_vram_gb: 80, nodes: "gpu38,gpu39"}
-# slurm_exclude_nodes: ""                # nodes to keep inference off
+#   - {min_vram_gb: 24, nodes: "gpu-24gb-01,gpu-24gb-02"}
+#   - {min_vram_gb: 80, nodes: "gpu-80gb-01,gpu-80gb-02"}
+# slurm_exclude_nodes: ""               # comma-separated nodes to avoid
 
-## -- Inference runtime and memory spilling -----------------------------------
-# Cap wall time so retry scaling cannot exceed the partition MaxTime. Unified
-# memory lets large complexes spill from VRAM into host RAM instead of OOM-ing.
-structure_inference_max_runtime: 10080
+# Unified memory lets large predictions use host RAM when GPU memory fills.
+# It can be slower. "auto" sets the limit from allocated host RAM and GPU VRAM.
 structure_inference_unified_memory: true
-structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
+structure_inference_xla_mem_fraction: auto
 
-## -- CPU partitions ----------------------------------------------------------
-# Feature jobs are numerous and memory-hungry; listing several partitions raises
-# concurrency substantially. Unset = cluster default.
-# slurm_partition_cpu: "htc-el8,htc-el10,bigmem"
+## -- Optional local MMseqs2 features -----------------------------------------
+# Alternative alignment search for AlphaFold 2/3 proteins and AlphaFold 3 RNA.
+# Off by default: alignment depth can differ from the native search, so compare
+# results on your own targets before adopting it. AF2 uses the reduced_dbs recipe.
+# Search runs on GPU or CPU; templates are processed separately on CPU.
+# README: "Batched local MMseqs2 features (AlphaFold 2 and 3)"
+mmseqs2_features:
+  enabled: false
+  use_gpu: true  # false uses CPU jobs; protein databases stay GPU-padded either way
 
-## -- Local MMseqs2 features -------------------------------------------------
-# Read only when mmseqs2_features.enabled is true; uncomment these under
-# mmseqs2_features: in the COMMON section.
-#  binary_path: /opt/mmseqs/bin/mmseqs  # only supported path; bundled in the image
-#  binary_id: 8cc5ce367b5638c4306c2d7cfc652dd099a4643f  # update with image
-#  temp_dir: /local-fast-scratch/mmseqs
-#  # Queries per shard. Cost is the database scan, not the queries: 1 and 128 queries
-#  # took 65 and 66 minutes and the same memory, so larger shards are close to free.
-#  batch_max_sequences: 256
-#  batch_max_residues: 100000
-#  e_value: 0.0001
-#  # Search memory is DERIVED from the largest configured database, because the
-#  # databases are searched one after another rather than together, and it does not
-#  # depend on shard size or query length. search_ram_mb is only the fallback used
-#  # when the database paths cannot be read at parse time.
-#  search_ram_mb: 160000
-#  # MMseqs2 touches the whole target database into RSS unless db_load_mode is 2,
-#  # which lowers memory but is not the default -- try it on your own data.
-#  db_load_mode: 2
-#  gpu_ram_scaling: 1.1
-#  search_runtime_base_minutes: 90
-#  cpu_runtime_multiplier: 2.5          # walltime allowance for CPU vs GPU search
-#  gpu_runtime_per_sequence_minutes: 0.5
-#  gpu_runtime_per_1000_residues: 1.0
-#  # Finalization stage (CPU): AF3 template search over an MSA that already exists.
-#  # Measured 0.24 GB / 13 s for one protein, 0.57 GB / 110 s for eight.
-#  finalize_base_ram_mb: 2000
-#  finalize_ram_per_residue_mb: 1.0
-#  finalize_runtime_minutes_base: 30
-#  template_database_ids:  # immutable identities for native AF3 template cache
-#    pdb_seqres: pdb-seqres-2026-08
-#    mmcif: pdb-mmcif-2026-08
-#  # GPU-padded MMseqs2 databases built from the AlphaFold 3.0.0 FASTAs. The paths
-#  # below are the shared EMBL build - uncomment as-is there, or repoint elsewhere.
-#  databases:
-#    uniref90: {path: /g/alphafold/AlphaFold_DBs/mmseqs/uniref90_gpu, identifier: uniref90-2022_05-padded, max_sequences: 10000}
-#    mgnify: {path: /g/alphafold/AlphaFold_DBs/mmseqs/mgnify_gpu, identifier: mgy_clusters-2022_05-padded, max_sequences: 5000}
-#    small_bfd: {path: /g/alphafold/AlphaFold_DBs/mmseqs/small_bfd_gpu, identifier: small-bfd-padded, max_sequences: 5000}
-#    uniprot: {path: /g/alphafold/AlphaFold_DBs/mmseqs/uniprot_gpu, identifier: uniprot_all-2021_04-padded, max_sequences: 50000}
-#  # RNA chains. Optional and all-or-nothing: set all three to search RNA, or leave
-#  # them out and the stage stays protein-only. NOT padded -- a nucleotide search
-#  # cannot use the GPU prefilter, so `mmseqs createdb` alone is enough and
-#  # makepaddedseqdb would cost hours on nt_rna for something never read.
-#  #
-#  # Memory is DERIVED from the largest configured database for protein, but that
-#  # ratio does not hold for nucleotide databases: nt_rna is 77 GB on disk and needs
-#  # about 275 GB. Configuring RNA therefore raises the floor for every search shard,
-#  # because any shard may contain an RNA chain.
-#    rfam: {path: /g/alphafold/AlphaFold_DBs/mmseqs/rfam, identifier: rfam-14_9, max_sequences: 10000}
-#    rnacentral: {path: /g/alphafold/AlphaFold_DBs/mmseqs/rnacentral, identifier: rnacentral-active, max_sequences: 10000}
-#    nt_rna: {path: /g/alphafold/AlphaFold_DBs/mmseqs/nt_rna, identifier: nt-rna-2023_02_23, max_sequences: 10000}
+  # To enable: set enabled: true, then uncomment and fill in temp_dir,
+  # template_database_ids and the four protein databases below. Keep their
+  # indentation inside this block. The native template databases are still needed.
+  # temp_dir: /path/to/fast/scratch/mmseqs
 
-## -- Extra report flags ------------------------------------------------------
-# --aggregate_report also produces an RCSB-style validation PDF (absolute path).
+  # IDs name immutable database builds. Change the relevant ID after rebuilding
+  # a database, even at the same path, so cached results are regenerated.
+  # Templates use pdb_seqres by default. AF2 with --use_hhsearch: true (inside
+  # create_feature_arguments) requires pdb70 instead. Both require mmcif.
+  # Changing template IDs reuses valid MSAs and rebuilds only finalized features.
+  # template_database_ids:
+  #   pdb_seqres: pdb-seqres-2026-08
+  #   mmcif: pdb-mmcif-2026-08
+  #   pdb70: pdb70-2026-08  # only needed for AF2 HHsearch
+
+  # All four protein databases are required. Build them with makepaddedseqdb;
+  # the database setup script can do this. max_sequences caps retained MSA depth.
+  # databases:
+  #   uniref90: {path: /path/to/mmseqs/uniref90_gpu, identifier: uniref90-2022_05-padded, max_sequences: 10000}
+  #   mgnify: {path: /path/to/mmseqs/mgnify_gpu, identifier: mgy_clusters-2022_05-padded, max_sequences: 5000}
+  #   small_bfd: {path: /path/to/mmseqs/small_bfd_gpu, identifier: small-bfd-padded, max_sequences: 5000}
+  #   uniprot: {path: /path/to/mmseqs/uniprot_gpu, identifier: uniprot_all-2021_04-padded, max_sequences: 50000}
+
+  # RNA is optional: add ALL three entries under databases above, or none.
+  # These use plain createdb, without GPU padding, and are searched on CPU.
+  # RNA databases raise the memory request for every search job; allow about
+  # 275 GB before the safety margin for the reference databases shown here.
+  #   rfam: {path: /path/to/mmseqs/rfam, identifier: rfam-14_9, max_sequences: 10000}
+  #   rnacentral: {path: /path/to/mmseqs/rnacentral, identifier: rnacentral-active, max_sequences: 10000}
+  #   nt_rna: {path: /path/to/mmseqs/nt_rna, identifier: nt-rna-2023_02_23, max_sequences: 10000}
+
+  # Search tuning (optional). A shard is a group of sequences searched together.
+  # Larger shards share a database scan; limits keep each group manageable.
+  # batch_max_sequences: 256
+  # batch_max_residues: 100000
+  # e_value: 0.0001
+  # num_iterations: 1  # protein searches only; more rounds trade time for sensitivity
+  # db_load_mode: 2    # memory-map databases; performance only, keeps cached MSAs
+
+  # Resource overrides (optional). RAM is estimated from database sizes;
+  # search_ram_mb is the fallback when paths cannot be read during workflow setup.
+  # Raise search_runtime_base_minutes if cold reads on network storage time out.
+  # search_ram_mb: 160000
+  # gpu_ram_scaling: 1.1
+  # search_runtime_base_minutes: 90
+  # cpu_runtime_multiplier: 2.5
+  # gpu_runtime_per_sequence_minutes: 0.5
+  # gpu_runtime_per_1000_residues: 1.0
+
+  # Template finalization uses the flags in create_feature_arguments. Defaults
+  # are backend-specific: AF2 starts at 16000 MB / 60 min, AF3 at 2000 MB / 30 min.
+  # Only uncomment to override those defaults (memory also gets the safety margin).
+  # finalize_base_ram_mb: 16000
+  # finalize_ram_per_residue_mb: 1.0
+  # finalize_runtime_minutes_base: 60
+
+  # The prediction image supplies the supported binary at this fixed location.
+  # Only override its build ID when using an image with a different MMseqs2 build.
+  # binary_path: /opt/mmseqs/bin/mmseqs
+  # binary_id: 8cc5ce367b5638c4306c2d7cfc652dd099a4643f
+
+## -- Analysis and extra report options ---------------------------------------
+# Settings below apply when the analysis/report switches in COMMON are enabled.
+# README: "Structure analysis & reporting"
+# AlphaJudge publishes :latest; use an image digest if you need a fixed build.
+analysis_container: "docker://kosinskilab/alphajudge:latest"
+analyze_structure_arguments:
+  --contact_thresh: 8.0      # maximum distance (angstroms) for an interface contact
+  --pae_filter: 100.0        # interface PAE cutoff; lower values are stricter
+  --models_to_analyse: "all"
+
+# Optional combined validation PDF; use an absolute output path.
 recursive_report_arguments: {}
-# recursive_report_arguments:
-#   --aggregate_report: /absolute/path/to/reports/aggregate_report.pdf
+# Add this entry inside recursive_report_arguments (replace {} with the block):
+#   --aggregate_report: /path/to/reports/aggregate_report.pdf
