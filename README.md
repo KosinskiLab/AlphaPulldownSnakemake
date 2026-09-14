@@ -9,7 +9,7 @@ AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Sn
 ### Quick install (recommended)
 
 ```bash
-curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.8.0/install.sh
+curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.9.0/install.sh
 bash install.sh
 conda activate snake
 cd AlphaPulldownSnakemake
@@ -25,7 +25,7 @@ Useful options:
 | Option | Meaning |
 | --- | --- |
 | `-d, --dest DIR` | working directory to deploy into (default `AlphaPulldownSnakemake`) |
-| `-v, --version TAG` | workflow version to deploy (default `2.8.0`) |
+| `-v, --version TAG` | workflow version to deploy (default `2.9.0`) |
 | `-i, --image-dir DIR` | shared container image directory |
 | `-n, --env-name NAME` | conda environment name (default `snake`) |
 | `--no-pull` | skip container pre-fetch (Snakemake will fetch on first run) |
@@ -43,7 +43,7 @@ Create and activate the conda environment:
 ```bash
 conda env create \
   -n snake \
-  -f https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.8.0/workflow/envs/alphapulldown.yaml
+  -f https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.9.0/workflow/envs/alphapulldown.yaml
 conda activate snake
 ```
 
@@ -55,7 +55,7 @@ Then deploy the workflow into a new processing directory for your project:
 snakedeploy deploy-workflow \
   https://github.com/KosinskiLab/AlphaPulldownSnakemake \
   AlphaPulldownSnakemake \
-  --tag 2.8.0
+  --tag 2.9.0
 cd AlphaPulldownSnakemake
 ```
 
@@ -134,6 +134,34 @@ Edit `config/config.yaml` and set the path to your sample sheet:
 input_files:
   - "config/sample_sheet.csv"
 ```
+
+### Setting up databases
+
+If you do not already have the AlphaFold databases, `scripts/setup_databases.sh` from AlphaPulldown
+fetches them and builds the MMseqs2 versions:
+
+```bash
+curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldown/main/scripts/setup_databases.sh
+bash setup_databases.sh --dest /path/to/databases --alphafold3 --mmseqs
+```
+
+Pick what you need with `--alphafold2`, `--alphafold3` and `--mmseqs`. Existing
+databases are skipped, so it is safe to re-run; `--dry-run` shows what would happen
+and `--help` lists the sizes.
+
+<details>
+<summary>Options and requirements</summary>
+
+No checkout is needed: the work runs inside the prediction container, which already
+carries the AlphaFold downloaders and a pinned MMseqs2. `--alphafold2` is the
+exception, because AlphaFold 2's downloader needs `aria2c` and `rsync`, which the
+container does not ship; the script extracts it and runs it on the host, and tells you
+if those are missing.
+
+Add `--reduced` for AlphaFold 2's `reduced_dbs` mode. `--mmseqs` builds the GPU-padded
+databases the local MMseqs2 feature stage needs and prints the config block to paste in.
+
+</details>
 
 ### Database configuration
 
@@ -308,18 +336,18 @@ prediction_container: "/path/to/images/alphafold3-2.5.0.sif"
 ### GPU compatibility
 
 The containers carry their own CUDA runtime (pip `nvidia-*` wheels), so GPU support depends on the
-image tag, not on the driver installed on the node. Releases 2.5.0 and newer run on every GPU in the
-EMBL cluster, with both AlphaFold 2 and AlphaFold 3:
+image tag, not on the driver installed on the node. Releases 2.5.0 and newer have been tested on
+the following GPUs, with both AlphaFold 2 and AlphaFold 3:
 
-- RTX 3090, 24 GB, sm_86 (`gpu21-22`, `gpu29-37`)
-- A100, 40 GB, sm_80 (`gpu25-28`)
-- A40, 48 GB, sm_86 (`sb03-05` to `sb03-20`)
-- L40S, 48 GB, sm_89 (`gpu40-48`)
-- H100, 80 GB, sm_90 (`gpu38-39`, and `hgx2-3` in `gpu-training`)
-- H200, 141 GB, sm_90 (`hgx4-5` in `gpu-training`)
-- B200, 180 GB, sm_100 (`bgx1` in `gpu-training`)
-- RTX PRO 4500 Blackwell, 16 GB MIG slices, sm_120 (`gpu60-68`)
-- RTX PRO 6000 Blackwell, 96 GB, sm_120 (`gpu51-53`)
+- RTX 3090, 24 GB, sm_86
+- A100, 40 GB, sm_80
+- A40, 48 GB, sm_86
+- L40S, 48 GB, sm_89
+- H100, 80 GB, sm_90
+- H200, 141 GB, sm_90
+- B200, 180 GB, sm_100
+- RTX PRO 4500 Blackwell, 16 GB MIG slices, sm_120
+- RTX PRO 6000 Blackwell, 96 GB, sm_120
 
 On other clusters the same rule applies by compute capability: sm_80 (Ampere) through sm_120
 (Blackwell) all work with a 2.5.0 or newer image.
@@ -348,7 +376,7 @@ While you are still on an older image, keep inference off those nodes with `slur
 </details>
 
 <details>
-<summary>MIG slices (<code>gpu60-68</code>)</summary>
+<summary>MIG slices</summary>
 
 Those nodes are RTX PRO 4500 cards split into 16 GB `1g.16gb` MIG instances. They need no special
 `slurm_gres`: a plain `gpu:1` request lands on one slice and SLURM sets
@@ -423,15 +451,15 @@ you hit these.
   uses the biggest tier and spills to host RAM via unified memory.
 
   ```yaml
-  # Example for the EMBL GPU pool; replace nodes with your cluster's (nothing is hard-coded):
+  # Example GPU tiers; replace these node names with your cluster's:
   structure_inference_gpu_vram_headroom: 1.0   # <1.0 tolerates that fraction of host spill
   structure_inference_gpu_tiers:
-    - {min_vram_gb: 16, nodes: "gpu60,gpu61,gpu62,gpu63,gpu64,gpu65,gpu66,gpu67,gpu68"}  # RTX PRO 4500, 16GB MIG
-    - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29,gpu30,gpu31,gpu32,gpu33,gpu34,gpu35,gpu36,gpu37"}
-    - {min_vram_gb: 40, nodes: "gpu25,gpu26,gpu27,gpu28"}
-    - {min_vram_gb: 48, nodes: "gpu40,gpu41,gpu42,gpu43,gpu44,gpu45,gpu46,gpu47,gpu48"}
-    - {min_vram_gb: 80, nodes: "gpu38,gpu39"}
-    - {min_vram_gb: 96, nodes: "gpu51,gpu52,gpu53"}  # RTX PRO 6000 Blackwell
+    - {min_vram_gb: 16, nodes: "gpu-16gb-01,gpu-16gb-02"}  # RTX PRO 4500, 16GB MIG
+    - {min_vram_gb: 24, nodes: "gpu-24gb-01,gpu-24gb-02"}
+    - {min_vram_gb: 40, nodes: "gpu-40gb-01,gpu-40gb-02"}
+    - {min_vram_gb: 48, nodes: "gpu-48gb-01,gpu-48gb-02"}
+    - {min_vram_gb: 80, nodes: "gpu-80gb-01,gpu-80gb-02"}
+    - {min_vram_gb: 96, nodes: "gpu-96gb-01,gpu-96gb-02"}  # RTX PRO 6000 Blackwell
   ```
 
   When set this drives `--exclude` per job and **overrides** `structure_inference_gpu_model` (the two
@@ -441,7 +469,7 @@ you hit these.
   partition(s); it excludes nodes by name, so if you span **multiple partitions** (see above) make
   sure the tier node lists cover every partition you submit to.
 - **Exclude specific nodes** with `slurm_exclude_nodes`, passed verbatim to `sbatch --exclude`
-  (e.g. `"gpu51,gpu52"`). `--exclude` is allowed in `slurm_extra` whereas
+  (e.g. `"gpu-96gb-01,gpu-96gb-02"`). `--exclude` is allowed in `slurm_extra` whereas
   `--constraint`/`--gres`/`--gpus` are not, so it is the supported way to drop a few nodes while
   keeping the rest of the partition. The usual reason to need it is a GPU the container image is too
   old for; see [GPU compatibility](#gpu-compatibility).
@@ -485,8 +513,7 @@ read with `nvidia-smi` once the job lands on a node, and the host RAM is the job
 ceiling within the SLURM allocation so XLA cannot oversubscribe host RAM beyond what the
 job requested — which would otherwise get the job OOM-killed. The chosen fraction is
 logged as a `[unified-memory]` line at the top of the job log. Pin a number instead if
-you want a fixed multiplier regardless of GPU/RAM (mirrors the EMBL `run_AF_multimer.sh`
-convention).
+you want a fixed multiplier regardless of GPU/RAM.
 
 > The fraction is computed in the job shell rather than via the SLURM executor: the
 > executor passes the submit environment through with `--export=ALL` but offers no
@@ -681,8 +708,9 @@ manually).
 - `--use_precomputed_msas` / `--save_msa_files` – reuse stored MSAs (`<output_dir>/<protein>.a3m`) or
   keep new ones for later runs. Required to reuse precomputed MMseqs2/ColabFold a3m files rather
   than regenerating them.
-- `--compress_features` – zip the generated `*.pkl` files (`.xz` extension) to save space.
+- `--compress_features` – compress the generated features to save space: `*.pkl.xz` for the AlphaFold2 pipeline, `*_af3_input.json.xz` for AlphaFold3. Both are read back transparently, so compressed feature sets can be used directly (this is how the [features database](https://alphapulldown.s3.embl.de) ships them).
 - `--skip_existing` – leave existing feature files untouched (safe for reruns).
+- `--keep_msas` – refresh **templates only** in features that already exist in `--output_dir`, keeping their MSAs. Use it when the template database or `--max_template_date` has moved but the alignments are still valid: it costs a template search (minutes) instead of a full MSA run (hours). Works for both pipelines — AlphaFold2 features get their `template_*` block replaced, AlphaFold3 features are re-processed through AF3's "search for templates only" path. Proteins with no stored features are generated normally, and it takes precedence over `--skip_existing`. Cannot be combined with `--use_mmseqs2` (which fetches MSAs and templates together) or `--skip_msa` (no MSAs to keep).
 - `--seq_index N` – only process the N‑th sequence from the FASTA list.
 - `--use_hhsearch`, `--re_search_templates_mmseqs2` – toggle template search implementations.
 - `--path_to_mmt`, `--description_file`, `--multiple_mmts` – enable TrueMultimer CSV-driven feature sets.
@@ -708,6 +736,10 @@ mmseqs2_features:
   enabled: true
   use_gpu: true
   temp_dir: /local-fast-scratch/mmseqs
+  template_database_ids:
+    pdb_seqres: pdb-seqres-2026-08
+    mmcif: pdb-mmcif-2026-08
+    # pdb70: pdb70-2026-08  # required for AF2 --use_hhsearch
   databases:
     uniref90:  {path: /db/mmseqs/uniref90_gpu,  identifier: uniref90-2026-08,  max_sequences: 10000}
     mgnify:    {path: /db/mmseqs/mgnify_gpu,    identifier: mgnify-2026-08,    max_sequences: 5000}
@@ -743,14 +775,17 @@ immutable PDB70 build identity; `pdb_seqres` is then unused. Other template sear
 require `pdb_seqres`, and every search requires `mmcif`. Update the relevant ID when
 rebuilding a database, even at the same path; this invalidates finalized features.
 The native MSA arguments do not reach finalization because this stage replaces
-that search. It needs a prediction image
-carrying the AlphaFold 2 finalizer. AlphaFold 2 finalization is heavier than AlphaFold
-3's because template featurization dominates it — median ~1 GB and 2 min, but up to
+that search. Use a matching prediction image, such as
+`docker://kosinskilab/alphafold2:2.9.0`, for AlphaFold 2. AlphaFold 2 finalization is
+heavier than AlphaFold 3's because template featurization dominates it — median ~1 GB and 2 min, but up to
 19 GB and 90 min, set by which structures the templates come from rather than by length
 — so its defaults request 16 GB (times the safety factor) and 60 min. Against native
 `reduced_dbs` features on 12 heterodimers released after AF2-multimer's training cutoff,
 top-ranked DockQ averaged 0.56 against 0.59, with 9 of 12 interfaces acceptable either
 way.
+
+Alignments preserve insertions for both backends. Older MSA bundles that lost
+insertions are regenerated automatically.
 
 Databases, RNA, AlphaFold 2, tuning, caching and caveats:
 [AlphaPulldown docs/mmseqs2_rna.md](https://github.com/KosinskiLab/AlphaPulldown/blob/main/docs/mmseqs2_rna.md).

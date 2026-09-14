@@ -17,12 +17,12 @@ output_directory: ./temp_fold/
 
 # AlphaFold sequence/template databases, and the model weights for the backend
 # you selected below. README: "Database configuration"
-databases_directory: /scratch/AlphaFold_DBs/3.0.0
-backend_weights_directory : /g/kosinski/dima/alphafold3_weights/
+databases_directory: /path/to/alphafold/databases
+backend_weights_directory : /path/to/alphafold3/weights/
 
 # The container decides the folding backend (alphafold2 / alphafold3 / alphalink);
 # a local .sif path also works. README: "Changing folding backends"
-prediction_container: "docker://kosinskilab/alphafold3:2.8.0"
+prediction_container: "docker://kosinskilab/alphafold3:2.9.0"
 
 ################################################################################
 ##  COMMON  --  what most runs adjust
@@ -30,7 +30,7 @@ prediction_container: "docker://kosinskilab/alphafold3:2.8.0"
 
 # Directories of precomputed features to reuse. README: "Using precomputed features"
 feature_directory:
-  - "/g/alphafold/input_features/Homo_sapiens/features"
+  - "/path/to/precomputed/features"
 
 # Separator between chains in a fold spec, and whether AB and BA are treated as
 # one fold. README: "Setup pulldown experiments"
@@ -138,8 +138,8 @@ structure_inference_gpus_per_task: 1
 structure_inference_gpu_model: ""
 # structure_inference_gpu_vram_headroom: 1.0
 # structure_inference_gpu_tiers:
-#   - {min_vram_gb: 24, nodes: "gpu21,gpu22,gpu29"}
-#   - {min_vram_gb: 80, nodes: "gpu38,gpu39"}
+#   - {min_vram_gb: 24, nodes: "gpu-24gb-01,gpu-24gb-02"}
+#   - {min_vram_gb: 80, nodes: "gpu-80gb-01,gpu-80gb-02"}
 # slurm_exclude_nodes: ""                # nodes to keep inference off
 
 ## -- Inference runtime and memory spilling -----------------------------------
@@ -152,7 +152,7 @@ structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
 ## -- CPU partitions ----------------------------------------------------------
 # Feature jobs are numerous and memory-hungry; listing several partitions raises
 # concurrency substantially. Unset = cluster default.
-# slurm_partition_cpu: "htc-el8,htc-el10,bigmem"
+# slurm_partition_cpu: "cpu,bigmem"
 
 ## -- Local MMseqs2 features -------------------------------------------------
 # Read only when mmseqs2_features.enabled is true; uncomment these under
@@ -205,12 +205,12 @@ structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
 #    pdb70: pdb70-2026-08
 #    # Change the selected database ID on rebuild, even at the same path.
 #  # GPU-padded MMseqs2 databases built from the AlphaFold 3.0.0 FASTAs. The paths
-#  # below are the shared EMBL build - uncomment as-is there, or repoint elsewhere.
+#  # below are examples; replace them with your database locations.
 #  databases:
-#    uniref90: {path: /g/alphafold/AlphaFold_DBs/mmseqs/uniref90_gpu, identifier: uniref90-2022_05-padded, max_sequences: 10000}
-#    mgnify: {path: /g/alphafold/AlphaFold_DBs/mmseqs/mgnify_gpu, identifier: mgy_clusters-2022_05-padded, max_sequences: 5000}
-#    small_bfd: {path: /g/alphafold/AlphaFold_DBs/mmseqs/small_bfd_gpu, identifier: small-bfd-padded, max_sequences: 5000}
-#    uniprot: {path: /g/alphafold/AlphaFold_DBs/mmseqs/uniprot_gpu, identifier: uniprot_all-2021_04-padded, max_sequences: 50000}
+#    uniref90: {path: /path/to/mmseqs/uniref90_gpu, identifier: uniref90-2022_05-padded, max_sequences: 10000}
+#    mgnify: {path: /path/to/mmseqs/mgnify_gpu, identifier: mgy_clusters-2022_05-padded, max_sequences: 5000}
+#    small_bfd: {path: /path/to/mmseqs/small_bfd_gpu, identifier: small-bfd-padded, max_sequences: 5000}
+#    uniprot: {path: /path/to/mmseqs/uniprot_gpu, identifier: uniprot_all-2021_04-padded, max_sequences: 50000}
 #  # RNA chains. Optional and all-or-nothing: set all three to search RNA, or leave
 #  # them out and the stage stays protein-only. NOT padded -- a nucleotide search
 #  # cannot use the GPU prefilter, so `mmseqs createdb` alone is enough and
@@ -220,9 +220,9 @@ structure_inference_xla_mem_fraction: auto   # "auto", or a number to pin it
 #  # ratio does not hold for nucleotide databases: nt_rna is 77 GB on disk and needs
 #  # about 275 GB. Configuring RNA therefore raises the floor for every search shard,
 #  # because any shard may contain an RNA chain.
-#    rfam: {path: /g/alphafold/AlphaFold_DBs/mmseqs/rfam, identifier: rfam-14_9, max_sequences: 10000}
-#    rnacentral: {path: /g/alphafold/AlphaFold_DBs/mmseqs/rnacentral, identifier: rnacentral-active, max_sequences: 10000}
-#    nt_rna: {path: /g/alphafold/AlphaFold_DBs/mmseqs/nt_rna, identifier: nt-rna-2023_02_23, max_sequences: 10000}
+#    rfam: {path: /path/to/mmseqs/rfam, identifier: rfam-14_9, max_sequences: 10000}
+#    rnacentral: {path: /path/to/mmseqs/rnacentral, identifier: rnacentral-active, max_sequences: 10000}
+#    nt_rna: {path: /path/to/mmseqs/nt_rna, identifier: nt-rna-2023_02_23, max_sequences: 10000}
 
 ## -- Extra report flags ------------------------------------------------------
 # --aggregate_report also produces an RCSB-style validation PDF (absolute path).
