@@ -1,9 +1,9 @@
 """Pin the copied inference flag tables.
 
-These mirror ``alphapulldown/inference_flags.py``, which cannot be imported here: the
-workflow parses on the head node and AlphaPulldown only exists inside the prediction
-container. A test that cannot reach the original can at least make a change to the copy
-deliberate, and record what the original said when it was last checked.
+These mirror ``alphapulldown/prediction/inference_flags.py``, which cannot be imported
+here: the workflow parses on the head node and AlphaPulldown only exists inside the
+prediction container. A test that cannot reach the original can at least make a change
+to the copy deliberate, and record what the original said when it was last checked.
 """
 
 from importlib.machinery import SourceFileLoader
@@ -13,7 +13,7 @@ _COMMON = SourceFileLoader(
     "common_flag_tables", str(Path(__file__).resolve().parents[1] / "workflow/rules/common.smk")
 ).load_module()
 
-# Copied from alphapulldown/inference_flags.py, AlphaPulldown feat/resident-inference.
+# Copied from alphapulldown/prediction/inference_flags.py in AlphaPulldown.
 EXPECTED_COMMON = {
     "input", "output_directory", "data_directory", "features_directory",
     "protein_delimiter", "fold_backend", "random_seed", "storage_mode",

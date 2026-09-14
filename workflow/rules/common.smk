@@ -668,11 +668,11 @@ def prediction_batch_id(folds: Iterable[str]) -> str:
 
 # Inference flags each backend accepts. Names are WITHOUT the leading ``--``.
 #
-# SOURCE OF TRUTH: ``alphapulldown/inference_flags.py`` in AlphaPulldown. This is a copy
-# because the workflow parses on the head node, where AlphaPulldown is not importable -
-# it only lives inside the prediction container. The copy exists solely to turn a queue
-# round-trip into a parse-time WARNING; the container still hard-errors, so drift costs
-# a spurious warning, never a blocked run.
+# SOURCE OF TRUTH: ``alphapulldown/prediction/inference_flags.py`` in AlphaPulldown.
+# This is a copy because the workflow parses on the head node, where AlphaPulldown is
+# not importable: it only lives inside the prediction container. The copy exists solely
+# to turn a queue round-trip into a parse-time WARNING; the container still hard-errors,
+# so drift costs a spurious warning, never a blocked run.
 #
 # It HAS drifted before (``convert_to_modelcif`` was missing from the AF3 set and users
 # were told a valid flag was unsupported), so ``test_inference_flag_tables`` pins these
