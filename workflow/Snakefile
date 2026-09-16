@@ -12,7 +12,7 @@ include: "rules/common.smk"
 include: "rules/mmseqs2_gpu.smk"
 
 from pathlib import Path
-from os import makedirs, listdir, symlink, remove, replace
+from os import makedirs, symlink, remove, replace
 from os.path import abspath, join, splitext, basename, exists, lexists, realpath
 
 from alphapulldown_input_parser.parser import FoldDataset, generate_fold_specifications
@@ -179,6 +179,7 @@ _local_path_by_base = {
 }
 _data_dir = join(config["output_directory"], "data")
 _features_dir = join(config["output_directory"], "features")
+_uniprot_diagnostics = UniprotLengthDiagnostics(logger)
 
 
 def _resolve_protein_length(name):
@@ -204,30 +205,48 @@ def _resolve_protein_length(name):
             join(_features_dir, f"{name}_af3_input.json")
         )
     if length == 0 and LENGTH_FILTER_FETCH_UNIPROT:
-        length = fetch_uniprot_length(name)
+        length = fetch_uniprot_length(name, on_failure=_uniprot_diagnostics.record)
     if length > 0:
         sequence_length_cache[name] = length
         return length
     return None
 
 
+_length_cache_write_warned = False
+
+
 def _persist_sequence_length_cache():
+    global _length_cache_write_warned
     try:
-        makedirs(config["output_directory"], exist_ok=True)
-        with open(_sequence_length_cache_path, "w") as _cache_fh:
-            for _name in sorted(sequence_length_cache):
-                _cache_fh.write(f"{_name}\t{sequence_length_cache[_name]}\n")
-    except OSError:
-        pass
+        persist_sequence_lengths(_sequence_length_cache_path, sequence_length_cache)
+    except OSError as error:
+        if not _length_cache_write_warned:
+            logger.warning(
+                f"[length-filter] Could not save length cache "
+                f"{_sequence_length_cache_path}: {error}; "
+                "restarting may repeat UniProt lookups."
+            )
+            _length_cache_write_warned = True
 
 
 if MAX_PROTEIN_LENGTH > 0 or MAX_TOTAL_LENGTH > 0:
+    _resolved_lengths = resolve_sequence_lengths(
+        (name for fold in dataset.fold_specifications
+         for name, _copies in parse_fold_chains(fold, protein_delimiter)
+         if not is_json_input(name)),
+        _resolve_protein_length, _persist_sequence_length_cache, logger,
+        fetch_uniprot=LENGTH_FILTER_FETCH_UNIPROT,
+        report_failures=_uniprot_diagnostics.report,
+    )
     kept_folds = []
     _unknown_proteins = set()
     for fold in dataset.fold_specifications:
         chain_lengths = []
         for name, copies in parse_fold_chains(fold, protein_delimiter):
-            length = _resolve_protein_length(name)
+            length = (
+                _resolve_protein_length(name) if is_json_input(name)
+                else _resolved_lengths[name]
+            )
             if length is None:
                 _unknown_proteins.add(name)
             chain_lengths.append((name, length, copies))
@@ -239,7 +258,10 @@ if MAX_PROTEIN_LENGTH > 0 or MAX_TOTAL_LENGTH > 0:
         else:
             kept_folds.append(fold)
 
-    _persist_sequence_length_cache()
+    logger.info(
+        f"[length-filter] Filtering complete: {len(kept_folds)} folds kept, "
+        f"{len(dropped_folds)} skipped."
+    )
 
     if dropped_folds:
         _skipped_path = join(config["output_directory"], "skipped_folds.tsv")
@@ -496,19 +518,10 @@ else:
     else:
         required_targets = required_folds
 
-precomputed_features = []
 required_feature_basenames = {basename(x) for x in required_feature_paths}
-for feature_directory in feature_directories:
-    if not exists(feature_directory):
-        continue
-    available_features = listdir(feature_directory)
-    for available_feature in available_features:
-        if available_feature not in required_feature_basenames:
-            continue
-        available_feature_path = join(feature_directory, available_feature)
-        if not exists(available_feature_path):
-            continue
-        precomputed_features.append(available_feature_path)
+precomputed_features = discover_precomputed_features(
+    required_feature_basenames, feature_directories, logger,
+)
 
 _precomputed_feature_basenames = {basename(path) for path in precomputed_features}
 LOCAL_MMSEQS2_PROTEINS = tuple(
@@ -544,16 +557,21 @@ if LOCAL_MMSEQS2.enabled:
     # every plan it ever made -- so resolve them as the length filter would, whether
     # or not the filter is on; an unknown length still runs alone.
     _LOCAL_MMSEQS2_LENGTHS = {
-        protein: _resolve_protein_length(protein) or 0
-        for protein in LOCAL_MMSEQS2_PROTEINS
+        protein: length or 0
+        for protein, length in resolve_sequence_lengths(
+            LOCAL_MMSEQS2_PROTEINS,
+            _resolve_protein_length, _persist_sequence_length_cache, logger,
+            fetch_uniprot=LENGTH_FILTER_FETCH_UNIPROT,
+            report_failures=_uniprot_diagnostics.report,
+        ).items()
     }
-    _persist_sequence_length_cache()
     LOCAL_MMSEQS2_SCHEDULE = schedule_msa_shards(
         LOCAL_MMSEQS2_PROTEINS,
         _LOCAL_MMSEQS2_LENGTHS,
         Path(LOCAL_MMSEQS2_MSA_CACHE),
         max_sequences=LOCAL_MMSEQS2.batch_max_sequences,
         max_residues=LOCAL_MMSEQS2.batch_max_residues,
+        logger=logger,
     )
 
 rule all:

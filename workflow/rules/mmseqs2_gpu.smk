@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import math
 from pathlib import Path
 import shlex
@@ -369,9 +370,11 @@ class MsaShardSchedule:
         return self.completion_by_protein[protein]
 
 
-def _read_shard_registry(msa_cache_dir: Path) -> tuple[FeatureShard, ...]:
+def _read_shard_registry(msa_cache_dir: Path, logger=None) -> tuple[FeatureShard, ...]:
+    logger = logger or logging.getLogger(__name__)
+    path = msa_cache_dir / _SHARD_REGISTRY
     try:
-        stored = json.loads((msa_cache_dir / _SHARD_REGISTRY).read_text())
+        stored = json.loads(path.read_text())
         return tuple(
             FeatureShard(
                 identifier=str(entry["identifier"]),
@@ -380,11 +383,20 @@ def _read_shard_registry(msa_cache_dir: Path) -> tuple[FeatureShard, ...]:
             )
             for entry in stored["shards"]
         )
-    except (OSError, ValueError, KeyError, TypeError):
+    except FileNotFoundError:
+        # A first run has no registry; this is normal, not a warning.
+        return ()
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        logger.warning(
+            f"[mmseqs2-registry] Cannot read shard registry {path}: {error}; "
+            "planning without its saved assignments. Shard assignments may differ "
+            "between processes; check registry contents and filesystem permissions."
+        )
         return ()
 
 
-def _write_shard_registry(msa_cache_dir: Path, shards: Sequence[FeatureShard]) -> None:
+def _write_shard_registry(msa_cache_dir: Path, shards: Sequence[FeatureShard], logger=None) -> None:
+    logger = logger or logging.getLogger(__name__)
     payload = {
         "schemaVersion": 1,
         "shards": [
@@ -397,15 +409,26 @@ def _write_shard_registry(msa_cache_dir: Path, shards: Sequence[FeatureShard]) -
         ],
     }
     path = msa_cache_dir / _SHARD_REGISTRY
+    temporary = None
     try:
         msa_cache_dir.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(payload, indent=1))
         os.replace(temporary, path)
-    except OSError:
+    except OSError as error:
         # Unwritable output: schedule from memory rather than fail the parse. Parses
         # can then disagree again, exactly as before the registry existed.
-        pass
+        logger.warning(
+            f"[mmseqs2-registry] Cannot save shard registry {path}: {error}; "
+            "using this plan only in memory. Other processes may choose different "
+            "shard assignments; check filesystem permissions and free space."
+        )
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def schedule_msa_shards(
@@ -415,6 +438,7 @@ def schedule_msa_shards(
     *,
     max_sequences: int,
     max_residues: int,
+    logger=None,
 ) -> MsaShardSchedule:
     """Plan and schedule MSA shards so that every parse of a run agrees.
 
@@ -438,7 +462,7 @@ def schedule_msa_shards(
     """
     requested = tuple(dict.fromkeys(proteins))
     wanted = set(requested)
-    registry = _read_shard_registry(msa_cache_dir)
+    registry = _read_shard_registry(msa_cache_dir, logger=logger)
     scheduled = list(schedule_feature_shards(registry, msa_cache_dir))
 
     def assign(jobs: Sequence[ScheduledShard], into: dict[str, ScheduledShard]) -> None:
@@ -459,7 +483,7 @@ def schedule_msa_shards(
             max_residues=max_residues,
             start_index=len(registry),
         )
-        _write_shard_registry(msa_cache_dir, (*registry, *fresh))
+        _write_shard_registry(msa_cache_dir, (*registry, *fresh), logger=logger)
         fresh_jobs = schedule_feature_shards(fresh, msa_cache_dir)
         scheduled.extend(fresh_jobs)
         assign(fresh_jobs, covering)

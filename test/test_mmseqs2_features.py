@@ -138,6 +138,80 @@ def _completion_summary(protein, bundle):
     }
 
 
+def test_length_filter_startup_logs_and_cache_in_real_dry_run(tmp_path):
+    config, config_path, output = _workflow_case(
+        tmp_path, ["P12345", "Q9Y6K9"], mmseqs_config={"enabled": False},
+    )
+    Path(config["input_files"][0]).write_text("P12345+Q9Y6K9\nP12345\n")
+    config["max_total_length"] = 6
+    config_path.write_text(yaml.safe_dump(config))
+    result = _run_snakemake(config_path, extra_args=("--dry-run",))
+    log = result.stdout + result.stderr
+    assert "Resolving lengths for 2 unique proteins" in log
+    assert "2/2 proteins checked, 2 resolved, 0 unknown" in log
+    assert "Filtering complete: 1 folds kept, 1 skipped" in log
+    assert (output / ".sequence_lengths.tsv").read_text() == "P12345\t4\nQ9Y6K9\t4\n"
+
+
+def test_mmseqs_startup_logs_lengths_when_filter_is_disabled(tmp_path):
+    _config_data, config_path, output = _workflow_case(tmp_path, ["P12345", "Q9Y6K9"])
+    result = _run_snakemake(config_path, extra_args=("--dry-run",))
+    log = result.stdout + result.stderr
+    assert "Resolving lengths for 2 unique proteins" in log
+    assert "2/2 proteins checked, 2 resolved, 0 unknown" in log
+    assert "Filtering complete" not in log
+    assert (output / ".sequence_lengths.tsv").read_text() == "P12345\t4\nQ9Y6K9\t4\n"
+
+
+def test_feature_discovery_logging_in_real_dry_run(tmp_path):
+    config, config_path, _output = _workflow_case(
+        tmp_path, ["P12345", "Q9Y6K9"], mmseqs_config={"enabled": False},
+    )
+    features = tmp_path / "precomputed"
+    features.mkdir()
+    (features / "P12345_af3_input.json").write_text("{}")
+    missing = tmp_path / "missing"
+    config["feature_directory"] = [str(features), str(missing)]
+    config_path.write_text(yaml.safe_dump(config))
+    result = _run_snakemake(config_path, extra_args=("--dry-run",))
+    log = result.stdout + result.stderr
+    assert f"Scanning directory: {features}" in log
+    assert f"does not exist: {missing}" in log
+    assert "Discovery complete: 1/2 required feature files available for reuse" in log
+
+
+@pytest.mark.parametrize("simulation,expected", [
+    ("uniprot-failures", ["timeout=1", "not found=1", "other errors=2", "1 resolved, 4 unknown"]),
+    ("registry-corrupt", ["Cannot read shard registry", "Shard assignments may differ"]),
+    ("registry-read-denied", ["Cannot read shard registry", "simulated registry read denial"]),
+    ("registry-write-denied", ["Cannot save shard registry", "using this plan only in memory"]),
+])
+def test_failure_summaries_reach_real_snakemake_log(tmp_path, simulation, expected):
+    snakemake = shutil.which("snakemake")
+    if snakemake is None:
+        pytest.skip("Snakemake executable is not available")
+    network = simulation == "uniprot-failures"
+    proteins = ["P12345", "Q9Y6K9", "Q68DK7", "Q8NEP3", "Q6AHZ1"]
+    config, config_path, _output = _workflow_case(
+        tmp_path, proteins, staged=not network,
+        mmseqs_config={"enabled": False} if network else _config(),
+    )
+    config["length_filter_fetch_uniprot"] = network
+    config["max_total_length"] = 5000
+    config_path.write_text(yaml.safe_dump(config))
+    result = subprocess.run(
+        [sys.executable, str(_REPOSITORY / "test/fixtures/logging/run_snakemake.py"),
+         "--simulate", simulation, "--", "--snakefile", str(_REPOSITORY / "workflow/Snakefile"),
+         "--configfile", str(config_path), "--cores", "1", "--dry-run"],
+        cwd=_REPOSITORY, capture_output=True, text=True, timeout=60,
+        env={**os.environ, "APPTAINER_BINDPATH": "", "SINGULARITY_BINDPATH": ""},
+    )
+    log = result.stdout + result.stderr
+    assert result.returncode == 0, log
+    for message in expected:
+        assert message in log
+
+
 def test_enabled_af3_adapter_preserves_deep_interface_chunk_limits():
     adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
         _config(), data_pipeline="alphafold3"
@@ -1231,11 +1305,42 @@ def test_a_partly_requested_shard_is_replanned_unless_it_completed(tmp_path):
     assert kept.completion_target("alpha") == summary
 
 
-def test_an_unusable_registry_degrades_to_planning_in_memory(tmp_path):
+def test_an_unusable_registry_degrades_to_planning_in_memory(tmp_path, caplog):
     (tmp_path / ".shard_registry.json").write_text("{not json", encoding="utf-8")
     assert _schedule(("alpha",), {"alpha": 4}, tmp_path).completion_target("alpha")
+    assert f"Cannot read shard registry {tmp_path / '.shard_registry.json'}" in caplog.text
+    assert "Shard assignments may differ" in caplog.text
 
     not_a_directory = tmp_path / "file"
     not_a_directory.write_text("", encoding="utf-8")
     schedule = _schedule(("alpha",), {"alpha": 4}, not_a_directory / "cache")
     assert schedule.completion_target("alpha").name.startswith("0000-")
+    assert "Cannot save shard registry" in caplog.text
+    assert "using this plan only in memory" in caplog.text
+
+
+def test_first_run_and_healthy_registry_do_not_warn(tmp_path, caplog):
+    first = _schedule(("alpha",), {"alpha": 4}, tmp_path)
+    again = _schedule(("alpha",), {"alpha": 4}, tmp_path)
+    assert first == again
+    assert "[mmseqs2-registry]" not in caplog.text
+
+
+def test_registry_permission_failures_warn_without_changing_fallback(tmp_path, monkeypatch, caplog):
+    original_read = Path.read_text
+
+    def denied(path, *args, **kwargs):
+        if path.name == ".shard_registry.json":
+            raise PermissionError("simulated read denial")
+        return original_read(path, *args, **kwargs)
+
+    def denied_replace(source, target):
+        raise PermissionError("simulated write denial")
+
+    monkeypatch.setattr(Path, "read_text", denied)
+    monkeypatch.setattr(mmseqs2_gpu.os, "replace", denied_replace)
+    plan = _schedule(("alpha",), {"alpha": 4}, tmp_path)
+    assert plan.completion_target("alpha").name.startswith("0000-")
+    assert "simulated read denial" in caplog.text
+    assert "simulated write denial" in caplog.text
+    assert not list(tmp_path.glob("*.tmp"))

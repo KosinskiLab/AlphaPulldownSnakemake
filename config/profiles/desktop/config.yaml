@@ -6,10 +6,10 @@ singularity-args: "--nv"
 # stores them in <workdir>/.snakemake/singularity, so every new deployment
 # re-pulls the same multi-GB containers. $VARS and ~ are expanded by Snakemake.
 apptainer-prefix: "$HOME/.apptainer/snakemake-images"
-printshellcmds: true
+# Keep normal logs readable; use --printshellcmds (-p) when debugging commands.
+printshellcmds: false
 keep-going: true
 rerun-incomplete: true
 rerun-triggers: mtime
 latency-wait: 60
 envvars: [APPTAINER_BINDPATH, SINGULARITY_BINDPATH, APPTAINER_NV, SINGULARITY_NV]
-

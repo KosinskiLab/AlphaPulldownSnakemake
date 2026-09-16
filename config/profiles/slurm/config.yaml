@@ -25,7 +25,8 @@ envvars:
   - SINGULARITY_NV
 
 
-printshellcmds: true
+# Keep normal logs readable; use --printshellcmds (-p) when debugging commands.
+printshellcmds: false
 rerun-incomplete: true
 keep-going: true
 # The memory model sizes the first attempt and escalates on OOM via
@@ -36,4 +37,6 @@ retries: 3
 rerun-triggers: mtime
 latency-wait: 600
 slurm-logdir: "slurm-logs"
-slurm-delete-logfiles-older-than: 0 # do not delete old log files
+# Successful-job deletion and age-based cleanup are separate executor settings.
+slurm-keep-successful-logs: true
+slurm-delete-logfiles-older-than: 0 # disable age-based cleanup too

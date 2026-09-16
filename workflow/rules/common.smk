@@ -15,6 +15,9 @@ import json
 import lzma
 import os
 import re
+import tempfile
+import time
+import urllib.error
 import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
@@ -24,6 +27,145 @@ from typing import Any, Callable
 # folds that are too large to be feasible. AF3 supports larger inputs than
 # AF2-Multimer. Override via config (see Snakefile / config.yaml).
 MAX_TOTAL_LENGTH_DEFAULTS = {"alphafold2": 5000, "alphafold3": 7000}
+
+
+def persist_sequence_lengths(path, lengths):
+    """Replace a length-cache snapshot atomically, retaining the old file on error."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as handle:
+            temporary = handle.name
+            for name in sorted(lengths):
+                handle.write(f"{name}\t{lengths[name]}\n")
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def resolve_sequence_lengths(
+    names, resolve, persist, logger, *, fetch_uniprot=True, interval=30.0,
+    report_failures=None,
+):
+    """Resolve each protein once, reporting and checkpointing between lookups.
+
+    A lookup can itself block, so the interval is checked between calls. Persist
+    again on completion or interruption to retain all successfully resolved lengths.
+    ``resolve`` owns the cache; ``persist`` snapshots it without caching failures.
+    """
+    names = list(dict.fromkeys(names))
+    started = last_report = time.monotonic()
+    results = {}
+    logger.info(
+        f"[length-filter] Resolving lengths for {len(names)} unique proteins; "
+        + ("missing local/cached sequences require sequential UniProt lookups."
+           if fetch_uniprot else "UniProt lookups disabled; using local files/cache only.")
+    )
+    try:
+        for name in names:
+            now = time.monotonic()
+            if now - last_report >= interval:
+                persist()
+                if report_failures is not None:
+                    report_failures()
+                logger.info(
+                    f"[length-filter] Checked {len(results)}/{len(names)} proteins; "
+                    f"elapsed {now - started:.0f}s; current protein: {name}"
+                )
+                last_report = now
+            results[name] = resolve(name)
+    finally:
+        persist()
+        if report_failures is not None:
+            report_failures()
+    unknown = sum(length is None for length in results.values())
+    logger.info(
+        f"[length-filter] Length resolution complete: {len(results)}/{len(names)} "
+        f"proteins checked, {len(results) - unknown} resolved, {unknown} unknown; "
+        f"elapsed {time.monotonic() - started:.0f}s"
+    )
+    return results
+
+
+class UniprotLengthDiagnostics:
+    """Bounded failure examples, summarized at progress checkpoints, not per request."""
+
+    def __init__(self, logger):
+        self.logger = logger
+        self.counts = {}
+        self.examples = {}
+        self.reported = 0
+
+    def record(self, name, category, detail):
+        self.counts[category] = self.counts.get(category, 0) + 1
+        examples = self.examples.setdefault(category, [])
+        if len(examples) < 3:
+            examples.append(f"{name} ({detail})")
+
+    def report(self):
+        total = sum(self.counts.values())
+        if total == self.reported:
+            return
+        self.reported = total
+        summary = "; ".join(
+            f"{category}={count} [examples: {', '.join(self.examples[category])}]"
+            for category, count in sorted(self.counts.items())
+        )
+        self.logger.warning(
+            f"[uniprot] Length lookup failures so far: {summary}. "
+            "These lengths remain unknown; failures do not by themselves exclude folds."
+        )
+
+
+def discover_precomputed_features(required_basenames, directories, logger, interval=30.0):
+    """Discover reusable files, with progress around potentially slow shared storage."""
+    required = set(required_basenames)
+    found = []
+    logger.info(
+        f"[features] Looking for {len(required)} required feature files in "
+        f"{len(directories)} configured directories."
+    )
+    for directory in directories:
+        logger.info(f"[features] Scanning directory: {directory}")
+        if not os.path.exists(directory):
+            logger.warning(
+                f"[features] Configured feature directory does not exist: {directory}; "
+                "skipping it. Check the path or mount if you expected feature reuse."
+            )
+            continue
+        started = last_report = time.monotonic()
+        try:
+            available = os.listdir(directory)
+        except OSError as error:
+            logger.warning(f"[features] Cannot scan directory {directory}: {error}")
+            raise
+        matches = set()
+        for checked, name in enumerate(available, 1):
+            if name in required:
+                path = os.path.join(directory, name)
+                if os.path.exists(path):
+                    found.append(path)
+                    matches.add(name)
+            now = time.monotonic()
+            if now - last_report >= interval:
+                logger.info(
+                    f"[features] Scanning {directory}: checked {checked}/{len(available)} "
+                    f"entries, {len(matches)} required files found; elapsed {now - started:.0f}s"
+                )
+                last_report = now
+        logger.info(
+            f"[features] Scanned {directory}: {len(matches)} required files found; "
+            f"elapsed {time.monotonic() - started:.0f}s"
+        )
+    matched = {os.path.basename(path) for path in found}
+    logger.info(
+        f"[features] Discovery complete: {len(matched)}/{len(required)} required feature "
+        f"files available for reuse from configured directories; "
+        f"{len(required - matched)} not found there (existing output features may also be reused)."
+    )
+    return found
 
 
 # Length lookups cache only *successful* (>0) reads. Caching a 0 from a not-yet-
@@ -200,7 +342,7 @@ def format_af3_requested_fold(fold: str, delimiter: str = "+") -> str:
 
 
 @functools.lru_cache(maxsize=None)
-def fetch_uniprot_length(uniprot_id: str, timeout: float = 30.0) -> int:
+def fetch_uniprot_length(uniprot_id: str, timeout: float = 30.0, on_failure=None) -> int:
     """Residue length of a UniProt entry via the REST API; 0 on any failure.
 
     Mirrors the reference snippet in issue #33. Used at parse time for length
@@ -211,12 +353,26 @@ def fetch_uniprot_length(uniprot_id: str, timeout: float = 30.0) -> int:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             text = response.read().decode("utf-8", "replace")
-    except Exception:
+    except Exception as error:
+        if on_failure is not None:
+            if isinstance(error, urllib.error.HTTPError):
+                category = "not found" if error.code in (404, 410) else "other errors"
+                detail = f"HTTP {error.code}"
+            elif isinstance(error, TimeoutError) or (
+                isinstance(error, urllib.error.URLError)
+                and isinstance(error.reason, TimeoutError)
+            ):
+                category, detail = "timeout", "request timed out"
+            else:
+                category, detail = "other errors", type(error).__name__
+            on_failure(uniprot_id, category, detail)
         return 0
     total = 0
     for line in text.splitlines():
         if not line.startswith(">"):
             total += len(line.strip())
+    if total == 0 and on_failure is not None:
+        on_failure(uniprot_id, "other errors", "empty sequence response")
     return total
 
 
