@@ -5,7 +5,10 @@ channels:
 dependencies:
   - python=3.12
   - snakemake=9.*
-  - snakemake-executor-plugin-slurm
+  # Pinned: 2.8.0 keeps "None assigned" as a node exclusion after a NODE_FAIL, so
+  # every later sbatch fails with "Unable to open file".
+  # https://github.com/snakemake/snakemake-executor-plugin-slurm/issues/485
+  - snakemake-executor-plugin-slurm==2.2.0
   - snakedeploy
   - pulp
   - click
