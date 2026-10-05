@@ -747,7 +747,8 @@ def batch_inference_args(
     * ``--jax_compilation_cache_dir`` (AlphaFold2 and AlphaFold3, every batch size): one
       on-disk JAX compile cache shared by every inference process. Without it every
       process compiles its models from scratch (AlphaFold3: once per token bucket, and
-      once more on its second prediction). AlphaFold2 has accepted the flag since
+      in AlphaPulldown 2.9.1 and older once more on its second prediction). AlphaFold2
+      has accepted the flag since
       AlphaPulldown 2.8.0. ``jax_cache_dir`` empty, or the user's value set to
       false/null/"", leaves the cache off.
 
