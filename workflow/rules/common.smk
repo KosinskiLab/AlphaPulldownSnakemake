@@ -745,9 +745,9 @@ def batch_inference_args(
     * ``--allow_resume`` (AlphaFold2 only, ``batch_size > 1``): a crashed batch re-runs
       all its folds, so resume the ones already done. AlphaFold3 rejects it.
     * ``--jax_compilation_cache_dir`` (AlphaFold2 and AlphaFold3, every batch size): one
-      on-disk JAX compile cache shared by every inference process. Without it each
-      process recompiles its models, and AlphaFold3 recompiles on every prediction call
-      even inside one resident batch. AlphaFold2 has accepted the flag since
+      on-disk JAX compile cache shared by every inference process. Without it every
+      process compiles its models from scratch (AlphaFold3: once per token bucket, and
+      once more on its second prediction). AlphaFold2 has accepted the flag since
       AlphaPulldown 2.8.0. ``jax_cache_dir`` empty, or the user's value set to
       false/null/"", leaves the cache off.
 
