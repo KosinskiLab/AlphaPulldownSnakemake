@@ -314,7 +314,7 @@ for fold in kept_folds:
 # AlphaPulldown containers consume an explicit manifest in one resident process, so
 # model runners are initialized once while every manifest row remains an independent
 # fold. Older containers fall back to the established per-fold shell loop. A shared
-# --jax_compilation_cache_dir also persists compiled AF3 buckets. Composition is
+# --jax_compilation_cache_dir persists compiled models across jobs. Composition is
 # decided here at parse time (sequence lengths are already resolved above for length
 # filtering / memory sizing), so no checkpoint is needed. A resident batch's id
 # includes a digest of its complete ordered membership, so changing composition
@@ -328,32 +328,34 @@ for fold in kept_folds:
 BATCH_SIZE = int(config.get("batch_size", 1) or 1)
 BATCH_MAX_TOKENS = int(config.get("batch_max_tokens", 0) or 0)
 
-# Inference CLI args shared by every per-fold call in a batch. The batch-only flags
-# (--allow_resume for AF2, --jax_compilation_cache_dir for AF3) are BACKEND-SPECIFIC and
-# each backend hard-errors on flags it does not accept, so the gating lives in
-# batch_inference_args (see its docstring / test_batch_inference_args.py).
+# The RAW --fold_backend: INFERENCE_BACKEND folds alphalink into "alphafold2".
+_RAW_FOLD_BACKEND = str(
+    config.get("structure_inference_arguments", {}).get("--fold_backend", DATA_PIPELINE)
+).strip().lower()
+# One on-disk JAX compile cache shared by every inference job and process, for both JAX
+# backends at every batch size (AlphaLink is PyTorch). The container keeps only JAX's own
+# entries there, which is what makes a shared filesystem safe (see the rule's
+# JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES). Move it by setting --jax_compilation_cache_dir
+# in structure_inference_arguments; set it to false to turn the cache off.
+JAX_CACHE_DIR = (
+    "" if _RAW_FOLD_BACKEND == "alphalink"
+    else join(config["output_directory"], ".jax_compilation_cache")
+)
+# Inference CLI args shared by every call, per-fold or resident. The added flags
+# (--allow_resume for AF2 batches, --jax_compilation_cache_dir for AF2 and AF3) are
+# BACKEND-SPECIFIC and each backend hard-errors on flags it does not accept, so the
+# gating lives in batch_inference_args (see its docstring / test_batch_inference_args.py).
 _structure_inference_args = batch_inference_args(
     config.get("structure_inference_arguments", {}),
     backend=INFERENCE_BACKEND,
     batch_size=BATCH_SIZE,
-    jax_cache_dir=join(config["output_directory"], ".jax_compilation_cache"),
-)
-# A resident batch keeps its compiled model in memory, so it needs no on-disk cache.
-_resident_inference_args = batch_inference_args(
-    config.get("structure_inference_arguments", {}),
-    backend=INFERENCE_BACKEND,
-    batch_size=BATCH_SIZE,
-    jax_cache_dir=join(config["output_directory"], ".jax_compilation_cache"),
-    resident=True,
+    jax_cache_dir=JAX_CACHE_DIR,
 )
 # Parse-time guard: run_structure_prediction.py aborts the inference job on the first
-# flag its backend does not accept (e.g. --allow_resume on AF3, --jax_compilation_cache_dir
-# on AF2). Warn here -- on the head node, in seconds -- instead of failing deep in a Slurm
-# job. Uses the RAW --fold_backend (so alphalink's --crosslinks is not mis-flagged); a
-# warning only, since the container is the source of truth (see unknown_inference_flags).
-_RAW_FOLD_BACKEND = str(
-    config.get("structure_inference_arguments", {}).get("--fold_backend", DATA_PIPELINE)
-).strip().lower()
+# flag its backend does not accept (e.g. --allow_resume on AF3). Warn here -- on the
+# head node, in seconds -- instead of failing deep in a Slurm job. Uses the RAW
+# --fold_backend (so alphalink's --crosslinks is not mis-flagged); a warning only,
+# since the container is the source of truth (see unknown_inference_flags).
 _unknown_inference_flags = unknown_inference_flags(
     _structure_inference_args, _RAW_FOLD_BACKEND
 )
@@ -369,18 +371,15 @@ if _unknown_inference_flags:
 STRUCTURE_INFERENCE_CLI = " ".join(
     f"{k}={v}" for k, v in _structure_inference_args.items()
 )
-RESIDENT_INFERENCE_CLI = " ".join(
-    f"{k}={v}" for k, v in _resident_inference_args.items()
-)
 
 
 def inference_cli_for(batch_id):
-    """CLI for one batch: the resident command drops the on-disk compile cache and, for
-    AlphaFold2 multimers, pads the batch to one shape so it compiles once."""
+    """CLI for one batch: for AlphaFold2 multimers, the resident command also pads the
+    batch to one shape so it compiles once."""
     folds = BATCH_FOLDS[batch_id]
     if len(folds) <= 1:
         return STRUCTURE_INFERENCE_CLI
-    args = dict(_resident_inference_args)
+    args = dict(_structure_inference_args)
     args.update(
         batch_padding_args(
             folds, backend=_RAW_FOLD_BACKEND, token_fn=_fold_grouping_tokens
@@ -1010,6 +1009,11 @@ rule structure_inference:
         config["prediction_container"],
     shell:
         r"""
+        # Keep only JAX's own entries in the shared compile cache. XLA's per-fusion
+        # autotune cache fails an atomic rename on shared filesystems and then segfaults
+        # the compiler (jaxlib 0.9.1, the AF3 image). Newer AlphaPulldown sets this
+        # itself; exported here so 2.9.x and older containers are safe too.
+        export JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES="${{JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES:-none}}"
         # "auto" is resolved here, not in config, because the fraction is
         # (host RAM)/(GPU VRAM) and the GPU is only known once the job lands.
         if [ "{params.unified_memory}" = "true" ]; then
