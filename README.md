@@ -916,7 +916,7 @@ structure_inference_arguments:
   --use_ap_style: False
   --use_gpu_relax: True
   --dropout: False
-  --fast_kernels: off                  # off | on | auto: ColabFold's fused kernels, ~2x faster AF2-Multimer on NVIDIA GPUs of compute capability 8.0+
+  --fast_kernels: "off"                # "off" | "on" | "auto" (quoted: YAML reads bare on/off as booleans): ColabFold's fused kernels, ~2x faster AF2-Multimer on NVIDIA GPUs of compute capability 8.0+
 ```
 </details>
 
