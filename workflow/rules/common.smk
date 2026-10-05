@@ -723,40 +723,43 @@ def prepare_container_binds(
         os.environ.setdefault(var, "1")
 
 
+JAX_CACHE_BACKENDS = ("alphafold2", "alphafold3")
+# Values of --jax_compilation_cache_dir that turn the cache off instead of naming a path.
+_JAX_CACHE_OFF = {"", "none", "null", "false", "no", "off", "0"}
+
+
 def batch_inference_args(
     base_args: dict,
     *,
     backend: str,
     batch_size: int,
     jax_cache_dir: str,
-    resident: bool = False,
 ) -> dict:
-    """Return inference CLI args with the batch-only flags added, each gated to the
-    backend that accepts them.
+    """Return inference CLI args with the workflow's defaults added, each gated to the
+    backend that accepts it.
 
     ``run_structure_prediction.py`` validates its flags per backend and hard-errors on
     any it does not recognise (``ValueError: not supported by backend '<name>'``), so a
-    batch-only flag must ONLY be added for the backend(s) that accept it:
+    flag must ONLY be added for the backend(s) that accept it:
 
-    * ``--allow_resume`` (AlphaFold2 only): a crashed batch re-runs all its folds, so
-      resume the ones already done. AlphaFold3 rejects it.
-    * ``--jax_compilation_cache_dir`` (AlphaFold3, per-fold path only): lets the separate
-      per-fold processes share one on-disk JAX compile cache. A resident batch loads and
-      compiles once in memory, so it does not need the cache, and XLA's autotune cache
-      cannot be written safely to every shared filesystem. AlphaFold2 is JAX-compiled too
-      and benefits just as much, but the flag is only accepted by newer prediction
-      containers, so set it yourself in ``structure_inference_arguments`` rather than
-      having it added automatically.
+    * ``--allow_resume`` (AlphaFold2 only, ``batch_size > 1``): a crashed batch re-runs
+      all its folds, so resume the ones already done. AlphaFold3 rejects it.
+    * ``--jax_compilation_cache_dir`` (AlphaFold2 and AlphaFold3, every batch size): one
+      on-disk JAX compile cache shared by every inference process. Without it each
+      process recompiles its models, and AlphaFold3 recompiles on every prediction call
+      even inside one resident batch. AlphaFold2 has accepted the flag since
+      AlphaPulldown 2.8.0. ``jax_cache_dir`` empty, or the user's value set to
+      false/null/"", leaves the cache off.
 
-    With ``batch_size <= 1`` nothing is added (the unbatched pipeline is untouched). Any
-    value the user already set is preserved (``setdefault``).
+    Any value the user already set is preserved (``setdefault``).
     """
     args = dict(base_args)
-    if batch_size > 1:
-        if backend == "alphafold2":
-            args.setdefault("--allow_resume", "true")
-        if backend == "alphafold3" and not resident:
-            args.setdefault("--jax_compilation_cache_dir", jax_cache_dir)
+    if batch_size > 1 and backend == "alphafold2":
+        args.setdefault("--allow_resume", "true")
+    if backend in JAX_CACHE_BACKENDS:
+        args.setdefault("--jax_compilation_cache_dir", jax_cache_dir)
+        if str(args["--jax_compilation_cache_dir"]).strip().lower() in _JAX_CACHE_OFF:
+            del args["--jax_compilation_cache_dir"]
     return args
 
 

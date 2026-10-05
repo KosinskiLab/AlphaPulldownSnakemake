@@ -44,6 +44,9 @@ create_feature_arguments:
 # here as needed. README: "Backend-specific flags"
 structure_inference_arguments:
   --fold_backend: alphafold3
+  # A shared JAX compile cache is on by default (<output_directory>/.jax_compilation_cache).
+  # Uncomment to move it, or set false to turn it off. README: "The JAX compile cache"
+  # --jax_compilation_cache_dir: /path/to/cache
 
 # SLURM only: replace "gpu" with your cluster's GPU partition. Several names can
 # be comma-separated. Desktop runs ignore these scheduler settings.
