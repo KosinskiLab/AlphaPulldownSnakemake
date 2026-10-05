@@ -868,7 +868,9 @@ You can pass backend CLI switches through `structure_inference_arguments`. Commo
 >
 > The workflow also adds `--jax_compilation_cache_dir` for **both** backends at every
 > `batch_size` (see *The JAX compile cache* above). Set it yourself only to move the
-> cache, or to `false` to turn it off.
+> cache, or to `false` to turn it off. Run directly, without the workflow,
+> AlphaPulldown uses `~/.cache/alphapulldown/jax_compilation_cache` (kept under 10 GB)
+> unless the flag says otherwise.
 >
 > The authoritative, always-current list for your image is the backend validation inside the
 > container. Print it with:
