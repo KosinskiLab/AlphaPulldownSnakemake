@@ -1,13 +1,18 @@
 """Pin the copied inference flag tables.
 
-These mirror ``alphapulldown/prediction/inference_flags.py``, which cannot be imported
-here: the workflow parses on the head node and AlphaPulldown only exists inside the
-prediction container. A test that cannot reach the original can at least make a change
-to the copy deliberate, and record what the original said when it was last checked.
+These mirror ``alphapulldown/prediction/inference_flags.py``. The workflow parses on the
+head node, where AlphaPulldown is not installed: it only exists inside the prediction
+container, and CI does not install it either. So the recorded sets below make a change
+to the copy deliberate and record what the original said when it was last checked, and
+where AlphaPulldown is importable (a development environment, or ``PYTHONPATH`` pointing
+at a checkout) the copy is also compared with the original itself.
 """
 
+import importlib
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+
+import pytest
 
 _COMMON = SourceFileLoader(
     "common_flag_tables", str(Path(__file__).resolve().parents[1] / "workflow/rules/common.smk")
@@ -65,3 +70,44 @@ def test_jax_compile_cache_is_valid_on_both_backends():
     for backend in ("alphafold2", "alphafold3"):
         args = {"--fold_backend": backend, "--jax_compilation_cache_dir": "/cache"}
         assert _COMMON.unknown_inference_flags(args, backend) == []
+
+
+def _alphapulldown_inference_flags():
+    """AlphaPulldown's flag module, wherever this release keeps it; skip if absent."""
+    errors = []
+    # alphapulldown.prediction since 2.9.1, the package root in 2.8.0.
+    for name in ("alphapulldown.prediction.inference_flags", "alphapulldown.inference_flags"):
+        try:
+            return importlib.import_module(name)
+        except ImportError as error:
+            errors.append(f"{name}: {error}")
+    pytest.skip("AlphaPulldown's inference_flags is not importable (" + "; ".join(errors) + ")")
+
+
+def test_tables_match_alphapulldown_when_importable():
+    """The per-backend allow sets equal AlphaPulldown's FLAGS_BY_BACKEND.
+
+    Compared per backend rather than per named subset, so AlphaPulldown can regroup its
+    sets (AF2_EXTRA_FLAGS became FAST_KERNEL_FLAGS) without this test noticing; only a
+    change in what a backend accepts is drift.
+    """
+    module = _alphapulldown_inference_flags()
+    theirs = {backend: set(flags) for backend, flags in module.FLAGS_BY_BACKEND.items()}
+    ours = _COMMON.ALLOWED_INFERENCE_FLAGS
+    package = importlib.import_module(module.__name__.split(".")[0])
+    source = f"AlphaPulldown {getattr(package, '__version__', '?')} ({module.__file__})"
+
+    assert set(ours) == set(theirs), f"backends differ from {source}"
+    drift = {
+        backend: {
+            "only in common.smk": sorted(ours[backend] - theirs[backend]),
+            "only in AlphaPulldown": sorted(theirs[backend] - ours[backend]),
+        }
+        for backend in sorted(ours)
+        if ours[backend] != theirs[backend]
+    }
+    assert not drift, (
+        f"common.smk's inference flag tables have drifted from {source}: {drift}. "
+        "Update the sets in common.smk and the recorded sets in this file, or test "
+        "against the AlphaPulldown this workflow release targets."
+    )

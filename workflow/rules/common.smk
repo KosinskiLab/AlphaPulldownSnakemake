@@ -836,7 +836,9 @@ def prediction_batch_id(folds: Iterable[str]) -> str:
 #
 # It HAS drifted before (``convert_to_modelcif`` was missing from the AF3 set and users
 # were told a valid flag was unsupported), so ``test_inference_flag_tables`` pins these
-# sets. When a new AlphaPulldown release changes them, update both the sets and that test.
+# sets, and compares them with AlphaPulldown's ``FLAGS_BY_BACKEND`` wherever AlphaPulldown
+# is importable. When a new AlphaPulldown release changes them, update both the sets and
+# that test.
 _COMMON_INFERENCE_FLAGS = {
     "input", "output_directory", "data_directory", "features_directory",
     "protein_delimiter", "fold_backend", "random_seed", "storage_mode",
