@@ -53,11 +53,12 @@ def test_convert_to_modelcif_is_valid_on_both_backends():
         assert _COMMON.unknown_inference_flags(args, backend) == []
 
 
-def test_fast_kernels_is_valid_on_af2_and_af3():
+def test_fast_kernels_is_valid_on_both_backends():
     for backend in ("alphafold2", "alphafold3"):
         args = {"--fold_backend": backend, "--fast_kernels": "auto"}
         assert _COMMON.unknown_inference_flags(args, backend) == []
-    assert _COMMON.unknown_inference_flags({"--fast_kernels": "auto"}, "alphalink") == ["fast_kernels"]
+    args = {"--fold_backend": "alphalink", "--fast_kernels": "auto"}
+    assert _COMMON.unknown_inference_flags(args, "alphalink") == ["fast_kernels"]
 
 
 def test_jax_compile_cache_is_valid_on_both_backends():
