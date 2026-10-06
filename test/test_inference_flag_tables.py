@@ -34,7 +34,7 @@ EXPECTED_AF3 = {
     "jax_compilation_cache_dir", "buckets", "flash_attention_implementation",
     "num_diffusion_samples", "num_seeds", "debug_templates", "debug_msas",
     "num_recycles", "save_embeddings", "save_distogram", "use_ap_style",
-    "convert_to_modelcif", "fast_kernels",
+    "convert_to_modelcif",
 }
 
 
@@ -43,7 +43,7 @@ def test_tables_match_the_recorded_alphapulldown_sets():
     assert _COMMON._AF2_LIKE_INFERENCE_FLAGS == EXPECTED_AF2_LIKE
     assert _COMMON._AF3_INFERENCE_FLAGS == EXPECTED_AF3
     assert _COMMON._ALPHALINK_EXTRA_FLAGS == {"crosslinks"}
-    assert _COMMON._AF2_EXTRA_FLAGS == {"fast_kernels"}
+    assert _COMMON._FAST_KERNEL_FLAGS == {"fast_kernels"}
 
 
 def test_convert_to_modelcif_is_valid_on_both_backends():
