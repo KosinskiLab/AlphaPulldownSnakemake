@@ -861,9 +861,11 @@ _AF3_INFERENCE_FLAGS = {
     "convert_to_modelcif",
 }
 _ALPHALINK_EXTRA_FLAGS = {"crosslinks"}
+# AlphaFold2 only: ColabFold's fused kernels for AF2-Multimer (off|on|auto).
+_AF2_EXTRA_FLAGS = {"fast_kernels"}
 
 ALLOWED_INFERENCE_FLAGS = {
-    "alphafold2": _COMMON_INFERENCE_FLAGS | _AF2_LIKE_INFERENCE_FLAGS,
+    "alphafold2": _COMMON_INFERENCE_FLAGS | _AF2_LIKE_INFERENCE_FLAGS | _AF2_EXTRA_FLAGS,
     "alphalink": _COMMON_INFERENCE_FLAGS | _AF2_LIKE_INFERENCE_FLAGS | _ALPHALINK_EXTRA_FLAGS,
     "alphafold3": _COMMON_INFERENCE_FLAGS | _AF3_INFERENCE_FLAGS,
 }

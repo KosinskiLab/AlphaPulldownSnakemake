@@ -43,6 +43,7 @@ def test_tables_match_the_recorded_alphapulldown_sets():
     assert _COMMON._AF2_LIKE_INFERENCE_FLAGS == EXPECTED_AF2_LIKE
     assert _COMMON._AF3_INFERENCE_FLAGS == EXPECTED_AF3
     assert _COMMON._ALPHALINK_EXTRA_FLAGS == {"crosslinks"}
+    assert _COMMON._AF2_EXTRA_FLAGS == {"fast_kernels"}
 
 
 def test_convert_to_modelcif_is_valid_on_both_backends():
@@ -50,6 +51,14 @@ def test_convert_to_modelcif_is_valid_on_both_backends():
     for backend in ("alphafold2", "alphafold3"):
         args = {"--fold_backend": backend, "--convert_to_modelcif": True}
         assert _COMMON.unknown_inference_flags(args, backend) == []
+
+
+def test_fast_kernels_is_valid_on_alphafold2_only():
+    args = {"--fold_backend": "alphafold2", "--fast_kernels": "auto"}
+    assert _COMMON.unknown_inference_flags(args, "alphafold2") == []
+    for backend in ("alphafold3", "alphalink"):
+        args = {"--fold_backend": backend, "--fast_kernels": "auto"}
+        assert _COMMON.unknown_inference_flags(args, backend) == ["fast_kernels"]
 
 
 def test_jax_compile_cache_is_valid_on_both_backends():
