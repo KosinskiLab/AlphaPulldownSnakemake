@@ -858,10 +858,12 @@ _AF3_INFERENCE_FLAGS = {
     "jax_compilation_cache_dir", "buckets", "flash_attention_implementation",
     "num_diffusion_samples", "num_seeds", "debug_templates", "debug_msas",
     "num_recycles", "save_embeddings", "save_distogram", "use_ap_style",
-    "convert_to_modelcif",
+    "convert_to_modelcif", "fast_kernels",
 }
 _ALPHALINK_EXTRA_FLAGS = {"crosslinks"}
-# AlphaFold2 only: ColabFold's fused kernels for AF2-Multimer (off|on|auto).
+# fast_kernels (off|on|auto) is accepted for alphafold2 and alphafold3, not AlphaLink.
+# AF2 gets it here (ColabFold's fused AF2-Multimer kernels); AF3 gets it through
+# _AF3_INFERENCE_FLAGS (AlphaPulldown's AF3_FLAGS: fused triangle kernels).
 _AF2_EXTRA_FLAGS = {"fast_kernels"}
 
 ALLOWED_INFERENCE_FLAGS = {

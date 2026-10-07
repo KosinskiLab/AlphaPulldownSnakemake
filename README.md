@@ -936,6 +936,7 @@ structure_inference_arguments:
   --save_embeddings: False
   --save_distogram: False
   --use_ap_style: False                   # shared with AlphaFold2
+  --fast_kernels: "off"                   # "off" | "on" | "auto" (quoted: YAML reads bare on/off as booleans): optional fused triangle kernels, opt-in (default off); see AlphaPulldown's AF3 fused-triangle documentation
 ```
 </details>
 
