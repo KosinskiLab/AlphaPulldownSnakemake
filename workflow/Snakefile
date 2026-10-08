@@ -1034,10 +1034,12 @@ rule structure_inference:
                 _aj_gpu_mb=""
                 case "${{CUDA_VISIBLE_DEVICES:-}}" in
                     MIG-*)
+                        # || true: under Snakemake's pipefail an unlisted slice (grep
+                        # exits 1) would otherwise end the job instead of falling back.
                         _aj_mig_gb=$(nvidia-smi -L 2>/dev/null \
                             | grep -F "${{CUDA_VISIBLE_DEVICES}}" \
                             | sed -n 's/.*MIG [0-9]\+g\.\([0-9]\+\)gb.*/\1/p' \
-                            | head -1)
+                            | head -1 || true)
                         if [ -n "$_aj_mig_gb" ]; then
                             _aj_gpu_mb=$(( _aj_mig_gb * 1024 ))
                         fi
