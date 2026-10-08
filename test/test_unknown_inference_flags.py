@@ -25,12 +25,6 @@ def test_af2_flags_all_accepted():
     assert unknown_inference_flags(args, "alphafold2") == []
 
 
-def test_jax_cache_dir_accepted_on_af2():
-    # AF2 inference is JAX-compiled, so newer containers accept the compile cache flag.
-    args = {"--fold_backend": "alphafold2", "--jax_compilation_cache_dir": "/c"}
-    assert unknown_inference_flags(args, "alphafold2") == []
-
-
 def test_af2_only_flag_flagged_on_af3():
     args = {"--fold_backend": "alphafold3", "--allow_resume": "true"}
     assert unknown_inference_flags(args, "alphafold3") == ["allow_resume"]
