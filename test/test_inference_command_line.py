@@ -194,11 +194,13 @@ def _run_unified_memory_block(tmp_path, block, nvidia_smi, host_mb, cuda_visible
     """Run the rendered block as the job does, in bash strict mode, with ``nvidia_smi``
     (a shell script body) as nvidia-smi and a stale XLA_PYTHON_CLIENT_MEM_FRACTION.
 
-    A dry run prints the job's host RAM as <TBD> (it is resolved when the job runs), so
-    ``host_mb`` stands in for it. Returns the [unified-memory] log fields (None when the
-    block logged nothing) and the XLA variables as the block left them.
+    A dry run prints the job's host RAM as a number or, when it is resolved only once the
+    job runs, as <TBD> (depending on the Snakemake version); ``host_mb`` replaces it.
+    Returns the [unified-memory] log fields (None when the block logged nothing) and the
+    XLA variables as the block left them.
     """
-    assert "host_mem_mb=<TBD>" in block
+    block, replaced = re.subn(r"(-v r=|host_mem_mb=)(?:<TBD>|\d+)", rf"\g<1>{host_mb}", block)
+    assert replaced == 2, block
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     fake = bin_dir / "nvidia-smi"
@@ -211,7 +213,7 @@ def _run_unified_memory_block(tmp_path, block, nvidia_smi, host_mb, cuda_visible
     if cuda_visible_devices:
         env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
     report = "".join(f'\necho "env {name}=${{{name}-<unset>}}"' for name in _XLA_VARIABLES)
-    script = "set -euo pipefail\n" + block.replace("<TBD>", str(host_mb)) + report + "\n"
+    script = "set -euo pipefail\n" + block + report + "\n"
     completed = subprocess.run(
         ["bash", "-c", script], capture_output=True, text=True, env=env, timeout=30
     )
