@@ -231,7 +231,8 @@ def _assert_unified_memory_exported(variables, fraction):
         "XLA_CLIENT_MEM_FRACTION": fraction,
         "TF_FORCE_UNIFIED_MEMORY": "true",
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
-        # JAX refuses to start with both names set, so the deprecated one is cleared.
+        # With both names set JAX's CUDA plugin fails and it falls back to CPU, so the
+        # deprecated one is cleared.
         "XLA_PYTHON_CLIENT_MEM_FRACTION": "<unset>",
     }
 

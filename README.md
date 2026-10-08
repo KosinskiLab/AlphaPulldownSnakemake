@@ -501,7 +501,7 @@ for large inputs. It is exported inside the prediction container as:
 export TF_FORCE_UNIFIED_MEMORY=true
 export XLA_PYTHON_CLIENT_PREALLOCATE=false   # don't grab a huge VRAM chunk up front
 export XLA_CLIENT_MEM_FRACTION=$FRACTION      # XLA's total limit = FRACTION x GPU VRAM
-unset XLA_PYTHON_CLIENT_MEM_FRACTION          # deprecated name; JAX errors if both are set
+unset XLA_PYTHON_CLIENT_MEM_FRACTION          # deprecated; both set -> JAX falls back to CPU
 ```
 
 `XLA_PYTHON_CLIENT_PREALLOCATE=false` is required: without it XLA reserves a large
