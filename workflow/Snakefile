@@ -963,6 +963,8 @@ rule structure_inference:
         cli_parameters=lambda wc: inference_cli_for(wc.batch),
         unified_memory="true" if STRUCTURE_INFERENCE_UNIFIED_MEMORY else "false",
         xla_mem_fraction=STRUCTURE_INFERENCE_XLA_MEM_FRACTION,
+        # Host RAM that "auto" keeps for the process itself rather than for GPU spill.
+        host_ram_margin_mb=int(float(structure_inference_base_ram)),
         resident=lambda wc: "true" if len(BATCH_FOLDS[wc.batch]) > 1 else "false",
     resources:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
@@ -1014,26 +1016,30 @@ rule structure_inference:
         # the compiler (jaxlib 0.9.1, the AF3 image). Newer AlphaPulldown sets this
         # itself; exported here so 2.9.x and older containers are safe too.
         export JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES="${{JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES:-none}}"
-        # "auto" is resolved here, not in config, because the fraction is
-        # (host RAM)/(GPU VRAM) and the GPU is only known once the job lands.
+        # "auto" is resolved here, not in config, because the fraction is a multiple
+        # of the GPU VRAM and the GPU is only known once the job lands.
         if [ "{params.unified_memory}" = "true" ]; then
             export TF_FORCE_UNIFIED_MEMORY=true
             export XLA_PYTHON_CLIENT_PREALLOCATE=false
             unset XLA_PYTHON_CLIENT_MEM_FRACTION
             _aj_frac="{params.xla_mem_fraction}"
             if [ "$_aj_frac" = "auto" ]; then
+                # XLA's pool is fraction x VRAM and holds VRAM and host spill together,
+                # so 1 + (host RAM - margin) / VRAM lets the job spill into all of its
+                # host RAM except the margin kept for the process itself.
                 # On a MIG slice --query-gpu reports the *parent* card (e.g. 32623 MiB
-                # for a 16 GB 1g.16gb slice), which would roughly halve the fraction and
-                # so switch off host spill exactly where it is most needed. Read the
-                # slice's own profile out of `nvidia-smi -L` first, and fall back to
-                # --query-gpu on whole (non-MIG) cards.
+                # for a 16 GB 1g.16gb slice), which would roughly halve the host spill
+                # exactly where it is most needed. Read the slice's own profile out of
+                # `nvidia-smi -L` first, and fall back to --query-gpu on whole cards.
                 _aj_gpu_mb=""
                 case "${{CUDA_VISIBLE_DEVICES:-}}" in
                     MIG-*)
+                        # || true: under Snakemake's pipefail an unlisted slice (grep
+                        # exits 1) would otherwise end the job instead of falling back.
                         _aj_mig_gb=$(nvidia-smi -L 2>/dev/null \
                             | grep -F "${{CUDA_VISIBLE_DEVICES}}" \
                             | sed -n 's/.*MIG [0-9]\+g\.\([0-9]\+\)gb.*/\1/p' \
-                            | head -1)
+                            | head -1 || true)
                         if [ -n "$_aj_mig_gb" ]; then
                             _aj_gpu_mb=$(( _aj_mig_gb * 1024 ))
                         fi
@@ -1045,11 +1051,12 @@ rule structure_inference:
                     _aj_gpu_mb="${{_aj_gpu_mb//[!0-9]/}}"
                 fi
                 if [ -n "$_aj_gpu_mb" ] && [ "$_aj_gpu_mb" -gt 0 ]; then
-                    _aj_frac=$(awk -v r={resources.mem_mb} -v g="$_aj_gpu_mb" 'BEGIN{{printf "%.3f", r/g}}')
+                    _aj_frac=$(awk -v r={resources.mem_mb} -v m={params.host_ram_margin_mb} -v g="$_aj_gpu_mb" \
+                        'BEGIN{{f = 1 + (r - m) / g; if (f < 1) f = 1; printf "%.3f", f}}')
                 else
                     _aj_frac=3.2
                 fi
-                echo "[unified-memory] host_mem_mb={resources.mem_mb} gpu_mem_mb=$_aj_gpu_mb -> XLA_CLIENT_MEM_FRACTION=$_aj_frac"
+                echo "[unified-memory] host_mem_mb={resources.mem_mb} margin_mb={params.host_ram_margin_mb} gpu_mem_mb=$_aj_gpu_mb -> XLA_CLIENT_MEM_FRACTION=$_aj_frac"
             fi
             export XLA_CLIENT_MEM_FRACTION="$_aj_frac"
         fi

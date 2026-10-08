@@ -138,7 +138,9 @@ structure_inference_gpu_model: ""
 # slurm_exclude_nodes: ""               # comma-separated nodes to avoid
 
 # Unified memory lets large predictions use host RAM when GPU memory fills.
-# It can be slower. "auto" sets the limit from allocated host RAM and GPU VRAM.
+# It can be slower. The fraction is XLA's total limit (VRAM plus host spill) as a
+# multiple of GPU VRAM: 2.0 = all VRAM plus the same amount again of host RAM.
+# "auto" spills into the job's host RAM, minus structure_inference_ram_bytes.
 structure_inference_unified_memory: true
 structure_inference_xla_mem_fraction: auto
 

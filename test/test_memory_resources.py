@@ -144,6 +144,25 @@ def test_af2_inference_defaults_cover_measured_host_rss():
         assert req_gb <= 3.2 * rss_gb, (n, req_gb, rss_gb)
 
 
+def test_inference_defaults_cover_host_rss_measured_by_sacct():
+    """Largest host RSS per 1000-token bin among ~20k completed inference jobs (sacct
+    MaxRSS of the srun step, July 2026 runs). Unified-memory spill is not counted in
+    MaxRSS, so this is the process's own host memory: the request must cover it, and
+    under "auto" the rest of the request becomes the spill allowance."""
+    anchors = {
+        "alphafold2": [(973, 8.7), (1998, 19.8), (2990, 37.1), (3849, 56.8), (4836, 80.8)],
+        # AlphaFold 3 is sized at its padded bucket, as batch_max_tokens_for() does.
+        "alphafold3": [(1024, 7.2), (2048, 10.7), (3072, 16.3), (4096, 25.3), (5120, 33.4)],
+    }
+    for backend, measured in anchors.items():
+        d = common.INFERENCE_RAM_DEFAULTS[backend]
+        kw = dict(base_mb=d["base_mb"], per_token_sq_mb=d["per_token_sq_mb"],
+                  scaling=1.1, safety=1.25, attempt=1)
+        for tokens, rss_gib in measured:  # (tokens, max host RSS GiB)
+            req_gib = common.estimate_inference_mem_mb(tokens, **kw) / 1024
+            assert req_gib >= 1.5 * rss_gib, (backend, tokens, req_gib, rss_gib)
+
+
 def test_backend_defaults_af2_heavier_than_af3():
     assert common.normalize_backend("af3") == "alphafold3"
     assert common.normalize_backend("AlphaFold2") == "alphafold2"
