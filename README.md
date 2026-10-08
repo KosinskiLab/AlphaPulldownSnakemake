@@ -9,7 +9,7 @@ AlphaPulldownSnakemake provides a convenient way to run AlphaPulldown using a Sn
 ### Quick install (recommended)
 
 ```bash
-curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.9.2/install.sh
+curl -O https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.10.0/install.sh
 bash install.sh
 conda activate snake
 cd AlphaPulldownSnakemake
@@ -25,7 +25,7 @@ Useful options:
 | Option | Meaning |
 | --- | --- |
 | `-d, --dest DIR` | working directory to deploy into (default `AlphaPulldownSnakemake`) |
-| `-v, --version TAG` | workflow version to deploy (default `2.9.2`) |
+| `-v, --version TAG` | workflow version to deploy (default `2.10.0`) |
 | `-i, --image-dir DIR` | shared container image directory |
 | `-n, --env-name NAME` | conda environment name (default `snake`) |
 | `--no-pull` | skip container pre-fetch (Snakemake will fetch on first run) |
@@ -43,7 +43,7 @@ Create and activate the conda environment:
 ```bash
 conda env create \
   -n snake \
-  -f https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.9.2/workflow/envs/alphapulldown.yaml
+  -f https://raw.githubusercontent.com/KosinskiLab/AlphaPulldownSnakemake/2.10.0/workflow/envs/alphapulldown.yaml
 conda activate snake
 ```
 
@@ -55,7 +55,7 @@ Then deploy the workflow into a new processing directory for your project:
 snakedeploy deploy-workflow \
   https://github.com/KosinskiLab/AlphaPulldownSnakemake \
   AlphaPulldownSnakemake \
-  --tag 2.9.2
+  --tag 2.10.0
 cd AlphaPulldownSnakemake
 ```
 
@@ -373,7 +373,7 @@ XlaRuntimeError: UNIMPLEMENTED: ... ptxas too old
 This cannot be patched from outside the container. jaxlib calls its own bundled `ptxas`, so
 `XLA_FLAGS=--xla_gpu_cuda_data_dir` and `PATH` have no effect, and bind-mounting a newer `ptxas`
 still leaves the CUDA runtime and cuDNN too old for the real kernels. From 2.5.0 the images ship a
-consistent CUDA >= 12.8 stack (AF3: jax 0.9.1, ptxas 12.9, cuDNN 9.17, Tokamax; AF2: jax 0.5.3,
+consistent CUDA >= 12.8 stack (AF3: jax 0.10.2 with AlphaFold 3 v3.0.4, ptxas 12.9, cuDNN 9.17, Tokamax; AF2: jax 0.5.3,
 ptxas 12.9, cuDNN 9.2x) and return the same confidence scores as the older cards. All three AF3
 attention implementations (`triton`/Tokamax, `cudnn`, `xla`) work, so no
 `--flash_attention_implementation` override is needed.
@@ -809,7 +809,7 @@ require `pdb_seqres`, and every search requires `mmcif`. Update the relevant ID 
 rebuilding a database, even at the same path; this invalidates finalized features.
 The native MSA arguments do not reach finalization because this stage replaces
 that search. Use a matching prediction image, such as
-`docker://kosinskilab/alphafold2:2.9.0`, for AlphaFold 2. AlphaFold 2 finalization is
+`docker://kosinskilab/alphafold2:2.10.0`, for AlphaFold 2. AlphaFold 2 finalization is
 heavier than AlphaFold 3's because template featurization dominates it — median ~1 GB and 2 min, but up to
 19 GB and 90 min, set by which structures the templates come from rather than by length
 — so its defaults request 16 GB (times the safety factor) and 60 min. Against native
@@ -847,6 +847,10 @@ structure_inference_arguments:
 ```
 
 > **Note**: AlphaPulldown supports: `alphafold2`, `alphafold3`, and `alphalink` backends.
+
+The legacy `--fold_backend=unifold` and `--use_unifold` options are disabled in
+this release. The bundled runtime is the AlphaLink2 fork and does not provide
+validated native UniFold inference. AlphaLink requires its own model weights.
 
 ### Backend-specific flags
 
@@ -952,8 +956,11 @@ structure_inference_arguments:
   --save_embeddings: False
   --save_distogram: False
   --use_ap_style: False                   # shared with AlphaFold2
-  --fast_kernels: "off"                   # "off" | "on" | "auto" (quoted: YAML reads bare on/off as booleans): optional fused triangle kernels, opt-in (default off); see AlphaPulldown's AF3 fused-triangle documentation
+  --fast_kernels: "off"                   # "off" | "on" | "auto" (quoted: YAML reads bare on/off as booleans): fused triangle kernels, 1.1-2x faster AF3 on NVIDIA GPUs of compute capability 8.0+
 ```
+
+How the AF3 kernels are chosen per GPU:
+[AlphaPulldown docs/af3_fused_triangles.md](https://github.com/KosinskiLab/AlphaPulldown/blob/main/docs/af3_fused_triangles.md).
 </details>
 
 ---

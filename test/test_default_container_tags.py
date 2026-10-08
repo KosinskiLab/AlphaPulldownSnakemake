@@ -39,12 +39,10 @@ _loader.exec_module(common)
 MINIMUM_ALPHAPULLDOWN = {
     "alphafold2": {
         "jax_compilation_cache_dir": ">=2.8.0",
-        # KosinskiLab/AlphaPulldown#645, merged after 2.9.1, not yet released.
-        "fast_kernels": ">2.9.1",
+        "fast_kernels": ">=2.10.0",
     },
     "alphafold3": {
-        # AlphaPulldown exp/af3-v3.0.4 (AF3 fused triangle kernels), not yet released.
-        "fast_kernels": ">2.9.1",
+        "fast_kernels": ">=2.10.0",
     },
 }
 
