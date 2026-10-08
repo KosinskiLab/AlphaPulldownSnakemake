@@ -389,7 +389,10 @@ Those nodes are RTX PRO 4500 cards split into 16 GB `1g.16gb` MIG instances. The
 `slurm_gres`: a plain `gpu:1` request lands on one slice and SLURM sets
 `CUDA_VISIBLE_DEVICES=MIG-<uuid>`. Route work to them by size with a `min_vram_gb: 16` tier in
 `structure_inference_gpu_tiers`. They suit monomers and small complexes, while larger jobs belong on
-the 96 GB RTX PRO 6000 tier.
+the 96 GB RTX PRO 6000 tier. Keep AlphaFold 2 off them for larger complexes: the tier estimate
+(`per_token_sq·N²`) places AlphaFold 2 complexes of up to ~1,700 residues on a 16 GB slice, but in our
+runs AlphaFold 2 complexes of 1,600–2,900 residues ran out of GPU memory there with 10–45 GB of host
+RAM for spill, and spilling is many times slower than VRAM anyway.
 
 One MIG caveat the workflow already handles: `nvidia-smi --query-gpu=memory.total` reports the parent
 card (32623 MiB) rather than the slice (~16 GB). Since `structure_inference_xla_mem_fraction: auto`
