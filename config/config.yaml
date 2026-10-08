@@ -26,9 +26,9 @@ databases_directory: /path/to/alphafold/databases
 backend_weights_directory: /path/to/alphafold3/weights/
 
 # These defaults run AlphaFold 3. To use AlphaFold 2, change the image to
-# alphafold2:2.9.0, both backend flags below to alphafold2, and the paths above.
+# alphafold2:2.10.0, both backend flags below to alphafold2, and the paths above.
 # A local .sif image also works. README: "Changing folding backends"
-prediction_container: "docker://kosinskilab/alphafold3:2.9.0"
+prediction_container: "docker://kosinskilab/alphafold3:2.10.0"
 
 # Features are the sequence alignments and templates used for prediction.
 # Keep any additional feature flags inside this block.
@@ -49,8 +49,8 @@ structure_inference_arguments:
   # --jax_compilation_cache_dir: /path/to/cache
   # Fused GPU kernels, off by default. "auto" uses them where the GPU supports them
   # (NVIDIA, compute capability 8.0+): about 2x faster AlphaFold 2-Multimer and
-  # 1.1-2x AlphaFold 3. Needs an image newer than 2.9.1. Keep the quotes: YAML reads
-  # bare on/off as booleans. README: "AlphaFold2 flags", "AlphaFold3 flags"
+  # 1.1-2x AlphaFold 3. Keep the quotes: YAML reads bare on/off as booleans.
+  # README: "AlphaFold2 flags", "AlphaFold3 flags"
   # --fast_kernels: "auto"
 
 # SLURM only: replace "gpu" with your cluster's GPU partition. Several names can
