@@ -404,6 +404,62 @@ def test_gpu_exclude_nodes_vram_routing():
     assert common.gpu_exclude_nodes(2400, [], c) == ""
 
 
+def test_routed_tier_min_vram_gb_matches_gpu_exclusions():
+    tiers = [
+        {"min_vram_gb": 80, "nodes": "n80"},
+        {"min_vram_gb": 24, "nodes": "n24"},
+        {"min_vram_gb": 48, "nodes": "n48"},
+        {"min_vram_gb": 16, "nodes": ""},
+    ]
+    for tokens, headroom, minimum, excluded in (
+        (800, 1.0, 24, ""),
+        (2400, 1.0, 48, "n24"),
+        (3500, 1.0, 80, "n24,n48"),
+        (20000, 1.0, 80, "n24,n48"),
+        (3500, 0.5, 48, "n24"),
+    ):
+        assert common.routed_tier_min_vram_gb(tokens, tiers, 0.0045, headroom) == minimum
+        assert common.gpu_exclude_nodes(tokens, tiers, 0.0045, headroom) == excluded
+    assert common.routed_tier_min_vram_gb(4608, [], 0.0045) is None
+
+
+def test_unified_memory_budget_shortfalls_match_requests_and_routing():
+    options = dict(
+        tiers=[{"min_vram_gb": 48, "nodes": "n48"}],
+        base_mb=60000, per_token_sq_mb=0.0045, safety=0.2,
+        margin_mb=8000, vram_per_token_sq_mb=0.0045,
+    )
+    shortfalls = common.unified_memory_budget_shortfalls({"large": 4608, "small": 512}, **options)
+    assert len(shortfalls) == 1
+    worst = shortfalls[0]
+    assert worst["batch"] == "large"
+    assert worst["tokens"] == 4608
+    assert worst["request_mb"] == 31110
+    assert worst["margin_mb"] == 8000
+    assert worst["budget_mb"] == 71110
+    assert round(worst["need_mb"]) == 95551
+
+    for changes, expected in (
+        ({"base_mb": 8000, "safety": 1.25}, []),
+        # The cap applies before checking, just as it does to the submitted request.
+        ({"base_mb": 8000, "safety": 1.25, "cap_mb": 16000}, ["large"]),
+        ({"tiers": []}, []),  # no hardware lower bound: unknown, not infeasible
+        ({"tiers": [], "min_gpu_vram_gb": 48}, ["large"]),
+        ({"tiers": [], "min_gpu_vram_gb": 96}, []),
+        # A margin above the request leaves the whole GPU usable for a small fold.
+        ({"margin_mb": 200000}, ["large"]),
+        # Headroom affects routing only; the demand estimate stays at headroom=1.
+        ({"tiers": [{"min_vram_gb": 48, "nodes": "n48"},
+                    {"min_vram_gb": 96, "nodes": "n96"}], "headroom": 0.5}, ["large"]),
+        ({"tiers": [{"min_vram_gb": 48, "nodes": "n48"},
+                    {"min_vram_gb": 96, "nodes": "n96"}]}, []),
+    ):
+        result = common.unified_memory_budget_shortfalls(
+            {"large": 4608, "small": 512}, **{**options, **changes}
+        )
+        assert [item["batch"] for item in result] == expected, changes
+
+
 def test_af3_padded_tokens_follow_buckets():
     assert common.af3_padded_tokens(1537) == 2048
     assert common.af3_padded_tokens(2048) == 2048

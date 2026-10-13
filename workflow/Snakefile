@@ -616,6 +616,9 @@ rule download_uniprot:
 # escalated on OOM retries via `scaling ** (attempt - 1)`. Defaults differ by
 # backend (AF2 is heavier than AF3); an explicit config value always wins. See README.
 MEM_SAFETY_FACTOR = float(config.get("mem_safety_factor", 1.25))
+STRUCTURE_INFERENCE_MEM_SAFETY = float(config.get(
+    "structure_inference_mem_safety_factor", MEM_SAFETY_FACTOR
+))
 MAX_MEM_MB = int(config.get("max_mem_mb", 0) or 0)  # 0 = no cap
 
 # Backend defaults (FEATURE_BACKEND / INFERENCE_BACKEND are defined near the top).
@@ -639,7 +642,13 @@ structure_inference_base_ram = config.get(
 structure_inference_ram_per_token_sq = config.get(
     "structure_inference_ram_per_token_sq_mb", _infer_ram_defaults["per_token_sq_mb"]
 )
-structure_inference_ram_scaling = config.get("structure_inference_ram_scaling", 1.1)
+structure_inference_margin_mb = int(float(config.get(
+    "structure_inference_unified_memory_margin_mb", _infer_ram_defaults["base_mb"]
+)))
+structure_inference_vram_per_token_sq = config.get(
+    "structure_inference_vram_per_token_sq_mb", _infer_ram_defaults["per_token_sq_mb"]
+)
+structure_inference_ram_scaling = config.get("structure_inference_ram_scaling", 1.5)
 structure_inference_runtime_minutes = config.get(
     "structure_inference_runtime_minutes", _infer_ram_defaults["runtime_minutes"]
 )
@@ -654,6 +663,61 @@ structure_inference_runtime_minutes = config.get(
 GPU_TIERS = config.get("structure_inference_gpu_tiers") or []
 GPU_VRAM_HEADROOM = float(config.get("structure_inference_gpu_vram_headroom", 1.0))
 
+if "structure_inference_ram_bytes" in config:
+    logger.info(
+        "[memory] structure_inference_ram_bytes controls host RAM only; "
+        f"structure_inference_unified_memory_margin_mb={structure_inference_margin_mb}."
+    )
+if "structure_inference_ram_per_token_sq_mb" in config:
+    logger.info(
+        "[memory] structure_inference_ram_per_token_sq_mb controls host RAM only; "
+        f"structure_inference_vram_per_token_sq_mb={structure_inference_vram_per_token_sq} "
+        "controls GPU routing and estimated total demand."
+    )
+if "mem_safety_factor" in config:
+    _inference_safety_source = (
+        "inference override" if "structure_inference_mem_safety_factor" in config
+        else "fallback from mem_safety_factor"
+    )
+    logger.info(
+        f"[memory] mem_safety_factor={MEM_SAFETY_FACTOR} controls feature RAM; "
+        f"structure_inference_mem_safety_factor={STRUCTURE_INFERENCE_MEM_SAFETY} "
+        f"controls inference RAM ({_inference_safety_source})."
+    )
+
+if (
+    not _as_bool(config.get("only_generate_features", False))
+    and STRUCTURE_INFERENCE_UNIFIED_MEMORY
+    and STRUCTURE_INFERENCE_XLA_MEM_FRACTION == "auto"
+    and not _as_bool(config.get("structure_inference_skip_memory_check", False))
+):
+    _memory_shortfalls = unified_memory_budget_shortfalls(
+        {batch_id: batch_max_tokens_for(batch_id) for batch_id in BATCH_FOLDS},
+        tiers=GPU_TIERS,
+        base_mb=structure_inference_base_ram,
+        per_token_sq_mb=structure_inference_ram_per_token_sq,
+        safety=STRUCTURE_INFERENCE_MEM_SAFETY,
+        margin_mb=structure_inference_margin_mb,
+        vram_per_token_sq_mb=structure_inference_vram_per_token_sq,
+        headroom=GPU_VRAM_HEADROOM,
+        cap_mb=MAX_MEM_MB,
+        min_gpu_vram_gb=config.get("structure_inference_min_gpu_vram_gb"),
+    )
+    if _memory_shortfalls:
+        _worst = max(_memory_shortfalls, key=lambda item: item["need_mb"] - item["budget_mb"])
+        raise WorkflowError(
+            f"[memory] {len(_memory_shortfalls)} inference batch(es) have an estimated "
+            "unified-memory budget below demand. Worst batch "
+            f"{_worst['batch']}: tokens={_worst['tokens']}, request_mb={_worst['request_mb']}, "
+            f"margin_mb={_worst['margin_mb']}, min_vram_gb={_worst['min_vram_gb']:g}, "
+            f"budget_mb={_worst['budget_mb']:.0f}, need_mb={_worst['need_mb']:.0f}. "
+            "Review structure_inference_mem_safety_factor (host RAM), "
+            "structure_inference_unified_memory_margin_mb (reserved host RAM), and "
+            "structure_inference_vram_per_token_sq_mb (routing and demand), plus "
+            "max_mem_mb if capped. To bypass this estimate, set "
+            "structure_inference_skip_memory_check: true."
+        )
+
 
 def _inference_slurm_extra(wildcards):
     """slurm_extra resource: --exclude small-GPU nodes for large complexes, merged
@@ -662,7 +726,7 @@ def _inference_slurm_extra(wildcards):
     nodes = gpu_exclude_nodes(
         tokens,
         GPU_TIERS,
-        structure_inference_ram_per_token_sq,
+        structure_inference_vram_per_token_sq,
         GPU_VRAM_HEADROOM,
         DEFAULT_SLURM_EXCLUDE or "",
     )
@@ -964,7 +1028,7 @@ rule structure_inference:
         unified_memory="true" if STRUCTURE_INFERENCE_UNIFIED_MEMORY else "false",
         xla_mem_fraction=STRUCTURE_INFERENCE_XLA_MEM_FRACTION,
         # Host RAM that "auto" keeps for the process itself rather than for GPU spill.
-        host_ram_margin_mb=int(float(structure_inference_base_ram)),
+        host_ram_margin_mb=structure_inference_margin_mb,
         resident=lambda wc: "true" if len(BATCH_FOLDS[wc.batch]) > 1 else "false",
     resources:
         slurm_partition=(DEFAULT_SLURM_PARTITION or "gpu"),
@@ -994,7 +1058,7 @@ rule structure_inference:
                 base_mb=structure_inference_base_ram,
                 per_token_sq_mb=structure_inference_ram_per_token_sq,
                 scaling=structure_inference_ram_scaling,
-                safety=MEM_SAFETY_FACTOR,
+                safety=STRUCTURE_INFERENCE_MEM_SAFETY,
                 attempt=attempt,
                 cap_mb=MAX_MEM_MB,
             ),

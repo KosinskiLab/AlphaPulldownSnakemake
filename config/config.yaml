@@ -103,15 +103,16 @@ batch_max_tokens: 0
 # All runtime values are minutes. README: "SLURM defaults for structure inference"
 alphafold_inference_threads: 8
 # feature_threads: 8                    # CPUs per feature-generation job
-mem_safety_factor: 1.25                 # margin added to the memory estimate
+mem_safety_factor: 1.25                 # feature margin; inference fallback too
+# structure_inference_mem_safety_factor: 1.25  # inference-only override of the above
 max_mem_mb: 0                           # cap per job; 0 means no cap
 feature_create_ram_scaling: 1.1         # multiply RAM by this on each retry
-structure_inference_ram_scaling: 1.1
+structure_inference_ram_scaling: 1.5     # 50% more host RAM on each OOM retry
 # Overrides replace backend defaults; leave commented unless you need to tune.
 # feature_create_ram_bytes: 64000
 # feature_create_ram_per_residue_mb: 120
 # structure_inference_ram_bytes: 16000
-# structure_inference_ram_per_token_sq_mb: 0.0045
+# structure_inference_ram_per_token_sq_mb: 0.0055  # AF2; AF3 defaults to 0.0045
 # structure_inference_runtime_minutes: 1440
 structure_inference_max_runtime: 10080  # runtime ceiling; fit it to your partition
 
@@ -132,6 +133,8 @@ length_filter_fetch_uniprot: true       # set false to avoid online length looku
 structure_inference_gpus_per_task: 1
 structure_inference_gpu_model: ""
 # structure_inference_gpu_vram_headroom: 1.0
+# Routing and demand use their own coefficient, independent of host RAM tuning.
+# structure_inference_vram_per_token_sq_mb: 0.0055  # AF2; AF3 defaults to 0.0045
 # structure_inference_gpu_tiers:
 #   - {min_vram_gb: 24, nodes: "gpu-24gb-01,gpu-24gb-02"}
 #   - {min_vram_gb: 80, nodes: "gpu-80gb-01,gpu-80gb-02"}
@@ -140,9 +143,14 @@ structure_inference_gpu_model: ""
 # Unified memory lets large predictions use host RAM when GPU memory fills.
 # It can be slower. The fraction is XLA's total limit (VRAM plus host spill) as a
 # multiple of GPU VRAM: 2.0 = all VRAM plus the same amount again of host RAM.
-# "auto" spills into the job's host RAM, minus structure_inference_ram_bytes.
+# "auto" spills into the job's host RAM, minus an independent process margin.
+# structure_inference_unified_memory_margin_mb: 16000  # AF2; AF3 defaults to 8000
 structure_inference_unified_memory: true
 structure_inference_xla_mem_fraction: auto
+# Check estimated first-attempt budgets against the smallest routed GPU at startup.
+# Without tiers the check is skipped, unless a minimum VRAM is supplied (GB).
+# structure_inference_min_gpu_vram_gb: 24
+# structure_inference_skip_memory_check: false
 
 ## -- Optional local MMseqs2 features -----------------------------------------
 # Alternative alignment search for AlphaFold 2/3 proteins and AlphaFold 3 RNA.

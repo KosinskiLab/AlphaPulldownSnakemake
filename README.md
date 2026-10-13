@@ -522,13 +522,14 @@ again of host RAM. With the default `auto`, the fraction is computed **per job a
 time** as
 
 ```text
-1 + (allocated host RAM - structure_inference_ram_bytes) / (physical GPU VRAM)
+1 + max(0, allocated host RAM - structure_inference_unified_memory_margin_mb) / GPU VRAM
 ```
 
 The GPU VRAM is read with `nvidia-smi` once the job lands on a node, and the host RAM is
 the job's SLURM `--mem` allocation (which scales with retry attempts). The job can thus
-spill into all of its host RAM except the base inference RAM (`structure_inference_ram_bytes`,
-by default 8000 MB for AlphaFold 3 and 16000 MB for AlphaFold 2), which stays free for the
+spill into all of its host RAM except the independent process margin
+(`structure_inference_unified_memory_margin_mb`, by default 8000 MB for AlphaFold 3 and
+16000 MB for AlphaFold 2), which stays free for the
 process itself. For example, 128 GB of host RAM on an 80 GB GPU gives 1 + (128 - 8) / 80 = 2.5,
 a 200 GB limit with 120 GB of host spill. The fraction never goes below 1, and the chosen value
 is logged as a `[unified-memory]` line at the top of the job log. Pin a number instead if
@@ -545,8 +546,44 @@ from everything else on the node.
 
 Under `auto` the spill allowance grows with the job's host RAM request (see the
 length-aware memory requests below), so if a large complex still runs out of memory, raise
-that request (`structure_inference_ram_per_token_sq_mb` or `mem_safety_factor`) rather than
+that request (`structure_inference_ram_per_token_sq_mb` or
+`structure_inference_mem_safety_factor`) rather than
 pinning the fraction.
+
+Peak host RSS measures only the part of the XLA pool that spilled into host memory;
+it does not measure the model's total demand. Sizing the request from RSS alone can
+therefore make the total pool too small. Host RAM, GPU routing and the spill margin
+can be tuned independently:
+
+| Setting | Default | Controls |
+|---|---|---|
+| `structure_inference_unified_memory_margin_mb` | AF2: 16000; AF3: 8000 | Host RAM reserved for the process before allowing spill |
+| `structure_inference_vram_per_token_sq_mb` | AF2: 0.0055; AF3: 0.0045 | GPU-tier routing and estimated total inference demand |
+| `structure_inference_mem_safety_factor` | `mem_safety_factor` (normally 1.25) | Inference host RAM only |
+
+With unified memory enabled and the fraction set to `auto`, startup checks every
+inference batch before submission. It compares `min VRAM + max(0, request - margin)`
+with `VRAM coefficient * padded tokens²`. The request includes the inference safety
+factor and `max_mem_mb` cap; routing uses its own headroom and the same padded token
+count. If the estimated budget is too small, the error reports the number of affected
+batches and the worst batch's tokens, request, margin, budget and need.
+
+This is an estimate using the configured tiers, which must cover the schedulable
+GPU pool. It preserves the routing convention of 1000 MB per GB; use conservative
+`min_vram_gb` values for each tier. The runtime fraction still uses the actual
+`nvidia-smi` reading, including MIG slice sizes, so a successful startup check cannot
+guarantee that inference fits. Without tiers the check is skipped unless
+`structure_inference_min_gpu_vram_gb` supplies a hardware lower bound.
+`structure_inference_skip_memory_check: true` bypasses it. Feature-only workflows,
+disabled unified memory and pinned numeric fractions also bypass the check.
+
+**Compatibility:** `structure_inference_ram_bytes` now controls only the host-RAM
+base, and `structure_inference_ram_per_token_sq_mb` only its quadratic coefficient;
+they no longer change the spill margin or GPU routing. Startup `[memory]` notes show
+the effective settings. `mem_safety_factor` still controls both stages unless the
+inference override is set. The default first-attempt estimates are unchanged, but
+the default inference retry multiplier increases from 1.1 to **1.5**. Explicit retry
+multipliers continue to take precedence.
 
 </details>
 
@@ -581,9 +618,11 @@ structure_inference  mem = safety * (structure_inference_ram_bytes + per_token_s
   The AF3 inference quadratic is sized to the observed GPU-VRAM demand so that, with unified
   memory, the `auto` limit (GPU VRAM plus the host RAM request minus its base) covers large
   complexes instead of OOM-ing.
-- The first attempt already includes `mem_safety_factor` (default `1.25`) of head-room.
+- The first attempt already includes `mem_safety_factor` (default `1.25`) of head-room;
+  `structure_inference_mem_safety_factor` can override it for inference alone.
   **OOM retries still escalate** on top, multiplying by `..._ram_scaling ** (attempt - 1)`,
-  so a bad estimate self-heals.
+  so a bad estimate self-heals. Inference defaults to `1.5` (+50% per retry, 3.375×
+  on attempt 4 before the memory cap); feature generation retains `1.1`.
 - Override any backend default by setting the matching key in `config/config.yaml`
   (`feature_create_ram_bytes`, `feature_create_ram_per_residue_mb`,
   `structure_inference_ram_bytes`, `structure_inference_ram_per_token_sq_mb`); an explicit
