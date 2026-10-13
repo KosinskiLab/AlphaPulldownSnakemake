@@ -19,6 +19,7 @@ from alphapulldown_input_parser.parser import FoldDataset, generate_fold_specifi
 
 config["output_directory"] = abspath(config["output_directory"])
 makedirs(config["output_directory"], exist_ok=True)
+CONTAINER_TMPDIR = config.get("container_tmpdir", "/tmp")
 
 feature_directories = config.get("feature_directory", [])
 if isinstance(feature_directories, (str, Path)):
@@ -767,6 +768,7 @@ if LOCAL_MMSEQS2.enabled:
                 "{mmseqs_shard}.json",
             ),
         params:
+            tmpdir_guard=lambda wildcards: container_tmpdir_guard(CONTAINER_TMPDIR),
             msa_output_directory=LOCAL_MMSEQS2_MSA_CACHE,
             fasta_paths=lambda wildcards, input: ",".join(
                 str(path) for path in input.fastas
@@ -809,6 +811,7 @@ if LOCAL_MMSEQS2.enabled:
             config["prediction_container"],
         shell:
             r"""
+            {params.tmpdir_guard}
             create_batch_msas.py \
                 --fasta_paths="{params.fasta_paths}" \
                 --msa_output_dir={params.msa_output_directory} \
@@ -831,6 +834,7 @@ if LOCAL_MMSEQS2.enabled:
         wildcard_constraints:
             fasta_basename="[^/]+",
         params:
+            tmpdir_guard=lambda wildcards: container_tmpdir_guard(CONTAINER_TMPDIR),
             data_directory=config["databases_directory"],
             output_directory=LOCAL_MMSEQS2_CACHE,
             msa_output_directory=LOCAL_MMSEQS2_MSA_CACHE,
@@ -878,6 +882,7 @@ if LOCAL_MMSEQS2.enabled:
             config["prediction_container"],
         shell:
             r"""
+            {params.tmpdir_guard}
             finalize_batch_features.py \
                 --fasta_paths={input.fasta} \
                 --msa_input_dir={params.msa_output_directory} \
@@ -932,6 +937,7 @@ else:
         wildcard_constraints:
             fasta_basename="[^/]+",
         params:
+            tmpdir_guard=lambda wildcards: container_tmpdir_guard(CONTAINER_TMPDIR),
             data_directory=config["databases_directory"],
             output_directory=join(config["output_directory"], "features"),
             cli_parameters=" ".join(
@@ -966,6 +972,7 @@ else:
             config["prediction_container"],
         shell:
             r"""
+            {params.tmpdir_guard}
             create_individual_features.py \
                 --fasta_paths={input} \
                 --data_dir={params.data_directory} \
@@ -1009,6 +1016,7 @@ rule structure_inference:
     output:
         join(config["output_directory"], "predictions", "{batch}", "completed_fold.txt"),
     params:
+        tmpdir_guard=lambda wildcards: container_tmpdir_guard(CONTAINER_TMPDIR),
         data_directory=config["backend_weights_directory"],
         feature_directory=join(config["output_directory"], "features"),
         # Parallel space-separated lists (one entry per fold in the batch) consumed by
@@ -1075,6 +1083,7 @@ rule structure_inference:
         config["prediction_container"],
     shell:
         r"""
+        {params.tmpdir_guard}
         # Keep only JAX's own entries in the shared compile cache. XLA's per-fusion
         # autotune cache fails an atomic rename on shared filesystems and then segfaults
         # the compiler (jaxlib 0.9.1, the AF3 image). Newer AlphaPulldown sets this
@@ -1164,6 +1173,7 @@ if ENABLE_STRUCTURE_ANALYSIS:
             qos=DEFAULT_SLURM_QOS,
             **linear_resources(mem=8000, runtime=1440),
         params:
+            tmpdir_guard=lambda wildcards: container_tmpdir_guard(CONTAINER_TMPDIR),
             prediction_dir=lambda wildcards: join(
                 config["output_directory"], "predictions", wildcards.fold
             ),
@@ -1175,6 +1185,7 @@ if ENABLE_STRUCTURE_ANALYSIS:
             config["analysis_container"],
         shell:
             r"""
+            {params.tmpdir_guard}
             alphajudge \
             {params.prediction_dir} \
             {params.cli_parameters}
@@ -1216,6 +1227,7 @@ if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT:
         output:
                 RECURSIVE_REPORT,
         params:
+            tmpdir_guard=lambda wildcards: container_tmpdir_guard(CONTAINER_TMPDIR),
             prediction_dir=lambda wildcards: join(config["output_directory"], "predictions"),
             report_dir=join(config["output_directory"], "reports"),
             extra_args=lambda wildcards: " ".join(
@@ -1228,6 +1240,7 @@ if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT:
             config["analysis_container"],
         shell:
             r"""
+                {params.tmpdir_guard}
                 mkdir -p {params.report_dir}
                 alphajudge \
                     {params.prediction_dir} \

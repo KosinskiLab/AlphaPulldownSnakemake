@@ -15,6 +15,7 @@ import json
 import lzma
 import os
 import re
+import shlex
 import tempfile
 import time
 import urllib.error
@@ -715,6 +716,29 @@ def _collect_roots(paths: Iterable[str | Path]) -> set[str]:
         except (TypeError, OSError, RuntimeError):
             pass
     return roots
+
+
+def container_tmpdir_guard(fallback: str = "/tmp") -> str:
+    """Bash run inside a container before native tools use the inherited TMPDIR.
+
+    Job-local scratch may not be mounted in the container. Keep a usable TMPDIR,
+    otherwise select a writable, searchable fallback or fail before starting work.
+    """
+    quoted = shlex.quote(fallback)
+    return (
+        'if [ -z "${TMPDIR:-}" ] || ! { mkdir -p -- "$TMPDIR" 2>/dev/null '
+        '&& [ -d "$TMPDIR" ] && [ -w "$TMPDIR" ] && [ -x "$TMPDIR" ]; }; then\n'
+        f'    if ! {{ mkdir -p -- {quoted} 2>/dev/null && [ -d {quoted} ] '
+        f'&& [ -w {quoted} ] && [ -x {quoted} ]; }}; then\n'
+        "        printf '[container-tmpdir] fallback %s is not writable in the container\\n' "
+        f'{quoted} >&2\n'
+        '        exit 1\n'
+        '    fi\n'
+        "    printf '[container-tmpdir] TMPDIR=%s is not writable in the container; using %s\\n' "
+        f'"${{TMPDIR:-}}" {quoted} >&2\n'
+        f'    export TMPDIR={quoted}\n'
+        'fi\n'
+    )
 
 
 def prepare_container_binds(
