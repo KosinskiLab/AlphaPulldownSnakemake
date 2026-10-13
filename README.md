@@ -340,6 +340,26 @@ prediction_container: "/path/to/images/alphafold3-2.5.0.sif"
 
 </details>
 
+### Container temporary directories
+
+Errors such as `ptxas fatal: Could not open output file` for a `tmpxft_*` file can
+mean the job's inherited `TMPDIR` points to scratch that is not mounted inside
+the container. Python may silently choose another temporary directory, but
+native tools such as XLA's `ptxas` use `TMPDIR` directly.
+
+Every container rule checks `TMPDIR` before starting work. A usable directory is
+kept without logging; an unset or inaccessible path falls back to `/tmp`, with
+one `[container-tmpdir]` message in the job log. To choose another fallback:
+
+```yaml
+container_tmpdir: /path/visible/inside/container
+```
+
+The fallback must be writable and searchable inside the container. The guard
+creates it when possible and stops with a clear error if it is unusable. This
+setting does not add a host bind mount; configure site mounts separately if the
+fallback is outside the container's existing mounts.
+
 ### GPU compatibility
 
 The containers carry their own CUDA runtime (pip `nvidia-*` wheels), so GPU support depends on the

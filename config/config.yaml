@@ -88,6 +88,9 @@ exclude_permutations: true
 ##  ADVANCED  --  optional features and resource tuning
 ################################################################################
 
+# Writable fallback inside containers when the inherited TMPDIR is unavailable.
+container_tmpdir: /tmp
+
 ## -- Batch small predictions -------------------------------------------------
 # Run several predictions in one job to share model loading and queue time.
 # 1 keeps one prediction per job. batch_max_tokens limits the combined residue
