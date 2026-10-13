@@ -39,7 +39,7 @@ EXPECTED_AF3 = {
     "jax_compilation_cache_dir", "buckets", "flash_attention_implementation",
     "num_diffusion_samples", "num_seeds", "debug_templates", "debug_msas",
     "num_recycles", "save_embeddings", "save_distogram", "use_ap_style",
-    "convert_to_modelcif",
+    "convert_to_modelcif", "allow_resume",
 }
 
 
@@ -64,6 +64,12 @@ def test_fast_kernels_is_valid_on_both_backends():
         assert _COMMON.unknown_inference_flags(args, backend) == []
     args = {"--fold_backend": "alphalink", "--fast_kernels": "auto"}
     assert _COMMON.unknown_inference_flags(args, "alphalink") == ["fast_kernels"]
+
+
+def test_allow_resume_is_valid_on_both_backends():
+    for backend in ("alphafold2", "alphafold3"):
+        args = {"--fold_backend": backend, "--allow_resume": False}
+        assert _COMMON.unknown_inference_flags(args, backend) == []
 
 
 def test_jax_compile_cache_is_valid_on_both_backends():

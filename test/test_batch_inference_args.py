@@ -2,7 +2,8 @@
 
 Regression guard: ``run_structure_prediction.py`` hard-errors on a flag its backend does
 not accept (``ValueError: not supported by backend '<name>'``). Adding the wrong flag once
-broke ALL batched AlphaFold2 inference. ``--allow_resume`` is AlphaFold2-only;
+broke ALL batched AlphaFold2 inference. ``--allow_resume`` is added for AlphaFold2 only
+(AlphaFold3 resumes by default where it accepts the flag, after AlphaPulldown 2.10.0);
 ``--jax_compilation_cache_dir`` is accepted by both JAX backends (AlphaFold2 since
 AlphaPulldown 2.8.0). These tests pin each flag to the backends that accept it.
 
@@ -44,7 +45,8 @@ def test_af3_batch_gets_jax_cache_not_allow_resume():
         jax_cache_dir=_CACHE,
     )
     assert args["--jax_compilation_cache_dir"] == _CACHE
-    # the AF2-only flag must NOT be present for AF3 (it would ValueError at runtime)
+    # Not added for AF3: it resumes by default, and images up to AlphaPulldown 2.10.0
+    # reject the flag (ValueError at runtime).
     assert "--allow_resume" not in args
 
 

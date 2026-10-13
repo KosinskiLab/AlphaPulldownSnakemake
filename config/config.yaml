@@ -52,6 +52,9 @@ structure_inference_arguments:
   # 1.1-2x AlphaFold 3. Keep the quotes: YAML reads bare on/off as booleans.
   # README: "AlphaFold2 flags", "AlphaFold3 flags"
   # --fast_kernels: "auto"
+  # A rerun skips finished folds and resumes interrupted ones (AlphaFold3: images after
+  # 2.10.0). Set false to predict everything again.
+  # --allow_resume: false
 
 # SLURM only: replace "gpu" with your cluster's GPU partition. Several names can
 # be comma-separated. Desktop runs ignore these scheduler settings.

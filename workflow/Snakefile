@@ -353,7 +353,7 @@ _structure_inference_args = batch_inference_args(
     jax_cache_dir=JAX_CACHE_DIR,
 )
 # Parse-time guard: run_structure_prediction.py aborts the inference job on the first
-# flag its backend does not accept (e.g. --allow_resume on AF3). Warn here -- on the
+# flag its backend does not accept (e.g. --models_to_relax on AF3). Warn here -- on the
 # head node, in seconds -- instead of failing deep in a Slurm job. Uses the RAW
 # --fold_backend (so alphalink's --crosslinks is not mis-flagged); a warning only,
 # since the container is the source of truth (see unknown_inference_flags).

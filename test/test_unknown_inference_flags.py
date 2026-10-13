@@ -26,8 +26,8 @@ def test_af2_flags_all_accepted():
 
 
 def test_af2_only_flag_flagged_on_af3():
-    args = {"--fold_backend": "alphafold3", "--allow_resume": "true"}
-    assert unknown_inference_flags(args, "alphafold3") == ["allow_resume"]
+    args = {"--fold_backend": "alphafold3", "--models_to_relax": "best"}
+    assert unknown_inference_flags(args, "alphafold3") == ["models_to_relax"]
 
 
 def test_af3_flags_all_accepted():
@@ -45,7 +45,7 @@ def test_alphalink_accepts_crosslinks_and_af2_flags():
 
 def test_leading_dashes_and_equals_are_stripped():
     # keys may arrive with or without dashes, or with an inline value
-    assert unknown_inference_flags({"allow_resume": "true"}, "alphafold3") == ["allow_resume"]
+    assert unknown_inference_flags({"num_cycle": 3}, "alphafold3") == ["num_cycle"]
     assert unknown_inference_flags({"--bogus=1": "x"}, "alphafold3") == ["bogus"]
 
 
@@ -55,14 +55,14 @@ def test_unknown_backend_stays_silent():
 
 
 def test_backend_name_case_insensitive():
-    assert unknown_inference_flags({"--allow_resume": "t"}, "AlphaFold3") == ["allow_resume"]
+    assert unknown_inference_flags({"--num_cycle": 3}, "AlphaFold3") == ["num_cycle"]
 
 
 def test_order_preserved_and_deduped():
-    args = {"--allow_resume": "t", "--models_to_relax": "best", "--allow_resume2": "t"}
+    args = {"--num_cycle": 3, "--models_to_relax": "best", "--num_cycle2": "t"}
     # only genuinely-unknown AF3 flags, in order
     out = unknown_inference_flags(args, "alphafold3")
-    assert out == ["allow_resume", "models_to_relax", "allow_resume2"]
+    assert out == ["num_cycle", "models_to_relax", "num_cycle2"]
 
 
 if __name__ == "__main__":

@@ -818,8 +818,9 @@ def batch_inference_args(
     any it does not recognise (``ValueError: not supported by backend '<name>'``), so a
     flag must ONLY be added for the backend(s) that accept it:
 
-    * ``--allow_resume`` (AlphaFold2 only, ``batch_size > 1``): a crashed batch re-runs
-      all its folds, so resume the ones already done. AlphaFold3 rejects it.
+    * ``--allow_resume`` (AlphaFold2, ``batch_size > 1``): a crashed batch re-runs all
+      its folds, so resume the ones already done. Not added for AlphaFold3: its images
+      after AlphaPulldown 2.10.0 resume by default, and 2.10.0 and older reject the flag.
     * ``--jax_compilation_cache_dir`` (AlphaFold2 and AlphaFold3, every batch size): one
       on-disk JAX compile cache shared by every inference process. Without it every
       process compiles its models from scratch (AlphaFold3: once per token bucket, and
@@ -937,6 +938,8 @@ _AF3_INFERENCE_FLAGS = {
     "num_diffusion_samples", "num_seeds", "debug_templates", "debug_msas",
     "num_recycles", "save_embeddings", "save_distogram", "use_ap_style",
     "convert_to_modelcif",
+    # AlphaPulldown releases after 2.10.0; 2.10.0 and older reject it for AlphaFold3.
+    "allow_resume",
 }
 _ALPHALINK_EXTRA_FLAGS = {"crosslinks"}
 # fast_kernels (off|on|auto) is accepted for alphafold2 and alphafold3, not AlphaLink:
