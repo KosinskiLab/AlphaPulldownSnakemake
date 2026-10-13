@@ -9,6 +9,7 @@ last tests run the rendered unified-memory block against a fake nvidia-smi.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -54,7 +55,9 @@ def _write_config(tmp_path, backend, *, batch_size, inference_arguments, **extra
     return path, yaml.safe_load(text)
 
 
-def _dry_run(config_path):
+def _dry_run(config_path, *, expect_success=True, extra_args=(), touch=False):
+    # Touch mode schedules jobs to resolve input-dependent resources (<TBD> in
+    # Snakemake 9 dry runs), but never runs the feature/inference shell commands.
     snakemake = shutil.which("snakemake")
     if snakemake is None:
         pytest.skip("Snakemake executable is not available")
@@ -65,8 +68,9 @@ def _dry_run(config_path):
             "--configfile", str(config_path),
             "--cores", "1",
             "--rerun-triggers", "mtime",
-            "--dry-run",
+            "--touch" if touch else "--dry-run",
             "--printshellcmds",
+            *extra_args,
         ],
         cwd=_REPOSITORY,
         capture_output=True,
@@ -74,14 +78,32 @@ def _dry_run(config_path):
         timeout=120,
         env={**os.environ, "APPTAINER_BINDPATH": "", "SINGULARITY_BINDPATH": ""},
     )
-    assert completed.returncode == 0, completed.stdout[-2000:] + completed.stderr[-2000:]
+    if expect_success:
+        assert completed.returncode == 0, completed.stdout[-2000:] + completed.stderr[-2000:]
     return completed
+
+
+def _write_large_fold_config(tmp_path, *, tokens=4608, **extra):
+    """One precomputed AF3 fold: offline length resolution and concrete job resources."""
+    sample_sheet = tmp_path / "sample_sheet.csv"
+    sample_sheet.write_text("Large\n", encoding="utf-8")
+    features = tmp_path / "output" / "features"
+    features.mkdir(parents=True)
+    (features / "Large_af3_input.json").write_text(
+        json.dumps({"sequences": [{"protein": {"id": "A", "sequence": "A" * tokens}}]}),
+        encoding="utf-8",
+    )
+    config_path, _config = _write_config(
+        tmp_path, "alphafold3", batch_size=1, inference_arguments="",
+        input_files=[str(sample_sheet)], feature_directory=[str(features)], **extra,
+    )
+    return config_path
 
 
 def _structure_inference_jobs(stdout):
     """The printed structure_inference jobs, each from its header to the next job's."""
     jobs = re.split(r"^(?=(?:local)?rule \w+:$)", stdout, flags=re.MULTILINE)
-    return [job for job in jobs if job.startswith("rule structure_inference:")]
+    return [job for job in jobs if job.startswith(("rule structure_inference:", "localrule structure_inference:"))]
 
 
 def _invocations(job):
@@ -285,13 +307,127 @@ def test_auto_fraction_lets_the_job_spill_into_its_host_ram(tmp_path, backend):
         _assert_unified_memory_exported(variables, "3.2")
 
 
-def test_auto_fraction_margin_follows_structure_inference_ram_bytes(tmp_path):
-    block = _unified_memory_block(tmp_path, structure_inference_ram_bytes=20000)
+@pytest.mark.parametrize("backend", sorted(_BACKENDS))
+def test_auto_fraction_margin_is_independent_of_structure_inference_ram_bytes(tmp_path, backend):
+    block = _unified_memory_block(tmp_path, backend, structure_inference_ram_bytes=60000)
+
+    logged, variables = _run_unified_memory_block(tmp_path, block, "echo 46068\n", 31110)
+
+    expected = {"alphafold3": "1.502", "alphafold2": "1.328"}[backend]
+    assert logged == {"margin_mb": _BASE_RAM_MB[backend], "gpu_mb": 46068, "fraction": expected}
+    _assert_unified_memory_exported(variables, expected)
+
+
+def test_auto_fraction_uses_explicit_unified_memory_margin(tmp_path):
+    block = _unified_memory_block(tmp_path, structure_inference_unified_memory_margin_mb=20000)
 
     logged, variables = _run_unified_memory_block(tmp_path, block, "echo 81559\n", 16000)
 
     assert logged == {"margin_mb": 20000, "gpu_mb": 81559, "fraction": "1.000"}
     _assert_unified_memory_exported(variables, "1.000")
+
+
+@pytest.mark.parametrize(
+    "extra, excluded",
+    [
+        ({}, "small,medium"),
+        ({"structure_inference_ram_per_token_sq_mb": 0.001}, "small,medium"),
+        ({"structure_inference_vram_per_token_sq_mb": 0.002}, "small"),
+    ],
+)
+def test_gpu_routing_uses_its_own_coefficient(tmp_path, extra, excluded):
+    config_path = _write_large_fold_config(
+        tmp_path,
+        structure_inference_gpu_tiers=[
+            {"min_vram_gb": 24, "nodes": "small"},
+            {"min_vram_gb": 48, "nodes": "medium"},
+            {"min_vram_gb": 80, "nodes": "large"},
+        ],
+        **extra,
+    )
+
+    jobs = _structure_inference_jobs(_dry_run(config_path).stdout)
+
+    assert len(jobs) == 1
+    match = re.search(r"slurm_extra=--exclude=(\S+)", jobs[0])
+    assert match, jobs[0]
+    assert match.group(1).rstrip(",") == excluded
+
+
+@pytest.mark.parametrize("safety, inference_mb", [(None, 20068), (0.5, 8027)])
+def test_inference_safety_override_preserves_feature_memory(tmp_path, safety, inference_mb):
+    data = tmp_path / "output" / "data"
+    data.mkdir(parents=True)
+    for name in ("A", "B"):
+        (data / f"{name}.fasta").write_text(f">{name}\n" + "A" * 100 + "\n", encoding="utf-8")
+    extra = {} if safety is None else {"structure_inference_mem_safety_factor": safety}
+    config_path, _config = _write_config(
+        tmp_path, "alphafold2", batch_size=1, inference_arguments="",
+        feature_directory=[], **extra,
+    )
+
+    completed = _dry_run(config_path, touch=True)
+    stdout = completed.stdout + completed.stderr
+
+    feature_jobs = [job for job in re.split(r"^(?=(?:local)?rule \w+:$)", stdout, flags=re.MULTILINE)
+                    if job.startswith(("rule create_features:", "localrule create_features:"))]
+    assert len(feature_jobs) == 2
+    for job in feature_jobs:
+        assert re.search(r"\bmem_mb=(\d+)", job).group(1) == "95000"
+    for job in _structure_inference_jobs(stdout):
+        assert re.search(r"\bmem_mb=(\d+)", job).group(1) == str(inference_mb)
+
+
+def test_default_inference_retry_requests_fifty_percent_more_memory(tmp_path):
+    config_path = _write_large_fold_config(tmp_path)
+
+    completed = _dry_run(config_path, extra_args=("--attempt", "2"), touch=True)
+    stdout = completed.stdout + completed.stderr
+
+    jobs = _structure_inference_jobs(stdout)
+    assert len(jobs) == 1
+    assert re.search(r"\bmem_mb=(\d+)", jobs[0]).group(1) == "194159"
+
+
+@pytest.mark.parametrize(
+    "extra, fails",
+    [
+        ({}, True),
+        ({"structure_inference_ram_bytes": 8000, "mem_safety_factor": 1.25}, False),
+        ({"structure_inference_skip_memory_check": True}, False),
+        ({"structure_inference_gpu_tiers": []}, False),
+        ({"structure_inference_gpu_tiers": [], "structure_inference_min_gpu_vram_gb": 48}, True),
+        ({"structure_inference_unified_memory": False}, False),
+        ({"structure_inference_xla_mem_fraction": 2.4}, False),
+        ({"only_generate_features": True}, False),
+        ({"mem_safety_factor": 1.25, "structure_inference_mem_safety_factor": 0.2}, True),
+        ({"structure_inference_ram_bytes": 8000, "mem_safety_factor": 1.25, "max_mem_mb": 16000}, True),
+    ],
+)
+def test_startup_checks_unified_memory_budget_before_submission(tmp_path, extra, fails):
+    options = {
+        "structure_inference_ram_bytes": 60000,
+        "mem_safety_factor": 0.2,
+        "structure_inference_gpu_tiers": [{"min_vram_gb": 48, "nodes": "n48"}],
+        **extra,
+    }
+    # 4500 residues run at 4608 padded tokens; using the unpadded length understates demand.
+    config_path = _write_large_fold_config(tmp_path, tokens=4500, **options)
+
+    completed = _dry_run(config_path, expect_success=not fails)
+
+    log = completed.stdout + completed.stderr
+    if fails:
+        assert completed.returncode != 0
+        assert "1 inference batch(es)" in log
+        assert "tokens=4608" in log
+        assert "margin_mb=8000" in log
+        assert "need_mb=95551" in log
+        assert "structure_inference_unified_memory_margin_mb" in log
+        assert "structure_inference_vram_per_token_sq_mb" in log
+        assert "structure_inference_mem_safety_factor" in log
+    else:
+        assert "inference batch(es)" not in log
 
 
 def test_pinned_fraction_is_exported_as_written(tmp_path):

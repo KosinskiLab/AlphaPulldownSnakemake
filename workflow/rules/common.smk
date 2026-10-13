@@ -488,10 +488,25 @@ def required_gpu_vram_gb(
 ) -> float:
     """Estimated peak GPU VRAM (GB) for a complex of ``total_tokens``.
 
-    Uses the same O(N^2) coefficient as host-memory sizing as a proxy for on-device
-    peak demand, scaled by ``headroom`` (e.g. 0.8 tolerates ~20% spill to host).
+    Uses an independent O(N^2) coefficient for peak demand, scaled by ``headroom``
+    (e.g. 0.8 tolerates ~20% spill to host). Tier routing uses 1000 MB per GB.
     """
     return headroom * per_token_sq_mb * (max(int(total_tokens), 0) ** 2) / 1000.0
+
+
+def routed_tier_min_vram_gb(
+    total_tokens: int, tiers, per_token_sq_mb: float, headroom: float = 1.0
+):
+    """Minimum VRAM of the selected tier, or None when routing is not configured.
+
+    Use the smallest tier that fits the estimate, or the largest tier with host
+    spill if no tier fits. Entries without nodes do not participate in routing.
+    """
+    sizes = sorted(int(tier["min_vram_gb"]) for tier in tiers if tier and tier.get("nodes"))
+    if not sizes:
+        return None
+    required = required_gpu_vram_gb(total_tokens, per_token_sq_mb, headroom)
+    return next((size for size in sizes if size >= required), sizes[-1])
 
 
 def gpu_exclude_nodes(
@@ -518,13 +533,8 @@ def gpu_exclude_nodes(
     valid = [t for t in tiers if t and t.get("nodes")]
     if valid:
         ordered = sorted(valid, key=lambda t: int(t["min_vram_gb"]))
-        required = required_gpu_vram_gb(total_tokens, per_token_sq_mb, headroom)
-        chosen = len(ordered) - 1
-        for index, tier in enumerate(ordered):
-            if int(tier["min_vram_gb"]) >= required:
-                chosen = index
-                break
-        parts.extend(str(tier["nodes"]) for tier in ordered[:chosen])
+        minimum = routed_tier_min_vram_gb(total_tokens, valid, per_token_sq_mb, headroom)
+        parts.extend(str(tier["nodes"]) for tier in ordered if int(tier["min_vram_gb"]) < minimum)
     if extra_exclude:
         parts.append(str(extra_exclude))
     return ",".join(part for part in parts if part)
@@ -587,6 +597,48 @@ def estimate_inference_mem_mb(
     estimate = safety * (base_mb + per_token_sq_mb * (max(int(total_tokens), 0) ** 2))
     value = estimate * (scaling ** max(int(attempt) - 1, 0))
     return _cap_mem(value, cap_mb)
+
+
+def unified_memory_budget_shortfalls(
+    batches,
+    *,
+    tiers,
+    base_mb: float,
+    per_token_sq_mb: float,
+    safety: float,
+    margin_mb: int,
+    vram_per_token_sq_mb: float,
+    headroom: float = 1.0,
+    cap_mb: int = 0,
+    min_gpu_vram_gb: float | None = None,
+):
+    """Batches whose first-attempt auto budget falls below estimated total demand.
+
+    ``batches`` maps batch identities to the largest member's padded token count.
+    The caller uses the same tokens for scheduling. VRAM follows the routing
+    convention (1000 MB/GB); tier minima are estimates, not runtime measurements.
+    Without valid tiers, an explicit hardware lower bound is needed to check.
+    """
+    shortfalls = []
+    for batch, tokens in batches.items():
+        minimum = routed_tier_min_vram_gb(tokens, tiers, vram_per_token_sq_mb, headroom)
+        if minimum is None:
+            minimum = min_gpu_vram_gb
+        if minimum is None or float(minimum) <= 0:
+            continue
+        request = estimate_inference_mem_mb(
+            tokens, base_mb=base_mb, per_token_sq_mb=per_token_sq_mb,
+            safety=safety, scaling=1.0, attempt=1, cap_mb=cap_mb,
+        )
+        budget = float(minimum) * 1000 + max(0, request - margin_mb)
+        need = required_gpu_vram_gb(tokens, vram_per_token_sq_mb) * 1000
+        if budget < need:
+            shortfalls.append({
+                "batch": batch, "tokens": tokens, "request_mb": request,
+                "margin_mb": margin_mb, "min_vram_gb": float(minimum),
+                "budget_mb": budget, "need_mb": need,
+            })
+    return shortfalls
 
 
 # Backend-specific memory defaults. AlphaFold-Multimer (AF2) inference carries a
