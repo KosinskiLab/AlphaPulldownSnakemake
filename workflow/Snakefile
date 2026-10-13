@@ -552,6 +552,12 @@ LOCAL_MMSEQS2_CACHE = join(
     _MMSEQS2_GPU_FEATURE_CACHE_KEY,
 )
 if LOCAL_MMSEQS2.enabled:
+    if LOCAL_MMSEQS2_PROTEINS:
+        # Run even when the entire DAG is complete: no search job would execute
+        # AlphaPulldown's bundle provenance check on a cache hit.
+        validate_database_provenance(
+            LOCAL_MMSEQS2.databases, Path(LOCAL_MMSEQS2_MSA_CACHE)
+        )
     # Lengths only decide how the FIRST plan groups proteins -- the schedule keeps
     # every plan it ever made -- so resolve them as the length filter would, whether
     # or not the filter is on; an unknown length still runs alone.

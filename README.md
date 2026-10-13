@@ -786,11 +786,30 @@ is still required — these are additive, not a replacement. Memory and walltime
 stages are derived from the configured databases; the remaining knobs live in the
 ADVANCED section of `config/config.yaml`.
 
+**Database indexes must be readable on the submit host and workers.** Before
+reusing generated local-MMseqs2 features, every workflow parse checks each configured
+`.index` file size against a durable witness in the MSA cache. This also runs when
+all shards and features are complete. A missing index or changed size stops the
+workflow with an actionable error. Assign a **new database identifier** after a
+rebuild and rerun; the workflow then searches into a new cache namespace. It does
+not automatically overwrite the old cache. Workflows using only externally
+precomputed features do not need these indexes.
+
+This intentionally requires visibility on the submit host: databases available
+only on workers' local disks are unsupported. Staged copies at the configured
+paths must expose the same build on every host; changed timestamps alone are fine.
+The witness uses **index size, not a full database fingerprint**. A replacement
+with the same index size, or changed database data with an unchanged index, can
+escape detection, so immutable identifiers remain required. Older caches are
+checked against every completed bundle's database provenance once before the
+witness is saved, preventing adoption of a detectable mixture of old and new MSAs.
+
 **The GPU search reads every padded database in full**, about 375 GB for the four
 protein ones. On network storage a cold first attempt is bound by that read, not by the
 GPU: measured ~150 MB/s from NFS with the GPU idle, about an hour per shard, against
 minutes once the node's page cache holds the databases. If first attempts time out,
-raise `search_runtime_base_minutes` or stage the databases on local disk; the retry,
+raise `search_runtime_base_minutes` or stage copies on local disk with their indexes
+also visible on the submit host at the configured paths; the retry,
 with twice the walltime, recovers either way.
 
 **Depth is not identical to the native pipeline.** Measured on eight *B. subtilis*

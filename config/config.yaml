@@ -171,6 +171,9 @@ mmseqs2_features:
 
   # All four protein databases are required. Build them with makepaddedseqdb;
   # the database setup script can do this. max_sequences caps retained MSA depth.
+  # Their .index files must be readable on the submit host AND workers. Every
+  # parse checks index sizes, even for complete caches; a mismatch requires a new
+  # identifier. Same-size rebuilds can evade this check: IDs must stay immutable.
   # databases:
   #   uniref90: {path: /path/to/mmseqs/uniref90_gpu, identifier: uniref90-2022_05-padded, max_sequences: 10000}
   #   mgnify: {path: /path/to/mmseqs/mgnify_gpu, identifier: mgy_clusters-2022_05-padded, max_sequences: 5000}

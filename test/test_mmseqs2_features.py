@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import copy
 import hashlib
 import json
 import os
@@ -83,9 +84,14 @@ def _workflow_case(tmp_path, proteins, *, mmseqs_config=None, staged=True):
             # Planning resolves lengths through the same resolver as the length
             # filter, which falls back to the UniProt REST API. Tests stay offline.
             "length_filter_fetch_uniprot": False,
-            "mmseqs2_features": mmseqs_config or _config(),
+            "mmseqs2_features": copy.deepcopy(mmseqs_config or _config()),
         }
     )
+    for name, database in config["mmseqs2_features"].get("databases", {}).items():
+        database["path"] = str(tmp_path / "databases" / name)
+        index = Path(database["path"] + ".index")
+        index.parent.mkdir(exist_ok=True)
+        index.write_text("0\t0\t4\n")
     config["create_feature_arguments"]["--compress_features"] = False
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -805,6 +811,148 @@ def test_partial_msa_cache_schedules_shard_retry_and_cpu_finalization(tmp_path):
         / "alpha_af3_input.json"
     )
     assert str(cache_artifact) in completed.stdout
+
+
+def test_rebuilt_database_is_rejected_even_when_all_features_are_complete(tmp_path):
+    """A completed DAG must not hide a database rebuilt under the same identifier."""
+    config, config_path, output = _workflow_case(
+        tmp_path, ("alpha",),
+    )
+    databases = config["mmseqs2_features"]["databases"]
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(
+        config["mmseqs2_features"], data_pipeline="alphafold3",
+    )
+    msa_cache = (
+        output / "features" / ".mmseqs2_gpu_msa_cache"
+        / adapter.msa_cache_key(config["prediction_container"])
+    )
+    schedule = mmseqs2_gpu.schedule_msa_shards(
+        ("alpha",), {"alpha": 4}, msa_cache, max_sequences=2, max_residues=9,
+    )
+    database_provenance = [
+        {"name": name, "identifier": database["identifier"], "index_size": 6}
+        for name, database in databases.items()
+    ]
+    bundle = msa_cache / "alpha_mmseqs_msa.json"
+    bundle.write_text(json.dumps({
+        "sequence": "ACDE",
+        "provenance": {
+            "unpaired_databases": database_provenance[:3],
+            "paired_database": database_provenance[3],
+        },
+    }))
+    summary = schedule.completion_target("alpha")
+    summary.parent.mkdir()
+    summary.write_text(json.dumps(_completion_summary("alpha", bundle)))
+    feature = (
+        output / "features" / ".mmseqs2_gpu_cache"
+        / adapter.feature_cache_key(
+            config["create_feature_arguments"]["--max_template_date"],
+            config["prediction_container"],
+        ) / "alpha_af3_input.json"
+    )
+    feature.parent.mkdir(parents=True)
+    feature.write_text("{}")
+    (output / "features" / feature.name).symlink_to(feature)
+
+    unchanged = _run_snakemake(config_path, extra_args=("--dry-run",))
+    assert "Nothing to be done" in unchanged.stdout
+
+    Path(databases["uniref90"]["path"] + ".index").write_text("0\t0\t4\n1\t4\t4\n")
+    rebuilt = _run_snakemake(config_path, check=False, extra_args=("--dry-run",))
+    assert rebuilt.returncode != 0, rebuilt.stdout + rebuilt.stderr
+    assert "database changed" in rebuilt.stdout + rebuilt.stderr
+    assert "uniref90 (index size 6 -> 12)" in rebuilt.stdout + rebuilt.stderr
+    assert "new identifier" in rebuilt.stdout + rebuilt.stderr
+
+    databases["uniref90"]["identifier"] = "uniref90-rebuilt"
+    config_path.write_text(yaml.safe_dump(config))
+    recovery = _run_snakemake(config_path, extra_args=("--dry-run",))
+    assert "create_mmseqs2_gpu_msa_shard" in recovery.stdout
+    assert "finalize_mmseqs2_features" in recovery.stdout
+
+
+def test_database_witness_preserves_namespace_and_accepts_identical_copies(tmp_path):
+    config, _config_path, output = _workflow_case(tmp_path, ("alpha",))
+    raw = config["mmseqs2_features"]
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(raw, data_pipeline="af3")
+    key = adapter.msa_cache_key("image:v1")
+    cache = output / key
+    mmseqs2_gpu.validate_database_provenance(adapter.databases, cache)
+
+    index = Path(raw["databases"]["uniref90"]["path"] + ".index")
+    previous = index.stat()
+    copied = index.with_suffix(".copy")
+    copied.write_bytes(index.read_bytes())
+    os.utime(copied, ns=(previous.st_atime_ns, previous.st_mtime_ns + 1_000_000_000))
+    copied.replace(index)
+    mmseqs2_gpu.validate_database_provenance(adapter.databases, cache)
+
+    index.write_text("0\t0\t4\n1\t4\t4\n")
+    assert adapter.msa_cache_key("image:v1") == key
+    with pytest.raises(ValueError, match="database changed.*new identifier"):
+        mmseqs2_gpu.validate_database_provenance(adapter.databases, cache)
+
+    raw["databases"]["uniref90"]["identifier"] = "uniref90-rebuilt"
+    rebuilt = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(raw, data_pipeline="af3")
+    new_key = rebuilt.msa_cache_key("image:v1")
+    assert new_key != key
+    mmseqs2_gpu.validate_database_provenance(rebuilt.databases, output / new_key)
+
+
+def test_legacy_mixed_database_builds_are_rejected_before_adoption(tmp_path):
+    config, _config_path, output = _workflow_case(tmp_path, ("alpha", "beta"))
+    raw = config["mmseqs2_features"]
+    Path(raw["databases"]["uniref90"]["path"] + ".index").write_text("0\t0\t4\n1\t4\t4\n")
+    adapter = mmseqs2_gpu.LocalMmseqsFeatureConfig.from_mapping(raw, data_pipeline="af3")
+    cache = output / "cache"
+    schedule = mmseqs2_gpu.schedule_msa_shards(
+        ("alpha", "beta"), {"alpha": 4, "beta": 4}, cache,
+        max_sequences=1, max_residues=9,
+    )
+    # Newer beta matches today's database; alpha belongs to the old build. No
+    # single representative bundle can validate this pre-existing mixed cache.
+    for protein, index_size in (("beta", 12), ("alpha", 6)):
+        records = [
+            {"name": name, "identifier": database.identifier,
+             "index_size": index_size if name == "uniref90" else 6}
+            for name, database in adapter.databases.items()
+        ]
+        bundle = cache / f"{protein}_mmseqs_msa.json"
+        bundle.write_text(json.dumps({"provenance": {
+            "unpaired_databases": records[:3], "paired_database": records[3],
+        }}))
+        summary = schedule.completion_target(protein)
+        summary.parent.mkdir(exist_ok=True)
+        summary.write_text(json.dumps(_completion_summary(protein, bundle)))
+
+    with pytest.raises(ValueError, match="database changed.*alpha_mmseqs_msa.json"):
+        mmseqs2_gpu.validate_database_provenance(adapter.databases, cache)
+
+
+def test_missing_database_index_fails_before_scheduling_search(tmp_path):
+    config, config_path, _output = _workflow_case(tmp_path, ("alpha",))
+    Path(config["mmseqs2_features"]["databases"]["uniref90"]["path"] + ".index").unlink()
+    result = _run_snakemake(config_path, check=False, extra_args=("--dry-run",))
+
+    assert result.returncode != 0
+    assert "cannot validate uniref90 database index" in result.stdout + result.stderr
+    assert "submit host and workers" in result.stdout + result.stderr
+
+
+def test_precomputed_only_workflow_does_not_need_database_indexes(tmp_path):
+    config, config_path, _output = _workflow_case(tmp_path, ("alpha",))
+    for database in config["mmseqs2_features"]["databases"].values():
+        Path(database["path"] + ".index").unlink()
+    precomputed = tmp_path / "precomputed"
+    precomputed.mkdir()
+    (precomputed / "alpha_af3_input.json").write_text("{}")
+    config["feature_directory"] = [str(precomputed)]
+    config_path.write_text(yaml.safe_dump(config))
+    result = _run_snakemake(config_path, extra_args=("--dry-run",))
+
+    assert "symlink_features" in result.stdout
+    assert "create_mmseqs2_gpu_msa_shard" not in result.stdout
 
 
 def test_alphafold2_run_schedules_the_shared_search_and_pickle_finalization(tmp_path):

@@ -14,6 +14,7 @@ import logging
 import math
 from pathlib import Path
 import shlex
+import tempfile
 from typing import Any, Mapping, Sequence
 
 
@@ -352,6 +353,121 @@ def schedule_feature_shards(
 
 
 _SHARD_REGISTRY = ".shard_registry.json"
+_DATABASE_WITNESS = ".database_provenance.json"
+
+
+def validate_database_provenance(
+    databases: Mapping[str, MmseqsDatabaseConfig], msa_cache_dir: Path
+) -> None:
+    """Reject detectable in-place rebuilds before completed shards bypass search.
+
+    Index size is the same inexpensive witness AlphaPulldown stores in bundles,
+    not a content hash. Persist it separately from the cache key: every parse must
+    use the same namespace, including a SLURM job parsing on another host. Missing
+    indexes therefore fail closed, rather than substituting a host-dependent zero.
+    """
+    current = {}
+    for name, database in sorted(databases.items()):
+        index = Path(f"{database.path}.index")
+        try:
+            with index.open("rb") as handle:
+                size = os.fstat(handle.fileno()).st_size
+        except OSError as error:
+            raise ValueError(
+                f"Local MMseqs2 cannot validate {name} database index {index}: "
+                "indexes must be readable on both the submit host and workers; "
+                "node-local-only databases are not supported."
+            ) from error
+        current[name] = {"identifier": database.identifier, "index_size": size}
+
+    witness = msa_cache_dir / _DATABASE_WITNESS
+    expected = {"schemaVersion": 1, "databases": current}
+    remediation = "Assign a new identifier to the rebuilt database and rerun."
+
+    def check_witness() -> None:
+        try:
+            stored = json.loads(witness.read_text())
+        except (OSError, ValueError) as error:
+            raise ValueError(
+                f"Cannot read Local MMseqs2 database provenance {witness}. {remediation}"
+            ) from error
+        if stored != expected:
+            previous = stored.get("databases", {}) if isinstance(stored, Mapping) else {}
+            changes = []
+            for name, observed in current.items():
+                cached = previous.get(name) if isinstance(previous, Mapping) else None
+                if cached != observed:
+                    size = cached.get("index_size", "unknown") if isinstance(cached, Mapping) else "unknown"
+                    changes.append(f"{name} (index size {size} -> {observed['index_size']})")
+            detail = ", ".join(changes) or "invalid saved provenance"
+            raise ValueError(
+                f"Local MMseqs2 database changed: {detail}; cache {msa_cache_dir}. "
+                f"{remediation}"
+            )
+
+    if witness.exists():
+        check_witness()
+        return
+
+    # Adopt an older cache only after checking every complete bundle, not just
+    # one representative: an old/new mixture is exactly the failure being fixed.
+    checked = set()
+    for summary in (msa_cache_dir / ".completed").glob("*.json"):
+        try:
+            payload = json.loads(summary.read_text())
+            names = tuple(record["name"] for record in payload["artifacts"])
+            if not all(isinstance(name, str) for name in names):
+                continue
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        shard = FeatureShard(summary.stem, names, 0)
+        if not validate_shard_summary(summary, shard, msa_cache_dir)[0]:
+            # Missing/corrupt bundles already schedule repair and are not reused.
+            continue
+        for name in names:
+            if name in checked:
+                continue
+            bundle = msa_cache_dir / f"{name}_mmseqs_msa.json"
+            try:
+                payload = json.loads(bundle.read_text())
+                provenance = payload["provenance"]
+                records = list(provenance["unpaired_databases"])
+                if payload.get("moleculeType", "protein") == "protein":
+                    records.append(provenance["paired_database"])
+                    required = _DATABASE_NAMES
+                else:
+                    required = _RNA_DATABASE_NAMES
+                recorded = {
+                    record["name"]: {
+                        "identifier": record["identifier"],
+                        "index_size": record["index_size"],
+                    }
+                    for record in records
+                }
+                if recorded != {name: current[name] for name in required}:
+                    raise ValueError("database witness mismatch")
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                raise ValueError(
+                    f"Local MMseqs2 database changed or lacks provenance in "
+                    f"completed bundle {bundle}. {remediation}"
+                ) from error
+            checked.add(name)
+
+    # Publish once, atomically. A competing parse must check the winner's witness,
+    # never replace it with the sizes visible on its own host.
+    msa_cache_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        dir=msa_cache_dir, prefix=f".{witness.name}."
+    ) as directory:
+        # Ordinary file creation honors the same umask as the shard registry;
+        # NamedTemporaryFile would leave the published witness owner-only (0600).
+        temporary = Path(directory) / "witness.json"
+        temporary.write_text(json.dumps(expected, indent=1))
+        try:
+            os.link(temporary, witness)
+        except FileExistsError:
+            pass
+    check_witness()
 
 
 @dataclass(frozen=True)
