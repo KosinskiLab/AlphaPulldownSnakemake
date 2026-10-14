@@ -820,7 +820,7 @@ def batch_inference_args(
 
     * ``--allow_resume`` (AlphaFold2, ``batch_size > 1``): a crashed batch re-runs all
       its folds, so resume the ones already done. Not added for AlphaFold3: its images
-      after AlphaPulldown 2.10.0 resume by default, and 2.10.0 and older reject the flag.
+      from AlphaPulldown 2.11.0 resume by default, and 2.10.0 and older reject the flag.
     * ``--jax_compilation_cache_dir`` (AlphaFold2 and AlphaFold3, every batch size): one
       on-disk JAX compile cache shared by every inference process. Without it every
       process compiles its models from scratch (AlphaFold3: once per token bucket, and
@@ -905,53 +905,124 @@ def prediction_batch_id(folds: Iterable[str]) -> str:
 
 # Inference flags each backend accepts. Names are WITHOUT the leading ``--``.
 #
-# SOURCE OF TRUTH: ``alphapulldown/prediction/inference_flags.py`` in AlphaPulldown.
-# This is a copy because the workflow parses on the head node, where AlphaPulldown is
-# not importable: it only lives inside the prediction container. The copy exists solely
-# to turn a queue round-trip into a parse-time WARNING; the container still hard-errors,
-# so drift costs a spurious warning, never a blocked run.
-#
-# It HAS drifted before (``convert_to_modelcif`` was missing from the AF3 set and users
-# were told a valid flag was unsupported), so ``test_inference_flag_tables`` pins these
-# sets, and compares them with AlphaPulldown's ``FLAGS_BY_BACKEND`` wherever AlphaPulldown
-# is importable. When a new AlphaPulldown release changes them, update both the sets and
-# that test.
-_COMMON_INFERENCE_FLAGS = {
-    "input", "output_directory", "data_directory", "features_directory",
-    "protein_delimiter", "fold_backend", "random_seed", "storage_mode",
-}
-_AF2_LIKE_INFERENCE_FLAGS = {
-    # AF2 inference is JAX-compiled, so a persistent compile cache helps it as much as
-    # AF3; newer prediction containers accept the flag.
-    "jax_compilation_cache_dir",
-    "compress_result_pickles", "remove_result_pickles", "models_to_relax",
-    "relax_best_score_threshold", "remove_keys_from_pickles", "convert_to_modelcif",
-    "allow_resume", "num_cycle", "num_predictions_per_model", "pair_msa",
-    "save_features_for_multimeric_object", "skip_templates", "msa_depth_scan",
-    "multimeric_template", "model_names", "msa_depth", "description_file",
-    "path_to_mmt", "threshold_clashes", "hb_allowance", "plddt_threshold",
-    "desired_num_res", "desired_num_msa", "benchmark", "model_preset",
-    "use_ap_style", "use_gpu_relax", "dropout",
-}
-_AF3_INFERENCE_FLAGS = {
-    "jax_compilation_cache_dir", "buckets", "flash_attention_implementation",
-    "num_diffusion_samples", "num_seeds", "debug_templates", "debug_msas",
-    "num_recycles", "save_embeddings", "save_distogram", "use_ap_style",
-    "convert_to_modelcif",
-    # AlphaPulldown releases after 2.10.0; 2.10.0 and older reject it for AlphaFold3.
-    "allow_resume",
-}
-_ALPHALINK_EXTRA_FLAGS = {"crosslinks"}
-# fast_kernels (off|on|auto) is accepted for alphafold2 and alphafold3, not AlphaLink:
-# ColabFold's fused AF2-Multimer kernels, and the AF3 fork's fused triangle kernels.
-# One shared set, as AlphaPulldown's FAST_KERNEL_FLAGS.
-_FAST_KERNEL_FLAGS = {"fast_kernels"}
-
+# Generated from AlphaPulldown's ``FLAGS_BY_BACKEND`` (alphapulldown/prediction/
+# inference_flags.py) at the commit the block records. The workflow parses on the head
+# node, where AlphaPulldown is not importable: it only lives inside the prediction
+# container. These sets only turn a queue round-trip into a parse-time WARNING; the
+# container still hard-errors, so stale sets cost a spurious warning, never a blocked
+# run. Regenerate them with tools/generate_inference_flag_tables.py, which also says how
+# to update for a new release; CI regenerates from the recorded commit and fails on any
+# difference.
+# BEGIN GENERATED: inference flags (tools/generate_inference_flag_tables.py; do not edit by hand)
+# Source: KosinskiLab/AlphaPulldown@228c5eed6c7066467e46b87fb3054cc2c2e73ae1
+#         alphapulldown/prediction/inference_flags.py, FLAGS_BY_BACKEND
 ALLOWED_INFERENCE_FLAGS = {
-    "alphafold2": _COMMON_INFERENCE_FLAGS | _AF2_LIKE_INFERENCE_FLAGS | _FAST_KERNEL_FLAGS,
-    "alphalink": _COMMON_INFERENCE_FLAGS | _AF2_LIKE_INFERENCE_FLAGS | _ALPHALINK_EXTRA_FLAGS,
-    "alphafold3": _COMMON_INFERENCE_FLAGS | _AF3_INFERENCE_FLAGS | _FAST_KERNEL_FLAGS,
+    "alphafold2": frozenset({
+        "allow_resume",
+        "benchmark",
+        "compress_result_pickles",
+        "convert_to_modelcif",
+        "data_directory",
+        "description_file",
+        "desired_num_msa",
+        "desired_num_res",
+        "dropout",
+        "fast_kernels",
+        "features_directory",
+        "fold_backend",
+        "hb_allowance",
+        "input",
+        "jax_compilation_cache_dir",
+        "model_names",
+        "model_preset",
+        "models_to_relax",
+        "msa_depth",
+        "msa_depth_scan",
+        "multimeric_template",
+        "num_cycle",
+        "num_predictions_per_model",
+        "output_directory",
+        "pair_msa",
+        "path_to_mmt",
+        "plddt_threshold",
+        "protein_delimiter",
+        "random_seed",
+        "relax_best_score_threshold",
+        "remove_keys_from_pickles",
+        "remove_result_pickles",
+        "save_features_for_multimeric_object",
+        "skip_templates",
+        "storage_mode",
+        "threshold_clashes",
+        "use_ap_style",
+        "use_gpu_relax",
+    }),
+    "alphafold3": frozenset({
+        "allow_resume",
+        "buckets",
+        "convert_to_modelcif",
+        "data_directory",
+        "debug_msas",
+        "debug_templates",
+        "fast_kernels",
+        "features_directory",
+        "flash_attention_implementation",
+        "fold_backend",
+        "input",
+        "jax_compilation_cache_dir",
+        "num_diffusion_samples",
+        "num_recycles",
+        "num_seeds",
+        "output_directory",
+        "protein_delimiter",
+        "random_seed",
+        "save_distogram",
+        "save_embeddings",
+        "storage_mode",
+        "use_ap_style",
+    }),
+    "alphalink": frozenset({
+        "allow_resume",
+        "benchmark",
+        "compress_result_pickles",
+        "convert_to_modelcif",
+        "crosslinks",
+        "data_directory",
+        "description_file",
+        "desired_num_msa",
+        "desired_num_res",
+        "dropout",
+        "features_directory",
+        "fold_backend",
+        "hb_allowance",
+        "input",
+        "jax_compilation_cache_dir",
+        "model_names",
+        "model_preset",
+        "models_to_relax",
+        "msa_depth",
+        "msa_depth_scan",
+        "multimeric_template",
+        "num_cycle",
+        "num_predictions_per_model",
+        "output_directory",
+        "pair_msa",
+        "path_to_mmt",
+        "plddt_threshold",
+        "protein_delimiter",
+        "random_seed",
+        "relax_best_score_threshold",
+        "remove_keys_from_pickles",
+        "remove_result_pickles",
+        "save_features_for_multimeric_object",
+        "skip_templates",
+        "storage_mode",
+        "threshold_clashes",
+        "use_ap_style",
+        "use_gpu_relax",
+    }),
 }
+# END GENERATED: inference flags
 
 
 def unknown_inference_flags(args, backend: str) -> list:

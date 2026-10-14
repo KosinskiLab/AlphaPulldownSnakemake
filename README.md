@@ -693,8 +693,8 @@ batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
   share a shape, whereas for AlphaFold3 the point is queueing once instead of once
   per fold.
 - For AlphaFold2 batches, `--allow_resume` is enabled automatically, so if a job is
-  interrupted a rerun skips folds whose outputs already exist (AlphaFold3 images after
-  2.10.0 resume by default as well, keeping finished folds and seeds).
+  interrupted a rerun skips folds whose outputs already exist (AlphaFold3 images from
+  2.11.0 resume by default as well, keeping finished folds and seeds).
 - Analysis and reports are unaffected — `alphajudge` still runs per fold (one
   `interfaces.csv` + `report.pdf` each) and the recursive summary still aggregates them.
 - **Trade-off:** a batch is one SLURM job, so a failure reruns the whole batch (minus the
