@@ -26,9 +26,9 @@ databases_directory: /path/to/alphafold/databases
 backend_weights_directory: /path/to/alphafold3/weights/
 
 # These defaults run AlphaFold 3. To use AlphaFold 2, change the image to
-# alphafold2:2.10.0, both backend flags below to alphafold2, and the paths above.
+# alphafold2:2.11.0, both backend flags below to alphafold2, and the paths above.
 # A local .sif image also works. README: "Changing folding backends"
-prediction_container: "docker://kosinskilab/alphafold3:2.10.0"
+prediction_container: "docker://kosinskilab/alphafold3:2.11.0"
 
 # Features are the sequence alignments and templates used for prediction.
 # Keep any additional feature flags inside this block.
