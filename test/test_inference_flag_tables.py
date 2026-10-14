@@ -1,58 +1,189 @@
-"""Pin the copied inference flag tables.
+"""The inference flag tables in common.smk, generated from AlphaPulldown.
 
-These mirror ``alphapulldown/prediction/inference_flags.py``. The workflow parses on the
-head node, where AlphaPulldown is not installed: it only exists inside the prediction
-container, and CI does not install it either. So the recorded sets below make a change
-to the copy deliberate and record what the original said when it was last checked, and
-where AlphaPulldown is importable (a development environment, or ``PYTHONPATH`` pointing
-at a checkout) the copy is also compared with the original itself.
+The workflow parses on the head node, where AlphaPulldown is not installed, so
+``ALLOWED_INFERENCE_FLAGS`` is a generated copy of AlphaPulldown's ``FLAGS_BY_BACKEND``
+that records the commit it came from (tools/generate_inference_flag_tables.py). These
+tests pin the generator's contract on a throwaway checkout; CI's
+``inference-flag-tables`` job regenerates the block from the recorded AlphaPulldown
+commit itself and fails on any difference.
 """
 
-import importlib
+import os
+import re
+import shutil
+import subprocess
+import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import pytest
 
-_COMMON = SourceFileLoader(
-    "common_flag_tables", str(Path(__file__).resolve().parents[1] / "workflow/rules/common.smk")
-).load_module()
+REPOSITORY = Path(__file__).resolve().parents[1]
+COMMON_SMK = REPOSITORY / "workflow" / "rules" / "common.smk"
+GENERATOR = REPOSITORY / "tools" / "generate_inference_flag_tables.py"
 
-# Copied from alphapulldown/prediction/inference_flags.py in AlphaPulldown.
-EXPECTED_COMMON = {
-    "input", "output_directory", "data_directory", "features_directory",
-    "protein_delimiter", "fold_backend", "random_seed", "storage_mode",
+_COMMON = SourceFileLoader("common_flag_tables", str(COMMON_SMK)).load_module()
+
+# The AlphaPulldown the shipped default containers run (2.10.0).
+SHIPPED_ALPHAPULLDOWN_COMMIT = "6e7f98695f576cf7ec087dbaef39b1f39652054e"
+
+# Shaped like AlphaPulldown's inference_flags.py: named sets, unions, an annotated dict.
+_SOURCE = '''
+from typing import Mapping
+
+COMMON_FLAGS = frozenset({"input", "fold_backend"})
+AF2_LIKE_FLAGS = frozenset({"num_cycle", "allow_resume"})
+AF3_FLAGS = frozenset({"buckets", "num_seeds"})
+FAST_KERNEL_FLAGS = frozenset({"fast_kernels"})
+
+FLAGS_BY_BACKEND: Mapping[str, frozenset] = {
+    "alphafold2": COMMON_FLAGS | AF2_LIKE_FLAGS | FAST_KERNEL_FLAGS,
+    "alphafold3": COMMON_FLAGS | AF3_FLAGS | FAST_KERNEL_FLAGS,
 }
-EXPECTED_AF2_LIKE = {
-    "compress_result_pickles", "remove_result_pickles", "models_to_relax",
-    "relax_best_score_threshold", "remove_keys_from_pickles",
-    "convert_to_modelcif", "allow_resume",
-    "num_cycle", "num_predictions_per_model", "pair_msa",
-    "save_features_for_multimeric_object", "skip_templates",
-    "msa_depth_scan", "multimeric_template", "model_names", "msa_depth",
-    "description_file", "path_to_mmt", "threshold_clashes", "hb_allowance",
-    "plddt_threshold", "desired_num_res", "desired_num_msa",
-    "benchmark", "model_preset", "use_ap_style", "use_gpu_relax", "dropout",
-    "jax_compilation_cache_dir",
-}
-EXPECTED_AF3 = {
-    "jax_compilation_cache_dir", "buckets", "flash_attention_implementation",
-    "num_diffusion_samples", "num_seeds", "debug_templates", "debug_msas",
-    "num_recycles", "save_embeddings", "save_distogram", "use_ap_style",
-    "convert_to_modelcif",
-}
+'''
 
 
-def test_tables_match_the_recorded_alphapulldown_sets():
-    assert _COMMON._COMMON_INFERENCE_FLAGS == EXPECTED_COMMON
-    assert _COMMON._AF2_LIKE_INFERENCE_FLAGS == EXPECTED_AF2_LIKE
-    assert _COMMON._AF3_INFERENCE_FLAGS == EXPECTED_AF3
-    assert _COMMON._ALPHALINK_EXTRA_FLAGS == {"crosslinks"}
-    assert _COMMON._FAST_KERNEL_FLAGS == {"fast_kernels"}
+def _git(checkout, *args):
+    return subprocess.run(
+        ["git", "-C", str(checkout), *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _commit(checkout, message):
+    _git(checkout, "add", "-A")
+    _git(
+        checkout, "-c", "user.name=test", "-c", "user.email=test@example.org",
+        "commit", "-q", "-m", message,
+    )
+
+
+def _checkout(tmp_path, source=_SOURCE):
+    """A committed AlphaPulldown-shaped checkout; returns it and its commit."""
+    checkout = tmp_path / "alphapulldown-checkout"
+    module = checkout / "alphapulldown" / "prediction" / "inference_flags.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(source, encoding="utf-8")
+    _git(checkout.parent, "init", "-q", str(checkout))
+    _commit(checkout, "flags")
+    return checkout, _git(checkout, "rev-parse", "HEAD")
+
+
+def _generate(checkout, target, *flags):
+    return subprocess.run(
+        [sys.executable, str(GENERATOR), "--source-checkout", str(checkout),
+         "--target", str(target), *flags],
+        capture_output=True, text=True,
+    )
+
+
+@pytest.fixture
+def target(tmp_path):
+    """A copy of common.smk to generate into."""
+    copy = tmp_path / "common.smk"
+    shutil.copyfile(COMMON_SMK, copy)
+    return copy
+
+
+def _tables(path):
+    module = SourceFileLoader(f"tables_{abs(hash(str(path)))}", str(path)).load_module()
+    return module.ALLOWED_INFERENCE_FLAGS
+
+
+def test_common_smk_records_the_alphapulldown_commit_its_tables_came_from():
+    result = subprocess.run(
+        [sys.executable, str(GENERATOR), "--print-recorded-commit"],
+        capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.strip() == SHIPPED_ALPHAPULLDOWN_COMMIT
+    assert set(_COMMON.ALLOWED_INFERENCE_FLAGS) == {"alphafold2", "alphafold3", "alphalink"}
+
+
+def test_generation_is_deterministic_and_check_writes_nothing(tmp_path, target):
+    checkout, commit = _checkout(tmp_path)
+
+    assert _generate(checkout, target).returncode == 0
+    generated = target.read_text()
+    assert _generate(checkout, target).returncode == 0
+    assert target.read_text() == generated
+    mtime = os.stat(target).st_mtime_ns
+
+    check = _generate(checkout, target, "--check")
+    assert check.returncode == 0, check.stderr
+    assert os.stat(target).st_mtime_ns == mtime and target.read_text() == generated
+
+    assert f"KosinskiLab/AlphaPulldown@{commit}" in generated
+    assert _tables(target) == {
+        "alphafold2": {"input", "fold_backend", "num_cycle", "allow_resume", "fast_kernels"},
+        "alphafold3": {"input", "fold_backend", "buckets", "num_seeds", "fast_kernels"},
+    }
+    # Sorted, so a regenerated block differs only where a flag did.
+    block = generated[generated.index("ALLOWED_INFERENCE_FLAGS = {"):]
+    alphafold2 = re.findall(r'^        "(\w+)",$', block.split('"alphafold3"')[0], re.MULTILINE)
+    assert alphafold2 == sorted(alphafold2)
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        ('frozenset({"num_cycle", "allow_resume"})', 'frozenset({"num_cycle"})'),
+        ('"buckets", "num_seeds"', '"buckets", "num_seed"'),
+    ],
+    ids=["removed", "renamed"],
+)
+def test_check_fails_when_alphapulldown_changes_a_flag(tmp_path, target, edit):
+    checkout, _ = _checkout(tmp_path)
+    assert _generate(checkout, target).returncode == 0
+
+    module = checkout / "alphapulldown" / "prediction" / "inference_flags.py"
+    module.write_text(module.read_text().replace(*edit))
+    _commit(checkout, "change a flag")
+    before = target.read_text()
+
+    check = _generate(checkout, target, "--check")
+
+    assert check.returncode == 1
+    assert target.read_text() == before
+    assert "differs from KosinskiLab/AlphaPulldown@" in check.stderr
+
+
+def test_an_uncommitted_source_is_refused(tmp_path, target):
+    checkout, _ = _checkout(tmp_path)
+    module = checkout / "alphapulldown" / "prediction" / "inference_flags.py"
+    module.write_text(module.read_text().replace("num_seeds", "num_samples"))
+
+    result = _generate(checkout, target, "--check")
+
+    assert result.returncode == 2
+    assert "uncommitted changes" in result.stderr
+
+
+@pytest.mark.parametrize("problem", ["no checkout", "no FLAGS_BY_BACKEND"])
+def test_a_missing_source_fails_rather_than_skips(tmp_path, target, problem):
+    if problem == "no checkout":
+        checkout = tmp_path / "missing"
+    else:
+        checkout, _ = _checkout(tmp_path, source="COMMON_FLAGS = frozenset({'input'})\n")
+
+    result = _generate(checkout, target, "--check")
+
+    assert result.returncode == 2
+    assert result.stderr.startswith("error:")
+
+
+def test_the_tables_need_no_alphapulldown_to_parse():
+    """The head node parses common.smk without AlphaPulldown installed."""
+    probe = (
+        "import sys\n"
+        "from importlib.machinery import SourceFileLoader\n"
+        f"module = SourceFileLoader('common', {str(COMMON_SMK)!r}).load_module()\n"
+        "assert 'alphapulldown' not in sys.modules, 'common.smk imported AlphaPulldown'\n"
+        "assert module.unknown_inference_flags({'--buckets': 1}, 'alphafold3') == []\n"
+    )
+    subprocess.run([sys.executable, "-c", probe], check=True)
 
 
 def test_convert_to_modelcif_is_valid_on_both_backends():
-    """The drift that made this test necessary."""
+    """The drift that made the tables a tested copy."""
     for backend in ("alphafold2", "alphafold3"):
         args = {"--fold_backend": backend, "--convert_to_modelcif": True}
         assert _COMMON.unknown_inference_flags(args, backend) == []
@@ -70,44 +201,3 @@ def test_jax_compile_cache_is_valid_on_both_backends():
     for backend in ("alphafold2", "alphafold3"):
         args = {"--fold_backend": backend, "--jax_compilation_cache_dir": "/cache"}
         assert _COMMON.unknown_inference_flags(args, backend) == []
-
-
-def _alphapulldown_inference_flags():
-    """AlphaPulldown's flag module, wherever this release keeps it; skip if absent."""
-    errors = []
-    # alphapulldown.prediction since 2.9.1, the package root in 2.8.0.
-    for name in ("alphapulldown.prediction.inference_flags", "alphapulldown.inference_flags"):
-        try:
-            return importlib.import_module(name)
-        except ImportError as error:
-            errors.append(f"{name}: {error}")
-    pytest.skip("AlphaPulldown's inference_flags is not importable (" + "; ".join(errors) + ")")
-
-
-def test_tables_match_alphapulldown_when_importable():
-    """The per-backend allow sets equal AlphaPulldown's FLAGS_BY_BACKEND.
-
-    Compared per backend rather than per named subset, so AlphaPulldown can regroup its
-    sets (AF2_EXTRA_FLAGS became FAST_KERNEL_FLAGS) without this test noticing; only a
-    change in what a backend accepts is drift.
-    """
-    module = _alphapulldown_inference_flags()
-    theirs = {backend: set(flags) for backend, flags in module.FLAGS_BY_BACKEND.items()}
-    ours = _COMMON.ALLOWED_INFERENCE_FLAGS
-    package = importlib.import_module(module.__name__.split(".")[0])
-    source = f"AlphaPulldown {getattr(package, '__version__', '?')} ({module.__file__})"
-
-    assert set(ours) == set(theirs), f"backends differ from {source}"
-    drift = {
-        backend: {
-            "only in common.smk": sorted(ours[backend] - theirs[backend]),
-            "only in AlphaPulldown": sorted(theirs[backend] - ours[backend]),
-        }
-        for backend in sorted(ours)
-        if ours[backend] != theirs[backend]
-    }
-    assert not drift, (
-        f"common.smk's inference flag tables have drifted from {source}: {drift}. "
-        "Update the sets in common.smk and the recorded sets in this file, or test "
-        "against the AlphaPulldown this workflow release targets."
-    )

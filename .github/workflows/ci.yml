@@ -36,3 +36,26 @@ jobs:
         # optional SLURM-plugin integration test self-skips when unavailable.
         run: python -m pytest -q test
 
+
+  inference-flag-tables:
+    # The flag tables in common.smk are generated from AlphaPulldown; regenerate them
+    # from the commit they record and fail on any difference. Never skips: a source that
+    # cannot be read fails the job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Read the AlphaPulldown commit the tables record
+        id: recorded
+        run: echo "commit=$(python tools/generate_inference_flag_tables.py --print-recorded-commit)" >> "$GITHUB_OUTPUT"
+      - name: Check out that AlphaPulldown commit
+        uses: actions/checkout@v4
+        with:
+          repository: KosinskiLab/AlphaPulldown
+          ref: ${{ steps.recorded.outputs.commit }}
+          path: alphapulldown-source
+          submodules: false
+      - name: Regenerate and compare
+        run: python tools/generate_inference_flag_tables.py --source-checkout alphapulldown-source --check
