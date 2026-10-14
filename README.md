@@ -693,8 +693,8 @@ batch_max_tokens: 0    # optional cap on summed residues per batch (0 = no cap)
   share a shape, whereas for AlphaFold3 the point is queueing once instead of once
   per fold.
 - For AlphaFold2 batches, `--allow_resume` is enabled automatically, so if a job is
-  interrupted a rerun skips folds whose outputs already exist (AlphaFold3 does not accept
-  that flag, so its batches recompute the unfinished folds on rerun).
+  interrupted a rerun skips folds whose outputs already exist (AlphaFold3 images from
+  2.11.0 resume by default as well, keeping finished folds and seeds).
 - Analysis and reports are unaffected — `alphajudge` still runs per fold (one
   `interfaces.csv` + `report.pdf` each) and the recursive summary still aggregates them.
 - **Trade-off:** a batch is one SLURM job, so a failure reruns the whole batch (minus the
@@ -861,7 +861,7 @@ You can pass backend CLI switches through `structure_inference_arguments`. Commo
 > against the selected `--fold_backend` and aborts the job with
 > `ValueError: The following flags are not supported by backend '<name>'` if you pass one the
 > backend does not accept. Only use flags from **your** backend's list below — e.g.
-> `--allow_resume` is AlphaFold2-only. A single wrong flag fails the job immediately
+> `--models_to_relax` is AlphaFold2-only. A single wrong flag fails the job immediately
 > (before any prediction runs).
 >
 > When **batching** (`batch_size > 1`) the workflow adds what each backend needs —

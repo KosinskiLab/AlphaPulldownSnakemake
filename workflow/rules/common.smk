@@ -818,8 +818,9 @@ def batch_inference_args(
     any it does not recognise (``ValueError: not supported by backend '<name>'``), so a
     flag must ONLY be added for the backend(s) that accept it:
 
-    * ``--allow_resume`` (AlphaFold2 only, ``batch_size > 1``): a crashed batch re-runs
-      all its folds, so resume the ones already done. AlphaFold3 rejects it.
+    * ``--allow_resume`` (AlphaFold2, ``batch_size > 1``): a crashed batch re-runs all
+      its folds, so resume the ones already done. Not added for AlphaFold3: its images
+      from AlphaPulldown 2.11.0 resume by default, and 2.10.0 and older reject the flag.
     * ``--jax_compilation_cache_dir`` (AlphaFold2 and AlphaFold3, every batch size): one
       on-disk JAX compile cache shared by every inference process. Without it every
       process compiles its models from scratch (AlphaFold3: once per token bucket, and
@@ -913,7 +914,7 @@ def prediction_batch_id(folds: Iterable[str]) -> str:
 # to update for a new release; CI regenerates from the recorded commit and fails on any
 # difference.
 # BEGIN GENERATED: inference flags (tools/generate_inference_flag_tables.py; do not edit by hand)
-# Source: KosinskiLab/AlphaPulldown@6e7f98695f576cf7ec087dbaef39b1f39652054e
+# Source: KosinskiLab/AlphaPulldown@228c5eed6c7066467e46b87fb3054cc2c2e73ae1
 #         alphapulldown/prediction/inference_flags.py, FLAGS_BY_BACKEND
 ALLOWED_INFERENCE_FLAGS = {
     "alphafold2": frozenset({
@@ -957,6 +958,7 @@ ALLOWED_INFERENCE_FLAGS = {
         "use_gpu_relax",
     }),
     "alphafold3": frozenset({
+        "allow_resume",
         "buckets",
         "convert_to_modelcif",
         "data_directory",

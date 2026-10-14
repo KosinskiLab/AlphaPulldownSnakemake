@@ -24,8 +24,8 @@ GENERATOR = REPOSITORY / "tools" / "generate_inference_flag_tables.py"
 
 _COMMON = SourceFileLoader("common_flag_tables", str(COMMON_SMK)).load_module()
 
-# The AlphaPulldown the shipped default containers run (2.10.0).
-SHIPPED_ALPHAPULLDOWN_COMMIT = "6e7f98695f576cf7ec087dbaef39b1f39652054e"
+# The AlphaPulldown the tables come from: main after 2.10.0, where AF3 accepts --allow_resume.
+SHIPPED_ALPHAPULLDOWN_COMMIT = "228c5eed6c7066467e46b87fb3054cc2c2e73ae1"
 
 # Shaped like AlphaPulldown's inference_flags.py: named sets, unions, an annotated dict.
 _SOURCE = '''
@@ -195,6 +195,12 @@ def test_fast_kernels_is_valid_on_both_backends():
         assert _COMMON.unknown_inference_flags(args, backend) == []
     args = {"--fold_backend": "alphalink", "--fast_kernels": "auto"}
     assert _COMMON.unknown_inference_flags(args, "alphalink") == ["fast_kernels"]
+
+
+def test_allow_resume_is_valid_on_both_backends():
+    for backend in ("alphafold2", "alphafold3"):
+        args = {"--fold_backend": backend, "--allow_resume": False}
+        assert _COMMON.unknown_inference_flags(args, backend) == []
 
 
 def test_jax_compile_cache_is_valid_on_both_backends():
