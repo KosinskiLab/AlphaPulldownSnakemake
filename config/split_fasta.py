@@ -1,7 +1,7 @@
 #!python3
 """ Utility to split multi-line fasta into individual files for use in pulldowns.
 
-    Copyright (c) 2025 European Molecular Biology Laboratory
+    Copyright (c) 2026 European Molecular Biology Laboratory
 
     Author: Valentin Maurer <valentin.maurer@embl-hamburg.de>
 

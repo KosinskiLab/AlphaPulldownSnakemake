@@ -24,8 +24,8 @@ GENERATOR = REPOSITORY / "tools" / "generate_inference_flag_tables.py"
 
 _COMMON = SourceFileLoader("common_flag_tables", str(COMMON_SMK)).load_module()
 
-# The AlphaPulldown the tables come from: main after 2.10.0, where AF3 accepts --allow_resume.
-SHIPPED_ALPHAPULLDOWN_COMMIT = "228c5eed6c7066467e46b87fb3054cc2c2e73ae1"
+# The AlphaPulldown the shipped default containers run (2.11.0).
+SHIPPED_ALPHAPULLDOWN_COMMIT = "50b508dd235e8c551c45de0c17a90607ea8a0c5b"
 
 # Shaped like AlphaPulldown's inference_flags.py: named sets, unions, an annotated dict.
 _SOURCE = '''

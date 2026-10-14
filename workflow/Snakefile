@@ -1,6 +1,6 @@
 """ Snakemake pipeline for automated structure prediction using various backends.
 
-    Copyright (c) 2025 European Molecular Biology Laboratory
+    Copyright (c) 2026 European Molecular Biology Laboratory
 
     Authors: Kosinski Lab <alphapulldown@embl-hamburg.de>
 """

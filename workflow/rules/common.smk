@@ -1,6 +1,6 @@
 """ Snakemake I/O and utility functions
 
-    Copyright (c) 2024 European Molecular Biology Laboratory
+    Copyright (c) 2026 European Molecular Biology Laboratory
 
     Authors: Valentin Maurer <valentin.maurer@embl-hamburg.de>
 """
@@ -914,7 +914,7 @@ def prediction_batch_id(folds: Iterable[str]) -> str:
 # to update for a new release; CI regenerates from the recorded commit and fails on any
 # difference.
 # BEGIN GENERATED: inference flags (tools/generate_inference_flag_tables.py; do not edit by hand)
-# Source: KosinskiLab/AlphaPulldown@228c5eed6c7066467e46b87fb3054cc2c2e73ae1
+# Source: KosinskiLab/AlphaPulldown@50b508dd235e8c551c45de0c17a90607ea8a0c5b
 #         alphapulldown/prediction/inference_flags.py, FLAGS_BY_BACKEND
 ALLOWED_INFERENCE_FLAGS = {
     "alphafold2": frozenset({
