@@ -242,7 +242,11 @@ analyze_structure_arguments:
   --pae_filter: 100.0        # interface PAE cutoff; lower values are stricter
   --models_to_analyse: "all"
 
+# The report scores with analyze_structure_arguments, so it reuses each fold's
+# interfaces.csv; flags here are added to them or override them.
 # Optional combined validation PDF; use an absolute output path.
 recursive_report_arguments: {}
 # Add this entry inside recursive_report_arguments (replace {} with the block):
 #   --aggregate_report: /path/to/reports/aggregate_report.pdf
+# AlphaJudge processes for the report (--cores); memory scales with them.
+# recursive_report_threads: 8

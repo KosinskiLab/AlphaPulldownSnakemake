@@ -600,6 +600,64 @@ def estimate_inference_mem_mb(
     return _cap_mem(value, cap_mb)
 
 
+ALPHAJUDGE_BASE_MB = 2000
+ALPHAJUDGE_PER_TOKEN_SQ_MB = 1.2e-4
+
+
+def alphajudge_run_mem_mb(
+    tokens: int,
+    *,
+    base_mb: float = ALPHAJUDGE_BASE_MB,
+    per_token_sq_mb: float = ALPHAJUDGE_PER_TOKEN_SQ_MB,
+) -> float:
+    """Peak RAM (MB) of AlphaJudge scoring one run of ``tokens`` tokens.
+
+    Its PAE and contact matrices are O(N^2). The coefficients exceed the measured
+    peaks of ~1,900 AF2 and AF3 runs of 600-8,800 tokens by at least 1.3x
+    (largest: 6.3 GB at 7,164 tokens).
+    """
+    return base_mb + per_token_sq_mb * (max(int(tokens), 0) ** 2)
+
+
+def recursive_report_mem_mb(
+    fold_tokens,
+    *,
+    workers: int,
+    attempt: int,
+    cap_mb: int = 0,
+    scaling: float = 1.5,
+) -> int:
+    """Host RAM (MB) for the recursive AlphaJudge report.
+
+    Its ``workers`` AlphaJudge processes score one run each at a time: one may
+    hold the largest run while the others hold typical (median) runs. Retries
+    escalate via ``scaling ** (attempt - 1)``.
+    """
+    tokens = sorted(max(int(value), 0) for value in fold_tokens) or [0]
+    estimate = alphajudge_run_mem_mb(tokens[-1]) + (
+        (max(int(workers), 1) - 1) * alphajudge_run_mem_mb(tokens[len(tokens) // 2])
+    )
+    value = estimate * (scaling ** max(int(attempt) - 1, 0))
+    return _cap_mem(value, cap_mb)
+
+
+def recursive_report_arguments(analysis_arguments, report_arguments, threads: int):
+    """AlphaJudge flags for the recursive report.
+
+    The report reuses a fold's interfaces.csv only when it scores with the same
+    settings as analyze_structure; any other setting rescores every fold and
+    replaces its table. So analyze_structure_arguments are the base, and
+    recursive_report_arguments add report-only flags (``--aggregate_report``) or
+    override them. ``--cores`` defaults to the job's threads. A list or string is
+    passed through as written.
+    """
+    if not isinstance(report_arguments, dict):
+        return report_arguments
+    arguments = {**(analysis_arguments or {}), **report_arguments}
+    arguments.setdefault("--cores", int(threads))
+    return arguments
+
+
 def unified_memory_budget_shortfalls(
     batches,
     *,
