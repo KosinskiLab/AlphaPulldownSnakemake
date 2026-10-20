@@ -494,6 +494,7 @@ required_folds = [
 ENABLE_STRUCTURE_ANALYSIS = config.get("enable_structure_analysis", True)
 GENERATE_RECURSIVE_REPORT = config.get("generate_recursive_report", False)
 RECURSIVE_REPORT_ARGUMENTS = config.get("recursive_report_arguments", {})
+RECURSIVE_REPORT_THREADS = max(int(config.get("recursive_report_threads", 8)), 1)
 RECURSIVE_REPORT = (
     join(config["output_directory"], "reports", "all_interfaces.csv")
     if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT
@@ -1236,12 +1237,27 @@ if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT:
             tmpdir_guard=lambda wildcards: container_tmpdir_guard(CONTAINER_TMPDIR),
             prediction_dir=lambda wildcards: join(config["output_directory"], "predictions"),
             report_dir=join(config["output_directory"], "reports"),
-            extra_args=lambda wildcards: " ".join(
-                _format_recursive_arguments(RECURSIVE_REPORT_ARGUMENTS)
+            extra_args=lambda wildcards, threads: " ".join(
+                _format_recursive_arguments(
+                    recursive_report_arguments(
+                        config.get("analyze_structure_arguments", {}),
+                        RECURSIVE_REPORT_ARGUMENTS,
+                        threads,
+                    )
+                )
             ),
+        threads: RECURSIVE_REPORT_THREADS
         resources:
             qos=DEFAULT_SLURM_QOS,
-            **linear_resources(mem=2000, runtime=1440),
+            **linear_resources(
+                mem_fn=lambda wildcards, attempt: recursive_report_mem_mb(
+                    [_fold_grouping_tokens(fold) for fold in kept_folds],
+                    workers=RECURSIVE_REPORT_THREADS,
+                    attempt=attempt,
+                    cap_mb=MAX_MEM_MB,
+                ),
+                runtime=1440,
+            ),
         container:
             config["analysis_container"],
         shell:
