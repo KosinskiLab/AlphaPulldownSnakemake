@@ -56,6 +56,7 @@ _TEMPLATE_ARGUMENTS = {
         "--template_mmcif_dir",
         "--hmmsearch_binary_path",
         "--hmmbuild_binary_path",
+        "--hmmsearch_n_cpu",
     ),
 }
 # Finalization resources per backend, both measured. AlphaFold 3's template search is
@@ -892,7 +893,8 @@ class LocalMmseqsFeatureConfig:
         return {
             name: str(arguments[name])
             for name in _TEMPLATE_ARGUMENTS[self.backend]
-            if arguments.get(name) not in (None, "", False, "false", "False")
+            if arguments.get(name) is not False
+            and arguments.get(name) not in (None, "", "false", "False")
         }
 
     def _selected_template_database_ids(
