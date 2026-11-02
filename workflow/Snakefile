@@ -1251,7 +1251,7 @@ if ENABLE_STRUCTURE_ANALYSIS and GENERATE_RECURSIVE_REPORT:
             qos=DEFAULT_SLURM_QOS,
             **linear_resources(
                 mem_fn=lambda wildcards, attempt: recursive_report_mem_mb(
-                    [_fold_grouping_tokens(fold) for fold in kept_folds],
+                    [_fold_tokens(fold) for fold in kept_folds],
                     workers=RECURSIVE_REPORT_THREADS,
                     attempt=attempt,
                     cap_mb=MAX_MEM_MB,

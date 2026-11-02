@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -116,3 +117,49 @@ def test_report_command_uses_the_analysis_settings_and_its_threads(tmp_path):
         "--cores=3",
     ):
         assert flag in shell, (flag, shell)
+
+
+@pytest.mark.parametrize("source", ["fasta", "af3_json", "direct_af3_json"])
+def test_report_memory_uses_staged_lengths_without_length_filter(tmp_path, source):
+    snakemake = shutil.which("snakemake")
+    if snakemake is None:
+        pytest.skip("Snakemake executable is not available")
+    output = tmp_path / "output"
+    features = output / "features"
+    data = output / "data"
+    features.mkdir(parents=True)
+    data.mkdir()
+    tokens = 9000
+    name = "Large.json" if source == "direct_af3_json" else "Large"
+    sheet = tmp_path / "folds.csv"
+    sheet.write_text(name + "\n", encoding="utf-8")
+    if source == "fasta":
+        (data / "Large.fasta").write_text(">Large\n" + "A" * tokens + "\n", encoding="utf-8")
+    feature_name = "Large.json" if source == "direct_af3_json" else "Large_af3_input.json"
+    (features / feature_name).write_text(json.dumps({
+        "sequences": [{"protein": {"id": "A", "sequence": "A" * tokens}}]
+    }), encoding="utf-8")
+    config = yaml.safe_load((_FIXTURES / "af3.yaml").read_text(encoding="utf-8"))
+    config.update(
+        input_files=[str(sheet)], output_directory=str(output),
+        feature_directory=[str(features)], batch_size=1,
+        max_total_length=0, max_protein_length=0, length_filter_fetch_uniprot=False,
+        structure_inference_unified_memory=False,
+        enable_structure_analysis=True, generate_recursive_report=True,
+        analyze_structure_arguments=ANALYSIS, recursive_report_threads=2,
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    completed = subprocess.run(
+        [snakemake, "--snakefile", str(_REPOSITORY / "workflow" / "Snakefile"),
+         "--configfile", str(config_path), "--cores", "2", "--rerun-triggers", "mtime",
+         "--touch", "--printshellcmds"],
+        cwd=_REPOSITORY, capture_output=True, text=True, timeout=120,
+        env={**os.environ, "APPTAINER_BINDPATH": "", "SINGULARITY_BINDPATH": ""},
+    )
+    log = completed.stdout + completed.stderr
+    assert completed.returncode == 0, log[-4000:]
+    job, = [job for job in re.split(r"^(?=(?:local)?rule \w+:$)", log, flags=re.MULTILINE)
+            if job.startswith(("rule recursive_report:", "localrule recursive_report:"))]
+    expected = common.recursive_report_mem_mb([tokens], workers=2, attempt=1)
+    assert int(re.search(r"\bmem_mb=(\d+)", job).group(1)) == expected
