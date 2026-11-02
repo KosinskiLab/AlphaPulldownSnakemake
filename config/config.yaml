@@ -242,8 +242,8 @@ mmseqs2_features:
 ## -- Analysis and extra report options ---------------------------------------
 # Settings below apply when the analysis/report switches in COMMON are enabled.
 # README: "Structure analysis & reporting"
-# AlphaJudge publishes :latest; use an image digest if you need a fixed build.
-analysis_container: "docker://kosinskilab/alphajudge:latest"
+# Pin AlphaJudge for reproducible analysis and cross-node cache reuse.
+analysis_container: "docker://kosinskilab/alphajudge:1.4.5"
 analyze_structure_arguments:
   --contact_thresh: 8.0      # maximum distance (angstroms) for an interface contact
   --pae_filter: 100.0        # interface PAE cutoff; lower values are stricter

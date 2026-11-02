@@ -335,8 +335,8 @@ prediction_container: "/path/to/images/alphafold3-2.5.0.sif"
 ```
 
 > **Note**: the cache key is the container URL, not the image digest, so a cached `:latest` is
-> never refreshed. `prediction_container` is pinned to a version tag. `kosinskilab/alphajudge`
-> publishes only `:latest`; pin it with a digest (`@sha256:<digest>`) if you need it fixed.
+> never refreshed. `prediction_container` and `analysis_container` use version tags; AlphaJudge
+> is pinned to `1.4.5`. An image digest (`@sha256:<digest>`) also pins the exact build.
 
 </details>
 
