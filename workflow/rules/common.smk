@@ -467,7 +467,7 @@ def fold_length_violation(
 
 
 AF3_DEFAULT_BUCKETS = (
-    128, 256, 512, 768, 1024, 1280, 1536, 2048, 2560, 3072, 3584, 4096, 4608, 5120,
+    128, 256, 384, 512, 768, 1024, 1280, 1536, 2048, 2560, 3072, 3584, 4096, 4608, 5120,
 )
 
 
@@ -887,9 +887,14 @@ def batch_inference_args(
       AlphaPulldown 2.8.0. ``jax_cache_dir`` empty, or the user's value set to
       false/null/"", leaves the cache off.
 
-    Any value the user already set is preserved (``setdefault``).
+    * ``--buckets`` (AlphaFold3): use the same padding for inference and resource
+      estimates, even with images whose default list predates the 384-token bucket.
+
+    Explicit user values are preserved; empty bucket settings use the workflow default.
     """
     args = dict(base_args)
+    if backend == "alphafold3" and not args.get("--buckets"):
+        args["--buckets"] = ",".join(map(str, AF3_DEFAULT_BUCKETS))
     if batch_size > 1 and backend == "alphafold2":
         args.setdefault("--allow_resume", "true")
     if backend in JAX_CACHE_BACKENDS:

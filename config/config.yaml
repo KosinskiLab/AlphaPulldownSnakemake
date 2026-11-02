@@ -39,6 +39,13 @@ create_feature_arguments:
   --compress_features: true          # save disk space; read back automatically
   --save_msa_files: false            # also save separate alignment files if true
   --use_precomputed_msas: true       # reuse saved alignments when available
+  # Search-thread controls require the updated AlphaPulldown image. These are
+  # per-search settings; feature_threads below is the total job CPU allocation.
+  # AF3 runs four protein searches or three RNA searches concurrently.
+  # --jackhmmer_n_cpu: 8             # AF3 protein search
+  # --nhmmer_n_cpu: 8                # AF3 RNA search
+  # --hmmsearch_n_cpu: 8             # AF3 template search
+  # --msa_tools_n_cpu: 8             # AF2 MSA searches, including HHblits
 
 # Must match the image and feature pipeline above. Put extra prediction flags
 # here as needed. README: "Backend-specific flags"
@@ -235,8 +242,8 @@ mmseqs2_features:
 ## -- Analysis and extra report options ---------------------------------------
 # Settings below apply when the analysis/report switches in COMMON are enabled.
 # README: "Structure analysis & reporting"
-# AlphaJudge publishes :latest; use an image digest if you need a fixed build.
-analysis_container: "docker://kosinskilab/alphajudge:latest"
+# Pin AlphaJudge for reproducible analysis and cross-node cache reuse.
+analysis_container: "docker://kosinskilab/alphajudge:1.4.5"
 analyze_structure_arguments:
   --contact_thresh: 8.0      # maximum distance (angstroms) for an interface contact
   --pae_filter: 100.0        # interface PAE cutoff; lower values are stricter

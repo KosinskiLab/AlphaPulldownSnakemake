@@ -461,6 +461,9 @@ def test_unified_memory_budget_shortfalls_match_requests_and_routing():
 
 
 def test_af3_padded_tokens_follow_buckets():
+    assert common.af3_padded_tokens(257) == 384
+    assert common.af3_padded_tokens(384) == 384
+    assert common.af3_padded_tokens(385) == 512
     assert common.af3_padded_tokens(1537) == 2048
     assert common.af3_padded_tokens(2048) == 2048
     assert common.af3_padded_tokens(2049) == 2560
