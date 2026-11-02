@@ -596,6 +596,15 @@ def test_alphafold3_finalization_gets_its_own_template_overrides():
     assert not any("uniref90" in argument or "jackhmmer" in argument for argument in arguments)
 
 
+@pytest.mark.parametrize("n_cpu", [0, 4, 16])
+def test_alphafold3_finalization_keeps_template_search_thread_count(n_cpu):
+    arguments = _adapter().finalize_cli_arguments(
+        {"--hmmsearch_n_cpu": n_cpu, "--jackhmmer_n_cpu": 4}
+    )
+    assert f"--hmmsearch_n_cpu={n_cpu}" in arguments
+    assert not any("jackhmmer_n_cpu" in argument for argument in arguments)
+
+
 def test_alphafold3_feature_cache_keeps_its_namespace():
     """Adding a second backend must not re-key the first one's features, and
     neither may honouring template overrides re-key a run that sets none."""

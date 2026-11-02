@@ -145,6 +145,10 @@ def test_fast_kernels_and_cache_reach_every_inference_call(tmp_path, backend):
         assert flags["fast_kernels"] == "True", script
         assert flags["jax_compilation_cache_dir"] == str(cache), script
         assert flags["fold_backend"] == backend, script
+        if backend == "alphafold3":
+            assert flags["buckets"].split(",")[:4] == ["128", "256", "384", "512"]
+        else:
+            assert "buckets" not in flags
         # --allow_resume is added to AlphaFold 2 batches only: AlphaFold 3 resumes by
         # default, and its images up to AlphaPulldown 2.10.0 reject the flag.
         assert ("allow_resume" in flags) == (backend == "alphafold2"), script
@@ -452,3 +456,38 @@ def test_unified_memory_off_leaves_the_environment_alone(tmp_path):
         "XLA_PYTHON_CLIENT_PREALLOCATE": "<unset>",
         "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.5",
     }
+
+
+@pytest.mark.parametrize(
+    "backend, search_arguments",
+    [
+        ("alphafold3", {"--jackhmmer_n_cpu": 4, "--nhmmer_n_cpu": 2, "--hmmsearch_n_cpu": 0}),
+        ("alphafold2", {"--msa_tools_n_cpu": 16}),
+    ],
+)
+def test_feature_search_threads_are_forwarded_without_being_multiplied(
+    tmp_path, backend, search_arguments
+):
+    data = tmp_path / "output" / "data"
+    data.mkdir(parents=True)
+    for name in ("A", "B"):
+        (data / f"{name}.fasta").write_text(f">{name}\n" + "A" * 100 + "\n")
+    config_path, _ = _write_config(
+        tmp_path, backend, batch_size=1, inference_arguments="",
+        feature_directory=[], feature_threads=20,
+        create_feature_arguments={
+            "--data_pipeline": backend,
+            "--max_template_date": "2050-01-01",
+            "--compress_features": True,
+            **search_arguments,
+        },
+    )
+
+    completed = _dry_run(config_path, extra_args=("--cores", "20"))
+    jobs = re.split(r"^(?=(?:local)?rule \w+:$)", completed.stdout, flags=re.MULTILINE)
+    feature_jobs = [job for job in jobs if job.startswith("rule create_features:")]
+    assert len(feature_jobs) == 2, completed.stdout
+    for job in feature_jobs:
+        assert "threads: 20" in job
+        for flag, value in search_arguments.items():
+            assert f"{flag}={value}" in job
