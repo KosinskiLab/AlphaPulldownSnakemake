@@ -26,9 +26,9 @@ databases_directory: /path/to/alphafold/databases
 backend_weights_directory: /path/to/alphafold3/weights/
 
 # These defaults run AlphaFold 3. To use AlphaFold 2, change the image to
-# alphafold2:2.11.0, both backend flags below to alphafold2, and the paths above.
+# alphafold2:2.11.1, both backend flags below to alphafold2, and the paths above.
 # A local .sif image also works. README: "Changing folding backends"
-prediction_container: "docker://kosinskilab/alphafold3:2.11.0"
+prediction_container: "docker://kosinskilab/alphafold3:2.11.1"
 
 # Features are the sequence alignments and templates used for prediction.
 # Keep any additional feature flags inside this block.
@@ -39,7 +39,7 @@ create_feature_arguments:
   --compress_features: true          # save disk space; read back automatically
   --save_msa_files: false            # also save separate alignment files if true
   --use_precomputed_msas: true       # reuse saved alignments when available
-  # Search-thread controls require the updated AlphaPulldown image. These are
+  # Search-thread controls require AlphaPulldown 2.11.1 or newer. These are
   # per-search settings; feature_threads below is the total job CPU allocation.
   # AF3 runs four protein searches or three RNA searches concurrently.
   # --jackhmmer_n_cpu: 8             # AF3 protein search
