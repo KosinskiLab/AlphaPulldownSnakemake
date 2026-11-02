@@ -145,6 +145,10 @@ def test_fast_kernels_and_cache_reach_every_inference_call(tmp_path, backend):
         assert flags["fast_kernels"] == "True", script
         assert flags["jax_compilation_cache_dir"] == str(cache), script
         assert flags["fold_backend"] == backend, script
+        if backend == "alphafold3":
+            assert flags["buckets"].split(",")[:4] == ["128", "256", "384", "512"]
+        else:
+            assert "buckets" not in flags
         # --allow_resume is added to AlphaFold 2 batches only: AlphaFold 3 resumes by
         # default, and its images up to AlphaPulldown 2.10.0 reject the flag.
         assert ("allow_resume" in flags) == (backend == "alphafold2"), script

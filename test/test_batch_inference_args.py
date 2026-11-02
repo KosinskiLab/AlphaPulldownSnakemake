@@ -50,14 +50,33 @@ def test_af3_batch_gets_jax_cache_not_allow_resume():
     assert "--allow_resume" not in args
 
 
-def test_batch_size_one_gets_the_cache_only():
+def test_batch_size_one_gets_backend_defaults():
     # A fresh process per fold is where the shared cache saves the most compilation.
     for backend in ("alphafold2", "alphafold3"):
         base = {"--fold_backend": backend}
         args = batch_inference_args(
             base, backend=backend, batch_size=1, jax_cache_dir=_CACHE
         )
-        assert args == {**base, "--jax_compilation_cache_dir": _CACHE}
+        expected = {**base, "--jax_compilation_cache_dir": _CACHE}
+        if backend == "alphafold3":
+            expected["--buckets"] = ",".join(map(str, common.AF3_DEFAULT_BUCKETS))
+        assert args == expected
+
+
+def test_af3_padding_estimates_match_explicit_cli_buckets():
+    for value in (None, False, "", [], "256,512", [256, 512]):
+        args = batch_inference_args(
+            {"--buckets": value}, backend="alphafold3", batch_size=2,
+            jax_cache_dir=_CACHE,
+        )
+        assert args["--buckets"]
+        assert common.af3_padded_tokens(300, common.af3_buckets(args["--buckets"])) == (
+            512 if value else 384
+        )
+        if value:
+            assert args["--buckets"] == value
+    af2 = batch_inference_args({}, backend="alphafold2", batch_size=1, jax_cache_dir=_CACHE)
+    assert "--buckets" not in af2
 
 
 def test_no_cache_directory_adds_no_cache_flag():
