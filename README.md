@@ -727,6 +727,16 @@ feature_directory:
 Tweak the feature-generation step by editing `create_feature_arguments` (or by running the script
 manually).
 
+Images with the AlphaFold 3 v3.0.5 integration expose search-thread controls:
+`--jackhmmer_n_cpu`, `--nhmmer_n_cpu`, and `--hmmsearch_n_cpu` for AF3, or
+`--msa_tools_n_cpu` for AF2's Jackhmmer and HHblits searches. Put these under
+`create_feature_arguments`; they are forwarded to AlphaPulldown unchanged.
+Defaults remain 8 worker threads per search. Set the total job allocation with
+`feature_threads`, accounting for AF3's four concurrent protein searches or
+three concurrent RNA searches and their overhead. Increasing `feature_threads`
+alone does not increase the per-search thread counts. Measure whole-job walltime
+and CPU-hours on your database storage before choosing higher values.
+
 <details>
 <summary>Commonly used flags</summary>
 
