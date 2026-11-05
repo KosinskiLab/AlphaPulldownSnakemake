@@ -977,7 +977,7 @@ def prediction_batch_id(folds: Iterable[str]) -> str:
 # to update for a new release; CI regenerates from the recorded commit and fails on any
 # difference.
 # BEGIN GENERATED: inference flags (tools/generate_inference_flag_tables.py; do not edit by hand)
-# Source: KosinskiLab/AlphaPulldown@50b508dd235e8c551c45de0c17a90607ea8a0c5b
+# Source: KosinskiLab/AlphaPulldown@351f530776f3ecf0f9c29f010f579d87395fb80e
 #         alphapulldown/prediction/inference_flags.py, FLAGS_BY_BACKEND
 ALLOWED_INFERENCE_FLAGS = {
     "alphafold2": frozenset({
