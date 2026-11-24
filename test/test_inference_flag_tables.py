@@ -24,8 +24,8 @@ GENERATOR = REPOSITORY / "tools" / "generate_inference_flag_tables.py"
 
 _COMMON = SourceFileLoader("common_flag_tables", str(COMMON_SMK)).load_module()
 
-# The AlphaPulldown the shipped default containers run (2.11.1).
-SHIPPED_ALPHAPULLDOWN_COMMIT = "351f530776f3ecf0f9c29f010f579d87395fb80e"
+# The AlphaPulldown the shipped default containers run (2.11.2).
+SHIPPED_ALPHAPULLDOWN_COMMIT = "40fa1a4699ef8b96e89809c2d26bb36d23b2d7cf"
 
 # Shaped like AlphaPulldown's inference_flags.py: named sets, unions, an annotated dict.
 _SOURCE = '''
